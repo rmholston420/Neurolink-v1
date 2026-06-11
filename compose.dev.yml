@@ -25,6 +25,11 @@ services:
       - NEUROLINK_CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:8003
     volumes:
       - neurolink_data:/app/data
+      # Mount host D-Bus socket so bleak can reach BlueZ inside the container
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+    # Required for BlueZ/BLE access from inside the container
+    privileged: true
+    network_mode: host  # lets bleak use the host BlueZ daemon directly
     depends_on:
       - redis
     restart: unless-stopped
