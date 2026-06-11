@@ -37,7 +37,8 @@ describe('CalibrationPanel', () => {
     })
   })
 
-  it('displays Calibration complete after successful POST', async () => {
+  it('displays Calibration complete after successful POST without baseline', async () => {
+    // baseline_alpha absent — null branch of lines 82-84 (baseline div NOT rendered)
     mockFetch().mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'ok', message: 'Calibration complete', samples: 256 }),
@@ -46,22 +47,20 @@ describe('CalibrationPanel', () => {
     fireEvent.click(screen.getByRole('button'))
     await waitFor(() => {
       expect(screen.getByText('Calibration complete')).toBeTruthy()
+      expect(screen.queryByText(/Baseline/)).toBeNull()
     })
   })
 
-  it('shows fallback text when successful response has no message', async () => {
-    // Exercises the empty-message branch on lines 82-84
+  it('renders baseline alpha div when baseline_alpha is returned (lines 82-84)', async () => {
+    // Exercises the true branch: baselineAlpha !== null → renders the div
     mockFetch().mockResolvedValue({
       ok: true,
-      json: async () => ({ status: 'ok' }),  // no message field
+      json: async () => ({ status: 'ok', baseline_alpha: 0.2341 }),
     } as Response)
     render(<CalibrationPanel apiUrl="http://test" />)
     fireEvent.click(screen.getByRole('button'))
     await waitFor(() => {
-      // Component should render some success indicator without crashing
-      expect(screen.queryByText(/error|fail/i)).toBeNull()
-      // Button should be re-enabled
-      expect(screen.getByRole('button')).toBeTruthy()
+      expect(screen.getByText('Baseline \u03b1: 0.2341')).toBeTruthy()
     })
   })
 
