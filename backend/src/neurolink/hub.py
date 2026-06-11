@@ -4,6 +4,7 @@ Process-global, thread-safe singleton hub.
 Dual classifier: v2 always runs; v0.1 runs only when source == 'muse_ble'.
 Ported from Rigpa-v2 hub.py + Rigpa-v3 hub.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +17,8 @@ import structlog
 from neurolink.dsp.classifiers import classify_v01, classify_v2, compute_s_space
 from neurolink.ea1_scorer import score as ea1_score
 from neurolink.fatigue import FatigueDetector
-from neurolink.focus_state import FocusState, classify_focus, compute_focus_score
+from neurolink.focus_state import classify_focus, compute_focus_score
 from neurolink.models.eeg import (
-    BandPowers,
     EA1Result,
     IngestPayload,
     NeurolinkState,
@@ -44,7 +44,7 @@ class EEGHub:
         self._lock = threading.Lock()
         self._state = NeurolinkState()
         self._ea1 = EA1Result()
-        self._latest_sample: "EEGSample | None" = None
+        self._latest_sample: EEGSample | None = None
         self._fatigue = FatigueDetector()
         self.baseline_alpha: float = _DEFAULT_BASELINE_ALPHA
         # SSE fan-out queues: one per connected SSE client
@@ -149,12 +149,12 @@ class EEGHub:
         """Return current state as a dict (for Redis caching)."""
         return self.get_state().model_dump()
 
-    def get_latest(self) -> "EEGSample | None":
+    def get_latest(self) -> EEGSample | None:
         """Return the latest raw EEGSample (may be None before first frame)."""
         with self._lock:
             return self._latest_sample
 
-    def set_latest_sample(self, sample: "EEGSample") -> None:
+    def set_latest_sample(self, sample: EEGSample) -> None:
         """Store the latest raw EEGSample."""
         with self._lock:
             self._latest_sample = sample

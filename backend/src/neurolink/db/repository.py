@@ -2,10 +2,10 @@
 
 All DB access goes through these methods.
 """
+
 from __future__ import annotations
 
 import datetime
-from typing import List
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,9 +46,7 @@ class SessionLogRepository:
         final_ea1_eligible: bool | None = None,
     ) -> SessionLog | None:
         """Mark a session as ended and update final state."""
-        result = await self._session.execute(
-            select(SessionLog).where(SessionLog.id == session_id)
-        )
+        result = await self._session.execute(select(SessionLog).where(SessionLog.id == session_id))
         entry = result.scalar_one_or_none()
         if entry:
             entry.ended_at = datetime.datetime.utcnow()
@@ -60,18 +58,14 @@ class SessionLogRepository:
             await self._session.refresh(entry)
         return entry
 
-    async def list_recent(self, limit: int = 20) -> List[SessionLog]:
+    async def list_recent(self, limit: int = 20) -> list[SessionLog]:
         """Return the most recent session log entries."""
         result = await self._session.execute(
-            select(SessionLog)
-            .order_by(SessionLog.id.desc())
-            .limit(limit)
+            select(SessionLog).order_by(SessionLog.id.desc()).limit(limit)
         )
         return list(result.scalars().all())
 
     async def get_by_id(self, session_id: int) -> SessionLog | None:
         """Return a session log entry by ID."""
-        result = await self._session.execute(
-            select(SessionLog).where(SessionLog.id == session_id)
-        )
+        result = await self._session.execute(select(SessionLog).where(SessionLog.id == session_id))
         return result.scalar_one_or_none()

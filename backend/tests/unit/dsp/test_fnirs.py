@@ -1,4 +1,5 @@
 """Unit tests for hardware/muse_athena/fnirs.py."""
+
 from __future__ import annotations
 
 from neurolink.hardware.muse_athena.fnirs import FNIRSDecoder

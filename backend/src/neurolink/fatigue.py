@@ -3,6 +3,7 @@
 Ported from Rigpa-v3 fatigue.py.
 Thread-safe via internal deque (no additional locking needed for single writer).
 """
+
 from __future__ import annotations
 
 from collections import deque

@@ -2,6 +2,7 @@
 
 GET /health — returns adapter status, hub frame count, Redis ping, DB reachability.
 """
+
 from __future__ import annotations
 
 import structlog
@@ -32,6 +33,7 @@ async def health(
     if settings.redis_enabled:
         try:
             import redis.asyncio as aioredis
+
             r = aioredis.from_url(settings.redis_url)
             await r.ping()
             await r.aclose()
@@ -44,6 +46,7 @@ async def health(
     db_status = "error"
     try:
         from neurolink.db.engine import get_engine
+
         engine = get_engine()
         async with engine.connect() as conn:
             await conn.execute(__import__("sqlalchemy").text("SELECT 1"))

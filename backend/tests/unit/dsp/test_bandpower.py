@@ -1,8 +1,8 @@
 """Unit tests for dsp/bandpower.py."""
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.bandpower import bandpower, compute_band_powers_from_buffer, make_buffers
 

@@ -1,4 +1,5 @@
 """Unit tests for adapter_factory.py."""
+
 from __future__ import annotations
 
 import pytest
@@ -25,4 +26,6 @@ def test_create_adapter_unknown_type_raises():
 
 def test_create_adapter_ble_unknown_model_raises():
     with pytest.raises(ValueError, match="Unknown device_model"):
-        create_adapter(adapter_type="ble", device_model="unknown_model", address="AA:BB:CC:DD:EE:FF")
+        create_adapter(
+            adapter_type="ble", device_model="unknown_model", address="AA:BB:CC:DD:EE:FF"
+        )

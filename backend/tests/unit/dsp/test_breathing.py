@@ -1,4 +1,5 @@
 """Unit tests for dsp/breathing.py."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -32,5 +33,6 @@ def test_compute_breathing_fused_estimate():
 
 def test_compute_breathing_returns_payload_type():
     from neurolink.models.eeg import BreathingPayload
+
     result = compute_breathing([])
     assert isinstance(result, BreathingPayload)

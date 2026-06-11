@@ -5,6 +5,7 @@ Ported from Rigpa-v2 ble_bridge.py decode routines.
 All BLE packet formats are FIXED by Muse firmware.
 DO NOT modify packet sizes, bit shifts, or scale factors.
 """
+
 from __future__ import annotations
 
 import struct

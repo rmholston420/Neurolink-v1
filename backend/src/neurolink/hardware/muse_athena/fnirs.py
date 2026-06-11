@@ -3,6 +3,7 @@
 The Athena headset exposes alternating oxy/deoxy channels in its fNIRS stream.
 This decoder averages across channels to produce scalar oxy/deoxy values.
 """
+
 from __future__ import annotations
 
 

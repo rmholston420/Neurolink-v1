@@ -4,14 +4,15 @@ Ported from Rigpa-v2 ea1_scorer.py.
 5-criterion eligibility system for advanced contemplative protocols.
 All functions are pure.
 """
+
 from __future__ import annotations
 
-from neurolink.models.eeg import EA1Criterion, EA1Result, IngestPayload, SSpaceCoords
+from neurolink.models.eeg import EA1Criterion, EA1Result, IngestPayload
 
 # ── Thresholds ────────────────────────────────────────────────────────────────────
 ALPHA_THRESHOLD: float = 0.30
 THETA_THRESHOLD: float = 0.15
-MOTION_RMS_GATE: float = 0.5   # above this = too much motion
+MOTION_RMS_GATE: float = 0.5  # above this = too much motion
 CONTACT_QUALITY_MIN: float = 0.5  # below this = poor contact
 
 # S-space gating — must be in region D or E for eligibility

@@ -3,6 +3,7 @@
 GET /api/v1/gate/status — returns whether an active EEG session is running.
 The EEGGateMiddleware is registered in main.py.
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -15,6 +16,7 @@ router = APIRouter(prefix="/gate", tags=["eeg_gate"])
 
 class GateStatusResponse(BaseModel):
     """EEG session gate status."""
+
     active: bool
     source: str
     frame_count: int

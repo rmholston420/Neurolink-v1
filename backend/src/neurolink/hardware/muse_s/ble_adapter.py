@@ -4,6 +4,7 @@ Ported from Rigpa-v2 ble_bridge.py.
 All BLE protocol constants are FIXED and must not be modified.
 See Section 14 of neurolink-app-spec.md for authoritative values.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -72,7 +73,8 @@ class MuseSBleAdapter(HardwareAdapter):
 
     async def connect(self) -> None:
         """Connect to the Muse S BLE device and start EEG streaming."""
-        from bleak import BleakClient, BleakGATTCharacteristic  # noqa: PLC0415
+        from bleak import BleakClient
+
         from neurolink.dsp.decoders import decode_eeg
 
         self._client = BleakClient(self._address, timeout=15.0)
@@ -87,6 +89,7 @@ class MuseSBleAdapter(HardwareAdapter):
                 def handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
                     samples = decode_eeg(bytes(data))
                     self._eeg_rings[idx].extend(samples)
+
                 return handler
 
             await self._client.start_notify(char_uuid, make_eeg_handler(ch_idx))
@@ -150,9 +153,7 @@ class MuseSBleAdapter(HardwareAdapter):
             await asyncio.sleep(KEEPALIVE_SEC)
             if self._connected and self._client:
                 try:
-                    await self._client.write_gatt_char(
-                        CHAR_CONTROL, CMD_KEEPALIVE, response=True
-                    )
+                    await self._client.write_gatt_char(CHAR_CONTROL, CMD_KEEPALIVE, response=True)
                     log.debug("muse_ble_keepalive_sent", address=self._address)
                 except Exception as exc:
                     log.warning("muse_ble_keepalive_error", error=str(exc))

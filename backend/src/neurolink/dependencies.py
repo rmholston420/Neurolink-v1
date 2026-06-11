@@ -3,6 +3,7 @@
 All route handlers should use Depends() from here.
 Never instantiate services or hub directly in route handlers.
 """
+
 from __future__ import annotations
 
 from typing import Annotated

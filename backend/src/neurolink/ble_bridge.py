@@ -6,6 +6,7 @@ Ported from Rigpa-v2 ble_bridge.py.
 BLE protocol constants (CMD_DATA, KEEPALIVE_SEC, RECONNECT_WAIT_SEC)
 are defined in hardware/muse_s/ble_adapter.py and must not be overridden.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +24,7 @@ class BLEBridge:
     Reconnects automatically after link drop (up to RECONNECT_WAIT_SEC wait).
     """
 
-    def __init__(self, adapter) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, adapter) -> None:
         self._adapter = adapter
         self._task: asyncio.Task | None = None
         self._running: bool = False
@@ -51,7 +52,9 @@ class BLEBridge:
         while self._running:
             try:
                 if not self._adapter.is_connected:
-                    log.info("ble_bridge_connecting", address=getattr(self._adapter, '_address', ''))
+                    log.info(
+                        "ble_bridge_connecting", address=getattr(self._adapter, "_address", "")
+                    )
                     await self._adapter.connect()
                     self.link_dropped.clear()
                     log.info("ble_bridge_connected")
@@ -62,8 +65,7 @@ class BLEBridge:
                 if not self._running:
                     break
 
-                log.warning("ble_bridge_link_dropped_reconnecting",
-                            wait_sec=RECONNECT_WAIT_SEC)
+                log.warning("ble_bridge_link_dropped_reconnecting", wait_sec=RECONNECT_WAIT_SEC)
                 if self._adapter.is_connected:
                     await self._adapter.disconnect()
                 await asyncio.sleep(RECONNECT_WAIT_SEC)

@@ -3,10 +3,11 @@
 Ported from Rigpa-v3 db/engine.py.
 Uses aiosqlite for SQLite backend.
 """
+
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -41,6 +42,7 @@ def get_engine():
 async def create_tables() -> None:
     """Create all DB tables if not present."""
     from neurolink.db.models import Base
+
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -58,12 +60,10 @@ async def dispose_engine() -> None:
 def get_session_factory():
     """Return a session factory context manager callable."""
     engine = get_engine()
-    factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     @asynccontextmanager
-    async def session_cm() -> AsyncGenerator[AsyncSession, None]:
+    async def session_cm() -> AsyncGenerator[AsyncSession]:
         async with factory() as session:
             yield session
 

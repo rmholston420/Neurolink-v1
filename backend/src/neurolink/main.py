@@ -2,11 +2,12 @@
 
 Entry point: uvicorn neurolink.main:app
 """
+
 from __future__ import annotations
 
 import contextlib
 import os
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import structlog
 from fastapi import FastAPI, Request
@@ -25,25 +26,27 @@ log = structlog.get_logger(__name__)
 
 
 @contextlib.asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """Application lifespan: startup and shutdown logic."""
     settings = get_settings()
     configure_logging(log_json=settings.log_json, log_level=settings.log_level)
-    log.info("neurolink_starting",
-             adapter_type=settings.adapter_type,
-             device_model=settings.device_model)
+    log.info(
+        "neurolink_starting", adapter_type=settings.adapter_type, device_model=settings.device_model
+    )
 
     # Create data directory for SQLite
     if settings.db_path != ":memory:":
         os.makedirs(os.path.dirname(os.path.abspath(settings.db_path)), exist_ok=True)
 
     # Initialize database
-    from neurolink.db.engine import create_tables, get_session_factory, dispose_engine
+    from neurolink.db.engine import create_tables, dispose_engine, get_session_factory
+
     await create_tables()
     log.info("neurolink_db_initialized", db_path=settings.db_path)
 
     # Inject DB session factory into service
     from neurolink.dependencies import get_neurolink_service
+
     service = get_neurolink_service()
     service.set_db_session_factory(get_session_factory())
 
@@ -109,16 +112,14 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.exception_handler(NeurolinkError)
-    async def neurolink_error_handler(
-        request: Request, exc: NeurolinkError
-    ) -> JSONResponse:
+    async def neurolink_error_handler(request: Request, exc: NeurolinkError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     # Include routers
-    from neurolink.routers.neurolink import router as neurolink_router
     from neurolink.routers.calibration import router as calibration_router
     from neurolink.routers.eeg_gate import router as eeg_gate_router
     from neurolink.routers.health import router as health_router
+    from neurolink.routers.neurolink import router as neurolink_router
 
     app.include_router(health_router)
     app.include_router(neurolink_router, prefix="/api/v1")

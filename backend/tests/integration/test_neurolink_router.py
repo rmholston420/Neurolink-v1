@@ -1,7 +1,6 @@
 """Integration tests for /api/v1/neurolink/* endpoints."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 
 async def test_state_endpoint_returns_neurolink_state(client):

@@ -3,6 +3,7 @@
 Ported from Rigpa-v3 dsp/imu.py.
 Computes pitch, roll, and motion RMS from accelerometer + optional gyro.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -36,7 +37,7 @@ def head_orientation(
     az = float(np.mean(accel[2]))
 
     # Pitch and roll (degrees)
-    pitch = float(np.degrees(np.arctan2(-ax, np.sqrt(ay ** 2 + az ** 2))))
+    pitch = float(np.degrees(np.arctan2(-ax, np.sqrt(ay**2 + az**2))))
     roll = float(np.degrees(np.arctan2(ay, az)))
 
     # Clamp
@@ -46,7 +47,7 @@ def head_orientation(
     # Motion RMS: deviation from 1g (gravity)
     mag = np.sqrt(accel[0] ** 2 + accel[1] ** 2 + accel[2] ** 2)
     deviation = mag - 1.0  # subtract gravity
-    motion_rms = float(np.sqrt(np.mean(deviation ** 2)))
+    motion_rms = float(np.sqrt(np.mean(deviation**2)))
 
     return IMUPayload(
         pitch_deg=pitch,

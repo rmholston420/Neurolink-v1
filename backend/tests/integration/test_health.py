@@ -1,7 +1,6 @@
 """Integration tests for GET /health."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 
 async def test_health_endpoint_ok_mock_mode(client):

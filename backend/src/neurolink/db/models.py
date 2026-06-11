@@ -3,6 +3,7 @@
 Tables:
     session_log: EEG session log with start/end time, frame count, EA1 status.
 """
+
 from __future__ import annotations
 
 import datetime

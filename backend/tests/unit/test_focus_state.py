@@ -1,4 +1,5 @@
 """Unit tests for focus_state.py."""
+
 from __future__ import annotations
 
 from neurolink.focus_state import FocusState, classify_focus, compute_focus_score

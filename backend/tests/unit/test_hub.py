@@ -1,7 +1,6 @@
 """Unit tests for hub.py."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload
@@ -57,6 +56,7 @@ def test_hub_reset_clears_state():
 
 def test_hub_get_state_returns_neurolink_state():
     from neurolink.models.eeg import NeurolinkState
+
     hub = EEGHub()
     state = hub.get_state()
     assert isinstance(state, NeurolinkState)
@@ -64,6 +64,7 @@ def test_hub_get_state_returns_neurolink_state():
 
 def test_hub_ea1_result_returned():
     from neurolink.models.eeg import EA1Result
+
     hub = EEGHub()
     ea1 = hub.get_ea1()
     assert isinstance(ea1, EA1Result)
@@ -82,4 +83,10 @@ def test_hub_focus_fatigue_in_state():
     state = hub.update(p)
     assert isinstance(state.focus_score, float)
     assert isinstance(state.fatigue_score, float)
-    assert state.focus_state in ("HIGH_FOCUS", "MODERATE_FOCUS", "LOW_FOCUS", "DISTRACTED", "unknown")
+    assert state.focus_state in (
+        "HIGH_FOCUS",
+        "MODERATE_FOCUS",
+        "LOW_FOCUS",
+        "DISTRACTED",
+        "unknown",
+    )

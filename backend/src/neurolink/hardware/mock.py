@@ -4,6 +4,7 @@ Ported from Rigpa-v2 mock_stream.py + Rigpa-v3 hardware/mock.py.
 Activated via NEUROLINK_ADAPTER_TYPE=mock.
 Requires no hardware or BLE drivers.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,14 +23,14 @@ _RING_SECS_EEG: float = 4.0
 _RING_SECS_PPG: float = 30.0
 _RING_SECS_IMU: float = 4.0
 
-_N_EEG: int = int(_EEG_FS * _RING_SECS_EEG)      # 1024
-_N_PPG: int = int(_PPG_FS * _RING_SECS_PPG)       # 1920
-_N_IMU: int = int(_IMU_FS * _RING_SECS_IMU)       # 208
+_N_EEG: int = int(_EEG_FS * _RING_SECS_EEG)  # 1024
+_N_PPG: int = int(_PPG_FS * _RING_SECS_PPG)  # 1920
+_N_IMU: int = int(_IMU_FS * _RING_SECS_IMU)  # 208
 
 # Simulate a resting alpha-dominant EEG
-_ALPHA_FREQ: float = 10.0   # Hz
-_THETA_FREQ: float = 6.0    # Hz
-_PPG_HR_FREQ: float = 1.1   # Hz (~66 bpm)
+_ALPHA_FREQ: float = 10.0  # Hz
+_THETA_FREQ: float = 6.0  # Hz
+_PPG_HR_FREQ: float = 1.1  # Hz (~66 bpm)
 
 
 class MockAdapter(HardwareAdapter):
@@ -84,10 +85,7 @@ class MockAdapter(HardwareAdapter):
         signal = alpha + theta + noise
 
         # 5 channels (slightly phase-shifted per channel)
-        eeg_buf = [
-            (signal + 0.02 * np.random.randn(_N_EEG)).tolist()
-            for _ in range(5)
-        ]
+        eeg_buf = [(signal + 0.02 * np.random.randn(_N_EEG)).tolist() for _ in range(5)]
 
         # PPG — simulated heartbeat
         t_ppg = np.linspace(t, t + _RING_SECS_PPG, _N_PPG)

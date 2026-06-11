@@ -2,19 +2,17 @@
 
 Call configure_logging() once at startup (in lifespan).
 """
+
 from __future__ import annotations
 
 import logging
 import sys
-from typing import Any, MutableMapping
+from typing import Any
 
 import structlog
 
 # Type alias that satisfies structlog's Processor signature for mypy
-_Renderer = (
-    structlog.processors.JSONRenderer
-    | structlog.dev.ConsoleRenderer
-)
+_Renderer = structlog.processors.JSONRenderer | structlog.dev.ConsoleRenderer
 
 
 def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:
@@ -53,7 +51,7 @@ def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:
 
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=renderer,
-        foreign_pre_chain=shared_processors,  # type: ignore[arg-type]
+        foreign_pre_chain=shared_processors,
     )
 
     handler = logging.StreamHandler(sys.stdout)

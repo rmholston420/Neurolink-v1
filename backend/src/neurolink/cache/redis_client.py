@@ -3,6 +3,7 @@
 Disabled by default (NEUROLINK_REDIS_ENABLED=false).
 When enabled, hub.snapshot() is pushed to Redis on every frame.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,11 +22,13 @@ async def push_state(state_dict: dict) -> None:
     No-op if Redis is disabled or unreachable.
     """
     from neurolink.config import get_settings
+
     settings = get_settings()
     if not settings.redis_enabled:
         return
     try:
         import redis.asyncio as aioredis
+
         r = aioredis.from_url(settings.redis_url)
         await r.setex(_REDIS_KEY, _TTL_SEC, json.dumps(state_dict))
         await r.aclose()
@@ -39,11 +42,13 @@ async def get_state() -> dict | None:
     Returns None if Redis is disabled or key not found.
     """
     from neurolink.config import get_settings
+
     settings = get_settings()
     if not settings.redis_enabled:
         return None
     try:
         import redis.asyncio as aioredis
+
         r = aioredis.from_url(settings.redis_url)
         raw = await r.get(_REDIS_KEY)
         await r.aclose()

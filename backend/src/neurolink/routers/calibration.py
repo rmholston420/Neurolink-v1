@@ -2,6 +2,7 @@
 
 POST /api/v1/neurolink/calibrate — start 30-second baseline alpha capture.
 """
+
 from __future__ import annotations
 
 import structlog

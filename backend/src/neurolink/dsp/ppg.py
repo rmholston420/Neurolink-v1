@@ -3,11 +3,11 @@
 Ported from Rigpa-v2 dsp/ppg.py + Rigpa-v3 dsp/ppg.py.
 Uses neurokit2 for R-peak detection and HRV metrics.
 """
+
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
 
 import numpy as np
 import structlog
@@ -25,6 +25,7 @@ _HR_VALID_MAX: float = 200.0
 @dataclass
 class PoincareMetrics:
     """Poincare plot HRV metrics."""
+
     sd1: float = 0.0
     sd2: float = 0.0
     ellipse_area: float = 0.0
@@ -48,7 +49,7 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
     try:
         import neurokit2 as nk
 
-        processed, info = nk.ppg_process(ppg_arr, sampling_rate=int(fs))
+        _processed, info = nk.ppg_process(ppg_arr, sampling_rate=int(fs))
         peaks = info.get("PPG_Peaks", [])
 
         if len(peaks) < 3:
@@ -70,7 +71,7 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
         # RMSSD
         if len(ibi_ms) >= 2:
             diffs = np.diff(ibi_ms)
-            hrv_rmssd = float(np.sqrt(np.mean(diffs ** 2)))
+            hrv_rmssd = float(np.sqrt(np.mean(diffs**2)))
         else:
             hrv_rmssd = 0.0
 

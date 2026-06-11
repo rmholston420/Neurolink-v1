@@ -3,6 +3,7 @@
 Ported from Rigpa-v3 hardware/muse_s/compute.py.
 All functions are pure.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -34,6 +35,7 @@ def compute_all_bands(
         from scipy.signal import welch
     except ImportError:
         from neurolink.dsp.bandpower import compute_band_powers_from_buffer
+
         arrays = np.array(
             [channel_samples.get(ch, [0.0]) for ch in ["TP9", "AF7", "AF8", "TP10", "AUX"]],
             dtype=np.float32,
@@ -42,10 +44,10 @@ def compute_all_bands(
         max_len = max(arr.shape[0] for arr in arrays) if arrays.shape[0] else 2
         padded = np.zeros((arrays.shape[0], max_len), dtype=np.float32)
         for i, arr in enumerate(arrays):
-            padded[i, :len(arr)] = arr
+            padded[i, : len(arr)] = arr
         return compute_band_powers_from_buffer(padded, fs=fs)
 
-    band_powers: dict[str, float] = {k: 0.0 for k in _BANDS}
+    band_powers: dict[str, float] = dict.fromkeys(_BANDS, 0.0)
     n_channels = 0
 
     for ch_samples in channel_samples.values():
@@ -61,12 +63,12 @@ def compute_all_bands(
         n_channels += 1
 
     if n_channels == 0:
-        return {k: 0.0 for k in _BANDS}
+        return dict.fromkeys(_BANDS, 0.0)
 
     # Average across channels and normalise
     for k in band_powers:
         band_powers[k] /= n_channels
     total = sum(band_powers.values())
     if total <= 0:
-        return {k: 0.0 for k in _BANDS}
+        return dict.fromkeys(_BANDS, 0.0)
     return {k: v / total for k, v in band_powers.items()}

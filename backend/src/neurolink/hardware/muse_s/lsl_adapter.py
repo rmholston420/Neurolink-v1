@@ -4,6 +4,7 @@ Ported from Rigpa-v3 hardware/muse_s/lsl_adapter.py.
 Requires muselsl running externally:
   muselsl stream --address <mac>
 """
+
 from __future__ import annotations
 
 import asyncio

@@ -8,6 +8,7 @@ Two methods:
 
 Fused result averages both methods when available.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -16,7 +17,7 @@ from neurolink.models.eeg import BreathingPayload
 
 _ACCEL_FS: float = 52.0
 _IBI_FS_VIRTUAL: float = 4.0  # resample IBIs to 4 Hz virtual series
-_RR_MIN_HZ: float = 0.1   # 6 bpm
+_RR_MIN_HZ: float = 0.1  # 6 bpm
 _RR_MAX_HZ: float = 0.55  # 33 bpm
 _MIN_IBIS: int = 10
 _MIN_ACCEL_SAMPLES: int = int(_ACCEL_FS * 10)  # 10 seconds

@@ -5,9 +5,8 @@ Frontal Midline Theta (FMt): Midline (AUX) theta.
 
 Ported from Rigpa-v2 dsp/derived_eeg.py.
 """
-from __future__ import annotations
 
-from typing import Dict
+from __future__ import annotations
 
 import numpy as np
 
@@ -24,7 +23,7 @@ _CH_AUX: int = 4
 _MIN_SAMPLES: int = 256  # ~1 second at 256 Hz
 
 
-def derived_eeg(eeg: np.ndarray, fs: float = _EEG_FS) -> Dict[str, float | None]:
+def derived_eeg(eeg: np.ndarray, fs: float = _EEG_FS) -> dict[str, float | None]:
     """Compute FAA and FMt from a (5, N) EEG buffer.
 
     Args:
@@ -34,7 +33,7 @@ def derived_eeg(eeg: np.ndarray, fs: float = _EEG_FS) -> Dict[str, float | None]
     Returns:
         Dict with keys 'faa' and 'fmt', both float or None if insufficient data.
     """
-    result: Dict[str, float | None] = {"faa": None, "fmt": None}
+    result: dict[str, float | None] = {"faa": None, "fmt": None}
 
     if eeg is None or eeg.ndim < 2:
         return result

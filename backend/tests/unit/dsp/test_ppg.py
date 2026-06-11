@@ -1,10 +1,10 @@
 """Unit tests for dsp/ppg.py."""
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from neurolink.dsp.ppg import compute_ppg, _poincare
+from neurolink.dsp.ppg import _poincare, compute_ppg
 
 
 def test_compute_ppg_returns_empty_for_short_buffer():

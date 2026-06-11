@@ -1,7 +1,8 @@
 """Unit tests for dsp/decoders.py."""
+
 from __future__ import annotations
 
-from neurolink.dsp.decoders import decode_eeg, decode_ppg, decode_imu
+from neurolink.dsp.decoders import decode_eeg, decode_imu, decode_ppg
 
 
 def test_decode_eeg_returns_empty_for_short_packet():

@@ -1,22 +1,21 @@
 """Unit tests for ea1_scorer.py."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from neurolink.ea1_scorer import score
 from neurolink.models.eeg import BandPowers, IMUPayload, IngestPayload
 
 
 def _make_payload(**kwargs) -> IngestPayload:
-    defaults = dict(
-        source="mock",
-        bands=BandPowers(alpha=0.35, theta=0.20, beta=0.12, delta=0.10, gamma=0.05),
-        region="D",
-        alchemical_stage="Rubedo",
-        poor_contact=False,
-        contact_quality=0.9,
-        imu=IMUPayload(motion_rms=0.1),
-    )
+    defaults = {
+        "source": "mock",
+        "bands": BandPowers(alpha=0.35, theta=0.20, beta=0.12, delta=0.10, gamma=0.05),
+        "region": "D",
+        "alchemical_stage": "Rubedo",
+        "poor_contact": False,
+        "contact_quality": 0.9,
+        "imu": IMUPayload(motion_rms=0.1),
+    }
     defaults.update(kwargs)
     return IngestPayload(**defaults)
 

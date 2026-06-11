@@ -1,4 +1,5 @@
 """Custom exception classes for Neurolink."""
+
 from __future__ import annotations
 
 

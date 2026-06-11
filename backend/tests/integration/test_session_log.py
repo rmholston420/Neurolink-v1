@@ -1,7 +1,6 @@
 """Integration tests for session logging."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 
 async def test_session_log_created_on_connect(client):

@@ -3,6 +3,7 @@
 Ported from Rigpa-v3 hardware/muse_athena/ble_adapter.py.
 Requires OpenMuse subprocess running externally (not managed here).
 """
+
 from __future__ import annotations
 
 import asyncio

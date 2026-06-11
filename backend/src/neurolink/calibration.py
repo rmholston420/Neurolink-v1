@@ -2,6 +2,7 @@
 
 Ported from Rigpa-v2 calibration_router.py + Rigpa-v3 calibration.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +25,7 @@ class CalibrationSession:
     Sets hub.baseline_alpha on completion.
     """
 
-    def __init__(self, adapter: HardwareAdapter, hub) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, adapter: HardwareAdapter, hub) -> None:
         self._adapter = adapter
         self._hub = hub
         self._running: bool = False

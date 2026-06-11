@@ -6,6 +6,7 @@ S-space projection for visualisation.
 
 All functions are pure; no side effects.
 """
+
 from __future__ import annotations
 
 from neurolink.models.eeg import BandPowers, SSpaceCoords
@@ -161,6 +162,7 @@ def classify_v2(bands: BandPowers) -> tuple[str, str]:
 # ============================================================================
 # S-Space Projection
 # ============================================================================
+
 
 def compute_s_space(bands: BandPowers) -> SSpaceCoords:
     """Project band powers into 3D S-space coordinates.

@@ -1,4 +1,5 @@
 """Unit tests for fatigue.py."""
+
 from __future__ import annotations
 
 from neurolink.fatigue import FatigueDetector

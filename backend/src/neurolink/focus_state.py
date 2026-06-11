@@ -3,13 +3,15 @@
 Ported from Rigpa-v3 focus_state.py.
 All functions are pure.
 """
+
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class FocusState(str, Enum):
+class FocusState(StrEnum):
     """Focus state classification."""
+
     HIGH_FOCUS = "HIGH_FOCUS"
     MODERATE_FOCUS = "MODERATE_FOCUS"
     LOW_FOCUS = "LOW_FOCUS"

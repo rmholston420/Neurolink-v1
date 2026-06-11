@@ -3,13 +3,13 @@
 All API request/response and internal data transfer objects live here.
 DO NOT add business logic here.
 """
+
 from __future__ import annotations
 
 import time
 from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ============================================================================
 # Sub-models
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 class BandPowers(BaseModel):
     """EEG band power fractions. All values in [0, 1]."""
+
     alpha: float = 0.0
     theta: float = 0.0
     beta: float = 0.0
@@ -27,6 +28,7 @@ class BandPowers(BaseModel):
 
 class SSpaceCoords(BaseModel):
     """S-space (EEG mandala) coordinates."""
+
     x: float = 0.0  # engagement index
     y: float = 0.0  # integration coverage
     z: float = 0.0  # gamma index
@@ -34,6 +36,7 @@ class SSpaceCoords(BaseModel):
 
 class IMUPayload(BaseModel):
     """IMU-derived head pose and motion data."""
+
     pitch_deg: float = 0.0
     roll_deg: float = 0.0
     motion_rms: float = 0.0
@@ -41,6 +44,7 @@ class IMUPayload(BaseModel):
 
 class PPGPayload(BaseModel):
     """PPG-derived cardiovascular metrics."""
+
     hr_bpm: float = 0.0
     hrv_rmssd: float = 0.0
     ibi_ms: list[float] = Field(default_factory=list)
@@ -51,13 +55,15 @@ class PPGPayload(BaseModel):
 
 class BreathingPayload(BaseModel):
     """Breathing rate estimates."""
-    rr_bpm: float | None = None   # fused
-    rr_ppg: float | None = None   # from IBI series
+
+    rr_bpm: float | None = None  # fused
+    rr_ppg: float | None = None  # from IBI series
     rr_accel: float | None = None  # from accelerometer
 
 
 class EA1Criterion(BaseModel):
     """Single EA-1 eligibility criterion."""
+
     value: float | None = None
     threshold: float | None = None
     units: str = ""
@@ -66,6 +72,7 @@ class EA1Criterion(BaseModel):
 
 class EA1Result(BaseModel):
     """EA-1 multimodal eligibility result."""
+
     eligible: bool = False
     score: float = 0.0
     criteria_met: int = 0
@@ -87,6 +94,7 @@ class EA1Result(BaseModel):
 
 class IngestPayload(BaseModel):
     """Internal payload passed from EEGPump to hub.update()."""
+
     source: str = "mock"
     address: str = ""
     timestamp: float = Field(default_factory=time.time)
@@ -115,6 +123,7 @@ class IngestPayload(BaseModel):
 
 class NeurolinkState(BaseModel):
     """Complete EEG state snapshot broadcast by hub and SSE stream."""
+
     connected: bool = False
     source: str = ""
     region: str = "A"
@@ -152,6 +161,7 @@ class NeurolinkState(BaseModel):
 
 class ConnectRequest(BaseModel):
     """POST /api/v1/neurolink/connect request body."""
+
     adapter_type: str = "mock"  # mock | ble | lsl
     device_model: str = "muse_s_gen1"  # muse_s_gen1 | muse_s_athena | mock
     address: str | None = None  # BLE MAC address (required for BLE mode)

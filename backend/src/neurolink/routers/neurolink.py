@@ -3,10 +3,10 @@
 /api/v1/neurolink/* routes.
 Thin layer — delegates to NeuroLinkService.
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 
 import structlog
 from fastapi import APIRouter, Query
@@ -83,6 +83,7 @@ async def sse_stream(service: ServiceDep) -> EventSourceResponse:
 
     Each event: data: <NeurolinkState JSON>
     """
+
     async def event_generator():
         async for state in _stream_with_retry(service):
             yield {
@@ -107,7 +108,7 @@ async def _stream_with_retry(service):
             try:
                 state = await asyncio.wait_for(q.get(), timeout=2.0)
                 yield state
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Keep connection alive
                 yield hub.get_state()
     except asyncio.CancelledError:

@@ -3,6 +3,7 @@
 Builds IngestPayload from EEGSample and calls hub.update().
 Ported from Rigpa-v2 eeg_pump.py + Rigpa-v3 eeg_pump.py.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +20,7 @@ log = structlog.get_logger(__name__)
 _EEG_FS: float = 256.0
 _PPG_FS: float = 64.0
 _ACCEL_FS: float = 52.0
-_WATCHDOG_SEC: float = 10.0   # if no frame in 10s, log warning
+_WATCHDOG_SEC: float = 10.0  # if no frame in 10s, log warning
 
 
 class EEGPump:
@@ -93,10 +94,10 @@ class EEGPump:
     async def _build_payload(self, sample: EEGSample) -> IngestPayload:
         """Build an IngestPayload from a raw EEGSample."""
         from neurolink.dsp.bandpower import compute_band_powers_from_buffer
-        from neurolink.dsp.derived_eeg import derived_eeg
-        from neurolink.dsp.ppg import compute_ppg
         from neurolink.dsp.breathing import compute_breathing
+        from neurolink.dsp.derived_eeg import derived_eeg
         from neurolink.dsp.imu import head_orientation
+        from neurolink.dsp.ppg import compute_ppg
 
         # Band powers
         bands_dict: dict[str, float] = {}

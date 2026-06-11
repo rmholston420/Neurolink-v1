@@ -5,9 +5,8 @@ Uses scipy Welch PSD for band power estimation.
 
 All functions are pure; no side effects.
 """
-from __future__ import annotations
 
-from typing import Dict
+from __future__ import annotations
 
 import numpy as np
 from scipy import signal as sp_signal
@@ -51,9 +50,7 @@ def bandpower(sig: np.ndarray, lo: float, hi: float, fs: float = _EEG_FS) -> flo
     return float(np.sum(psd[freq_mask]))
 
 
-def compute_band_powers_from_buffer(
-    eeg: np.ndarray, fs: float = _EEG_FS
-) -> Dict[str, float]:
+def compute_band_powers_from_buffer(eeg: np.ndarray, fs: float = _EEG_FS) -> dict[str, float]:
     """Compute normalised band power fractions from a (5, N) EEG buffer.
 
     Averages power across all 5 channels, then normalises so all bands sum to 1.
@@ -66,7 +63,7 @@ def compute_band_powers_from_buffer(
         Dict mapping band name to normalised power fraction [0, 1].
         Returns all zeros if buffer is too short.
     """
-    result: Dict[str, float] = {k: 0.0 for k in _BANDS}
+    result: dict[str, float] = dict.fromkeys(_BANDS, 0.0)
 
     if eeg is None:
         return result
@@ -79,7 +76,7 @@ def compute_band_powers_from_buffer(
         return result
 
     # Mean band powers across all channels
-    abs_powers: Dict[str, float] = {}
+    abs_powers: dict[str, float] = {}
     for band, (lo, hi) in _BANDS.items():
         ch_powers = [bandpower(eeg[ch], lo, hi, fs) for ch in range(n_channels)]
         abs_powers[band] = float(np.mean(ch_powers))
@@ -91,7 +88,7 @@ def compute_band_powers_from_buffer(
     return {band: abs_powers[band] / total for band in _BANDS}
 
 
-def make_buffers() -> Dict[str, np.ndarray]:
+def make_buffers() -> dict[str, np.ndarray]:
     """Return zero-filled ring buffer arrays sized for real-time use.
 
     Returns:

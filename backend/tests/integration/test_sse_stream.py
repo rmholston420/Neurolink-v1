@@ -1,8 +1,8 @@
 """Integration tests for SSE stream endpoint."""
+
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 
 async def test_sse_stream_emits_at_least_one_frame(app):
@@ -24,9 +24,7 @@ async def test_sse_stream_emits_at_least_one_frame(app):
     received_frames = []
 
     async def collect_sse():
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as c:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             async with c.stream("GET", "/api/v1/neurolink/stream") as response:
                 async for line in response.aiter_lines():
                     if line.startswith("data:"):
@@ -35,7 +33,7 @@ async def test_sse_stream_emits_at_least_one_frame(app):
 
     try:
         await asyncio.wait_for(collect_sse(), timeout=8.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass  # SSE may timeout in test; check if any frames came through
 
     # The hub has data, so stream should emit something

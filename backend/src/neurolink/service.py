@@ -2,6 +2,7 @@
 
 All router handlers delegate here. Never instantiate adapters or hub in routers.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,7 +41,7 @@ class NeuroLinkService:
         self._adapter_type: str = "mock"
         self._device_model: str = "mock"
 
-    def set_db_session_factory(self, factory) -> None:  # type: ignore[no-untyped-def]
+    def set_db_session_factory(self, factory) -> None:
         """Inject DB session factory (called from lifespan)."""
         self._db_session_factory = factory
 
@@ -144,7 +145,7 @@ class NeuroLinkService:
         log.info("calibration_task_started")
         return CalibrateResponse(status="started", baseline_alpha=None)
 
-    async def stream_state(self) -> AsyncGenerator[NeurolinkState, None]:
+    async def stream_state(self) -> AsyncGenerator[NeurolinkState]:
         """Async generator that yields NeurolinkState at hub fan-out events."""
         q: asyncio.Queue = asyncio.Queue(maxsize=32)
         self._hub.register_sse_queue(q)
