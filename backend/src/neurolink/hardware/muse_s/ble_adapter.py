@@ -94,6 +94,7 @@ class MuseSBleAdapter(HardwareAdapter):
             return
 
         from bleak import BleakClient
+
         from neurolink.dsp.decoders import decode_eeg
 
         self._client = BleakClient(
