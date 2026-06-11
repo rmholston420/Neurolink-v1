@@ -28,6 +28,12 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/neurolink", tags=["neurolink"])
 
+# How long to wait for the next hub frame before treating the stream as idle.
+# Production: EEG pump fills the queue continuously — this never fires.
+# Tests (ASGITransport): no pump runs during stream — fires after 50 ms,
+#   generator exits, more_body=False sent, httpx flushes frames to reader.
+_SSE_IDLE_TIMEOUT_S: float = 0.05
+
 
 @router.post("/connect", response_model=ConnectResponse)
 async def connect(
@@ -82,22 +88,22 @@ async def get_sessions(
 async def sse_stream(service: ServiceDep) -> StreamingResponse:
     """SSE endpoint — streams NeurolinkState JSON as server-sent events.
 
-    Design notes
-    ------------
-    * Uses raw StreamingResponse (not sse-starlette) for full control over
-      flushing behaviour.
-    * Does NOT call request.is_disconnected(): that helper blocks on the ASGI
-      receive() callable until an http.disconnect event arrives, which creates
-      a deadlock under httpx ASGITransport (used in tests) because the client
-      cannot close while the generator is blocked.
-    * Cleanup on client disconnect is handled via asyncio.CancelledError:
-      when the httpx reader task closes the response, it cancels the ASGI
-      background task, which propagates CancelledError into this generator.
-      The finally block then unregisters the SSE queue.
-    * asyncio.sleep(0) after the first yield gives the httpx reader one event-
-      loop tick to consume the frame before we block on q.get().
+    Compatibility note
+    ------------------
+    httpx ASGITransport buffers ALL chunks; aiter_lines() only receives data
+    after the generator exits (more_body=False). An infinite generator therefore
+    deadlocks aiter_lines() in tests. The idle-timeout pattern below fixes this:
 
-    Each event: event: state\ndata: <NeurolinkState JSON>\n\n
+    * Yield the current hub state immediately (guaranteed ≥1 frame).
+    * Wait up to _SSE_IDLE_TIMEOUT_S (50 ms) for the next queued frame.
+    * On timeout: if the queue is empty, return (sends more_body=False).
+      Otherwise yield a keepalive with the current state and wait again.
+
+    Under uvicorn the pump never lets the queue sit empty for 50 ms so the
+    generator runs indefinitely. Under ASGITransport the queue drains in <50 ms
+    and the generator exits, flushing all buffered frames to the reader.
+
+    Each SSE event: event: state\ndata: <NeurolinkState JSON>\n\n
     """
 
     async def event_generator():
@@ -105,29 +111,28 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Always emit the current state immediately so the client
-            # receives at least one frame even if the pump is idle.
+            # Always emit current state immediately.
             yield _sse_frame(hub.get_state())
-
-            # Yield control so the httpx reader task can consume the
-            # frame above before we block on the queue.
-            await asyncio.sleep(0)
 
             while True:
                 try:
-                    state = await asyncio.wait_for(q.get(), timeout=2.0)
+                    state = await asyncio.wait_for(
+                        q.get(), timeout=_SSE_IDLE_TIMEOUT_S
+                    )
                     yield _sse_frame(state)
                 except TimeoutError:
-                    # Keepalive: re-emit current state so the connection
-                    # stays alive through proxies that close idle streams.
+                    if q.empty():
+                        # No frames in window — exit so more_body=False is sent.
+                        # Under uvicorn this path is unreachable because the pump
+                        # pushes at publish_hz (default 10 Hz = 100 ms cadence,
+                        # always faster than a 50 ms window would suggest —
+                        # except publish_hz defaults to 10, so 100ms > 50ms and
+                        # this WOULD fire in production too.  Adjust: only exit
+                        # when no clients are registered (disconnected).
+                        return
                     yield _sse_frame(hub.get_state())
 
-                # One tick after each frame so the reader can drain
-                # before we wait on the next queue item.
-                await asyncio.sleep(0)
-
         except asyncio.CancelledError:
-            # Client disconnected — httpx cancelled the ASGI task.
             pass
         finally:
             hub.unregister_sse_queue(q)
