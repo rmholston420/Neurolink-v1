@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6380:6379"  # host 6380 avoids conflict with any local Redis on 6379
+      - "6380:6379"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "ping"]
@@ -15,7 +15,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8003:8000"  # host 8003 → container 8000
+      - "8003:8000"
     environment:
       - NEUROLINK_ADAPTER_TYPE=mock
       - NEUROLINK_DB_PATH=/app/data/neurolink.db
@@ -23,13 +23,14 @@ services:
       - NEUROLINK_REDIS_ENABLED=false
       - NEUROLINK_LOG_JSON=true
       - NEUROLINK_CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:8003
+      # Tell dbus-fast where the host system bus socket is
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
     volumes:
       - neurolink_data:/app/data
-      # Mount host D-Bus socket so bleak can reach BlueZ inside the container
+      # Expose host D-Bus socket so bleak can reach BlueZ
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
-    # Required for BlueZ/BLE access from inside the container
+    # Required for raw Bluetooth HCI access
     privileged: true
-    network_mode: host  # lets bleak use the host BlueZ daemon directly
     depends_on:
       - redis
     restart: unless-stopped
