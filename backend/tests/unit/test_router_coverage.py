@@ -154,7 +154,7 @@ async def test_build_payload_empty_eeg_buffer():
         source="mock",
         address="mock",
         poor_contact=False,
-        eeg_buffer=None,   # <-- empty branch
+        eeg_buffer=None,
         ppg_buffer=None,
         accel_buffer=None,
         gyro_buffer=None,
@@ -179,13 +179,35 @@ async def test_build_payload_short_eeg_buffer():
         source="mock",
         address="mock",
         poor_contact=False,
-        eeg_buffer=[[0.0], [0.0], [0.0], [0.0], [0.0]],  # shape (5,1) → too short
+        eeg_buffer=[[0.0], [0.0], [0.0], [0.0], [0.0]],
         ppg_buffer=None,
         accel_buffer=None,
         gyro_buffer=None,
     )
     payload = await pump._build_payload(sample)
     assert payload is not None
+
+
+async def test_build_payload_partial_accel_skips_imu():
+    """accel_buffer with len < 3 skips the IMU head_orientation branch."""
+    from neurolink.eeg_pump import EEGPump
+    from neurolink.hardware.base import EEGSample
+    from neurolink.hub import EEGHub
+
+    hub = EEGHub()
+    pump = EEGPump(adapter=AsyncMock(), hub=hub, publish_hz=4.0)
+
+    sample = EEGSample(
+        channels=[0.0] * 5,
+        source="mock",
+        address="mock",
+        eeg_buffer=None,
+        ppg_buffer=None,
+        accel_buffer=[[0.0, 0.0], [0.0, 0.0]],   # only 2 axes — len < 3
+        gyro_buffer=None,
+    )
+    payload = await pump._build_payload(sample)
+    assert payload.imu is None
 
 
 # ===========================================================================
@@ -200,14 +222,9 @@ async def test_schedule_redis_push_loop_running():
     hub = EEGHub()
     state = NeurolinkState()
 
-    # Patch _push_state_to_redis so no real Redis call is made.
-    with patch("neurolink.hub._push_state_to_redis", new=AsyncMock()) as mock_push:
+    with patch("neurolink.hub._push_state_to_redis", new=AsyncMock()):
         hub._schedule_redis_push(state)
-        # Give the event loop a tick so ensure_future fires.
         await asyncio.sleep(0)
-
-    # The coroutine was scheduled (ensure_future called) — mock may or may not
-    # have been awaited yet; just assert no exception was raised.
 
 
 def test_schedule_redis_push_runtime_error_is_suppressed():
@@ -220,6 +237,41 @@ def test_schedule_redis_push_runtime_error_is_suppressed():
 
     with patch("asyncio.get_event_loop", side_effect=RuntimeError("no loop")):
         hub._schedule_redis_push(state)  # must not raise
+
+
+# ===========================================================================
+# hub._push_state_to_redis — coroutine body
+# ===========================================================================
+
+async def test_push_state_to_redis_calls_push_state():
+    """_push_state_to_redis lazy-imports and calls cache.redis_client.push_state."""
+    from neurolink.hub import _push_state_to_redis
+
+    with patch("neurolink.cache.redis_client.push_state", new=AsyncMock()) as mock_push:
+        await _push_state_to_redis({"frame_count": 1})
+        mock_push.assert_awaited_once_with({"frame_count": 1})
+
+
+# ===========================================================================
+# service — is_connected and adapter_type properties
+# ===========================================================================
+
+def test_service_is_connected_false_when_no_adapter():
+    """is_connected returns False before any connect() call."""
+    from neurolink.hub import EEGHub
+    from neurolink.service import NeuroLinkService
+
+    svc = NeuroLinkService(EEGHub())
+    assert svc.is_connected is False
+
+
+def test_service_adapter_type_default():
+    """adapter_type returns the settings default ('mock' in test env)."""
+    from neurolink.hub import EEGHub
+    from neurolink.service import NeuroLinkService
+
+    svc = NeuroLinkService(EEGHub())
+    assert isinstance(svc.adapter_type, str)
 
 
 # ===========================================================================
@@ -243,8 +295,7 @@ async def test_create_db_session_with_factory_success():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    mock_factory = MagicMock(return_value=mock_db)
-    svc.set_db_session_factory(mock_factory)
+    svc.set_db_session_factory(MagicMock(return_value=mock_db))
 
     with patch("neurolink.db.repository.SessionLogRepository", return_value=mock_repo):
         await svc._create_db_session(
@@ -338,7 +389,7 @@ def test_calibration_baseline_alpha_property():
 
 
 # ===========================================================================
-# adapter_factory — lsl else branch + unknown-type raise
+# adapter_factory — lsl else branch, lsl athena, ble gen1
 # ===========================================================================
 
 def test_create_adapter_lsl_default_model():
@@ -361,6 +412,34 @@ def test_create_adapter_lsl_athena_model():
     assert adapter is not None
 
 
+def test_create_adapter_ble_gen1_branch():
+    """ble + muse_s_gen1 hits the MuseSBleAdapter branch."""
+    from neurolink.adapter_factory import create_adapter
+
+    with patch("neurolink.hardware.muse_s.ble_adapter.MuseSBleAdapter") as MockBle:
+        MockBle.return_value = MagicMock()
+        adapter = create_adapter(
+            adapter_type="ble",
+            device_model="muse_s_gen1",
+            address="AA:BB:CC:DD:EE:FF",
+        )
+    assert adapter is not None
+
+
+def test_create_adapter_ble_athena_branch():
+    """ble + muse_s_athena hits the AthenaBlueAdapter branch."""
+    from neurolink.adapter_factory import create_adapter
+
+    with patch("neurolink.hardware.muse_athena.ble_adapter.AthenaBlueAdapter") as MockAthena:
+        MockAthena.return_value = MagicMock()
+        adapter = create_adapter(
+            adapter_type="ble",
+            device_model="muse_s_athena",
+            address="AA:BB:CC:DD:EE:FF",
+        )
+    assert adapter is not None
+
+
 # ===========================================================================
 # hardware/mock.py — read_sample not-connected returns None
 # ===========================================================================
@@ -370,6 +449,5 @@ async def test_mock_adapter_read_sample_not_connected_returns_none():
     from neurolink.hardware.mock import MockAdapter
 
     adapter = MockAdapter()
-    # Do not call connect() — _connected stays False
     result = await adapter.read_sample()
     assert result is None
