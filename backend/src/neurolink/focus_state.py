@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+import structlog
+
+log = structlog.get_logger(__name__)
+
 
 class FocusState(StrEnum):
     """Focus state classification."""
@@ -23,6 +27,30 @@ class FocusState(StrEnum):
 _HIGH_FOCUS_THRESHOLD: float = 0.75
 _MODERATE_FOCUS_THRESHOLD: float = 0.50
 _LOW_FOCUS_THRESHOLD: float = 0.25
+
+# Minimum focus score required for EEG gate to pass through
+_BLOCKING_THRESHOLD: float = _LOW_FOCUS_THRESHOLD
+
+# Module-level focus score cache (written by hub, read by EEG gate)
+_current_focus_score: float = 0.0
+
+
+def set_current_focus_score(score: float) -> None:
+    """Update the cached focus score (called by hub.update on every frame)."""
+    global _current_focus_score
+    _current_focus_score = float(score)
+
+
+def is_blocking() -> bool:
+    """Return True if the current focus score is below the blocking threshold.
+
+    Used by the EEG gate middleware to decide whether to gate output.
+    A low focus score (DISTRACTED state) triggers the gate.
+
+    Returns:
+        True if focus is too low (gate should block), False if focus passes.
+    """
+    return _current_focus_score < _BLOCKING_THRESHOLD
 
 
 def classify_focus(score: float) -> FocusState:

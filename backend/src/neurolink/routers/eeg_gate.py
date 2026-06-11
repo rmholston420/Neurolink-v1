@@ -1,33 +1,42 @@
-"""EEG gate router — session gate status and middleware.
+"""EEG Gate middleware router.
 
-GET /api/v1/gate/status — returns whether an active EEG session is running.
-The EEGGateMiddleware is registered in main.py.
+Gates downstream EEG output based on current focus state.
+When focus score is below threshold, returns a 423 Locked response
+to indicate the gate is blocking.
 """
 
 from __future__ import annotations
 
+import structlog
 from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 
 from neurolink.dependencies import ServiceDep
+from neurolink.focus_state import is_blocking
 
-router = APIRouter(prefix="/gate", tags=["eeg_gate"])
+log = structlog.get_logger(__name__)
 
-
-class GateStatusResponse(BaseModel):
-    """EEG session gate status."""
-
-    active: bool
-    source: str
-    frame_count: int
+router = APIRouter(prefix="/eeg-gate", tags=["eeg-gate"])
 
 
-@router.get("/status", response_model=GateStatusResponse)
-async def get_gate_status(service: ServiceDep) -> GateStatusResponse:
-    """Return current EEG session gate status."""
-    state = await service.get_current_state()
-    return GateStatusResponse(
-        active=service.is_connected,
-        source=state.source,
-        frame_count=state.frame_count,
+@router.get("/status")
+async def gate_status(service: ServiceDep) -> JSONResponse:
+    """Return the current EEG gate status.
+
+    Returns 200 with {"blocking": false} when focus is sufficient.
+    Returns 423 with {"blocking": true, "reason": "focus_too_low"} when gated.
+    """
+    blocking = is_blocking()
+    if blocking:
+        return JSONResponse(
+            status_code=423,
+            content={
+                "blocking": True,
+                "reason": "focus_too_low",
+                "detail": "EEG gate is active: focus score below threshold.",
+            },
+        )
+    return JSONResponse(
+        status_code=200,
+        content={"blocking": False},
     )

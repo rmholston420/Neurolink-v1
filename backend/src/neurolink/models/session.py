@@ -1,33 +1,13 @@
-"""SQLAlchemy ORM model for EEG session log."""
+"""models/session.py — re-export alias for the SessionLog ORM model.
+
+The spec references neurolink.models.session.SessionLog.  The canonical
+ORM definition lives in neurolink.db.models so that SQLAlchemy's
+DeclarativeBase is co-located with the engine.  This module re-exports
+it so that both import paths resolve to the same class.
+"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from neurolink.db.models import SessionLog as SessionLog  # noqa: F401
 
-from sqlalchemy import Boolean, DateTime, Integer, String
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class SessionLog(Base):
-    """Records every EEG connection session."""
-
-    __tablename__ = "session_logs"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        nullable=False,
-    )
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    device_model: Mapped[str] = mapped_column(String(64), nullable=False, default="mock")
-    adapter_type: Mapped[str] = mapped_column(String(32), nullable=False, default="mock")
-    address: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    frame_count: Mapped[int] = mapped_column(Integer, default=0)
-    final_region: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    final_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    final_ea1_eligible: Mapped[bool] = mapped_column(Boolean, default=False)
+__all__ = ["SessionLog"]

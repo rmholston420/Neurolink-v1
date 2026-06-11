@@ -17,7 +17,7 @@ import structlog
 from neurolink.dsp.classifiers import classify_v01, classify_v2, compute_s_space
 from neurolink.ea1_scorer import score as ea1_score
 from neurolink.fatigue import FatigueDetector
-from neurolink.focus_state import classify_focus, compute_focus_score
+from neurolink.focus_state import classify_focus, compute_focus_score, set_current_focus_score
 from neurolink.models.eeg import (
     EA1Result,
     IngestPayload,
@@ -38,6 +38,8 @@ class EEGHub:
     Single writer (EEGPump) via update(); multiple readers via get_state().
     All writes are protected by a threading.Lock.
     SSE fan-out uses per-client asyncio.Queue populated in update().
+    Redis write-through (Task 7.2): hub.update() calls cache.push_state() after
+    every state update when NEUROLINK_REDIS_ENABLED=true.
     """
 
     def __init__(self) -> None:
@@ -53,6 +55,10 @@ class EEGHub:
 
     def update(self, payload: IngestPayload) -> NeurolinkState:
         """Ingest a new payload, run classifiers, update state, fan-out to SSE.
+
+        Implements Task 7.2: after writing state, schedules an async Redis
+        write-through via asyncio.ensure_future so the hot sync path is not
+        blocked by I/O.
 
         Args:
             payload: IngestPayload from EEGPump
@@ -95,6 +101,9 @@ class EEGHub:
         focus_score = compute_focus_score(bands.alpha, bands.beta, self.baseline_alpha)
         focus_state = classify_focus(focus_score)
 
+        # Update module-level focus score cache (used by is_blocking())
+        set_current_focus_score(focus_score)
+
         # ── Build NeurolinkState ─────────────────────────────────────────
         with self._lock:
             prev_count = self._state.frame_count
@@ -133,7 +142,28 @@ class EEGHub:
 
         # Fan-out to SSE queues (non-blocking)
         self._fanout(new_state)
+
+        # Task 7.2: Redis write-through — fire-and-forget async push
+        self._schedule_redis_push(new_state)
+
         return new_state
+
+    def _schedule_redis_push(self, state: NeurolinkState) -> None:
+        """Schedule a non-blocking Redis write-through for the new state.
+
+        Uses asyncio.get_event_loop().call_soon_threadsafe so this is safe
+        whether update() is called from the event loop thread or a worker.
+        No-op if no running event loop is available (e.g. during tests).
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(
+                    _push_state_to_redis(state.model_dump()),
+                    loop=loop,
+                )
+        except RuntimeError:
+            pass
 
     def get_state(self) -> NeurolinkState:
         """Return the current NeurolinkState snapshot."""
@@ -192,9 +222,18 @@ class EEGHub:
                 log.warning("sse_queue_full_dropping_frame")
 
 
+async def _push_state_to_redis(state_dict: dict) -> None:
+    """Coroutine: push state dict to Redis (Task 7.2 write-through).
+
+    Delegated to cache.redis_client.push_state which handles the
+    NEUROLINK_REDIS_ENABLED guard and swallows connection errors.
+    """
+    from neurolink.cache.redis_client import push_state
+
+    await push_state(state_dict)
+
+
 # ── Module-level singleton ──────────────────────────────────────────────────
-# These module-level functions delegate to the singleton instance.
-# Allows tests to call hub_module.reset() as in conftest.py pattern.
 
 _hub: EEGHub = EEGHub()
 
