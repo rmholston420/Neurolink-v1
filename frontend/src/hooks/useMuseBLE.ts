@@ -28,6 +28,16 @@
  *
  * CMD_DATA is the 3-byte command that starts streaming:
  *   0x02, 0x64, 0x0a
+ *
+ * Secure-context note:
+ *   Chrome/Edge only expose navigator.bluetooth on secure origins:
+ *     - https://
+ *     - http://localhost  (the literal hostname, NOT http://127.0.0.1)
+ *   Opening the app at http://127.0.0.1:xxxx will make 'bluetooth' absent
+ *   from navigator even on Chrome. window.isSecureContext is the canonical
+ *   browser flag for this. We surface this as the 'insecure_origin' status
+ *   so the UI can show a specific, actionable error rather than the generic
+ *   "browser not supported" warning.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -78,13 +88,14 @@ function decodeTelemetry(buf: DataView): { battery: number; contact: boolean[] }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type BLEStatus =
-  | 'unsupported'   // browser has no Web Bluetooth
-  | 'idle'          // not connected, ready to try
-  | 'requesting'    // browser picker open
-  | 'connecting'    // GATT negotiation in progress
-  | 'streaming'     // data flowing
-  | 'reconnecting'  // dropped, retrying
-  | 'error'         // fatal or user-cancelled
+  | 'unsupported'     // browser has no Web Bluetooth API at all (Firefox, Safari)
+  | 'insecure_origin' // Chrome on http://127.0.0.1 — needs http://localhost instead
+  | 'idle'            // not connected, ready to try
+  | 'requesting'      // browser picker open
+  | 'connecting'      // GATT negotiation in progress
+  | 'streaming'       // data flowing
+  | 'reconnecting'    // dropped, retrying
+  | 'error'           // fatal or user-cancelled
 
 export interface ContactQuality {
   tp9:  boolean
@@ -102,6 +113,19 @@ export interface UseMuseBLEReturn {
   framesSent: number
   connect:    () => Promise<void>
   disconnect: () => Promise<void>
+}
+
+// ── Secure-context detection ──────────────────────────────────────────────────
+// window.isSecureContext is the canonical browser flag:
+//   true  on https://, http://localhost, file://
+//   false on http://127.0.0.1, http://192.168.x.x, etc.
+// We check this BEFORE looking for navigator.bluetooth so we can give a
+// specific actionable message rather than a generic "not supported" error.
+function detectBLEStatus(): BLEStatus {
+  if (typeof window === 'undefined') return 'unsupported'
+  if (!window.isSecureContext) return 'insecure_origin'
+  if (typeof navigator === 'undefined' || !('bluetooth' in navigator)) return 'unsupported'
+  return 'idle'
 }
 
 // ── Frame accumulator ─────────────────────────────────────────────────────────
@@ -141,9 +165,10 @@ function estimateBandPowers(samples: number[]) {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 export function useMuseBLE(apiUrl: string): UseMuseBLEReturn {
-  const isSupported = typeof navigator !== 'undefined' && 'bluetooth' in navigator
+  const initialStatus = detectBLEStatus()
+  const isUsable = initialStatus === 'idle'
 
-  const [status,     setStatus]     = useState<BLEStatus>(isSupported ? 'idle' : 'unsupported')
+  const [status,     setStatus]     = useState<BLEStatus>(initialStatus)
   const [deviceName, setDeviceName] = useState<string | null>(null)
   const [battery,    setBattery]    = useState<number | null>(null)
   const [contact,    setContact]    = useState<ContactQuality>({ tp9: false, af7: false, af8: false, tp10: false })
@@ -203,7 +228,7 @@ export function useMuseBLE(apiUrl: string): UseMuseBLEReturn {
   }, [])
 
   const doConnect = useCallback(async () => {
-    if (!isSupported) return
+    if (!isUsable) return
     setStatus('requesting')
     setErrorMsg(null)
 
@@ -292,7 +317,7 @@ export function useMuseBLE(apiUrl: string): UseMuseBLEReturn {
       setStatus('error')
       setErrorMsg(`GATT error: ${String(err)}`)
     }
-  }, [isSupported, postFrame, subscribeEEG])
+  }, [isUsable, postFrame, subscribeEEG])
 
   const doDisconnect = useCallback(async () => {
     aliveRef.current = false

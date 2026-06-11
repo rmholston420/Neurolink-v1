@@ -5,6 +5,15 @@
  * Shows exactly one primary action at a time. The browser compat guard
  * appears immediately on unsupported browsers so the user never wastes
  * a click.
+ *
+ * Status variants handled:
+ *   unsupported     — browser has no Web Bluetooth (Firefox/Safari)
+ *   insecure_origin — Chrome on http://127.0.0.1 instead of http://localhost
+ *   idle / error    — ready to connect
+ *   requesting      — picker open
+ *   connecting      — GATT negotiation
+ *   streaming       — data flowing
+ *   reconnecting    — dropped, retrying
  */
 import React from 'react'
 import type { ContactQuality, BLEStatus } from '../hooks/useMuseBLE'
@@ -33,35 +42,47 @@ const s: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 16,
   },
-  unsupportedBanner: {
+  banner: (color: string): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'flex-start',
     gap: 12,
     padding: '14px 16px',
-    background: 'rgba(210,153,34,0.12)',
-    border: '1px solid rgba(210,153,34,0.35)',
+    background: `rgba(${color},0.12)`,
+    border: `1px solid rgba(${color},0.35)`,
     borderRadius: 8,
-  },
-  unsupportedIcon: {
+  }),
+  bannerIcon: {
     fontSize: 22,
     lineHeight: 1,
     flexShrink: 0,
     marginTop: 1,
   },
-  unsupportedText: {
+  bannerText: (textColor: string): React.CSSProperties => ({
     fontSize: 13,
-    color: '#e3b341',
+    color: textColor,
     lineHeight: 1.55,
-  },
-  unsupportedBold: {
+  }),
+  bannerBold: {
     fontWeight: 700,
     display: 'block',
     marginBottom: 4,
   },
-  chromeLink: {
+  link: {
     color: '#58a6ff',
     textDecoration: 'none',
     fontWeight: 600,
+  },
+  codeChip: {
+    display: 'inline-block',
+    padding: '1px 7px',
+    borderRadius: 4,
+    background: 'rgba(110,118,129,0.2)',
+    border: '1px solid rgba(110,118,129,0.3)',
+    fontFamily: 'ui-monospace, monospace',
+    fontSize: 12,
+    color: '#e6edf3',
+    letterSpacing: 0,
+    userSelect: 'all' as const,
   },
   bigBtn: (active: boolean, danger: boolean): React.CSSProperties => ({
     width: '100%',
@@ -143,13 +164,14 @@ const s: Record<string, React.CSSProperties> = {
 }
 
 const STATUS_MESSAGES: Record<BLEStatus, string> = {
-  unsupported: 'Web Bluetooth not supported',
-  idle:        'Ready to connect',
-  requesting:  'Browser device picker is open — select your Muse…',
-  connecting:  'Connecting to headband…',
-  streaming:   'Streaming',
-  reconnecting:'Reconnecting…',
-  error:       'Connection error',
+  unsupported:     'Web Bluetooth not supported in this browser',
+  insecure_origin: 'Web Bluetooth requires a secure origin',
+  idle:            'Ready to connect',
+  requesting:      'Browser device picker is open — select your Muse…',
+  connecting:      'Connecting to headband…',
+  streaming:       'Streaming',
+  reconnecting:    'Reconnecting…',
+  error:           'Connection error',
 }
 
 export default function MuseConnectButton({
@@ -159,29 +181,60 @@ export default function MuseConnectButton({
   const isStreaming    = status === 'streaming'
   const isBusy        = status === 'requesting' || status === 'connecting' || status === 'reconnecting'
   const isUnsupported = status === 'unsupported'
+  const isInsecure    = status === 'insecure_origin'
   const isIdle        = status === 'idle' || status === 'error'
   const electrodesActive = isStreaming || status === 'reconnecting'
 
+  // ── Insecure-origin banner (Chrome on 127.0.0.1) ─────────────────────────
+  if (isInsecure) {
+    const currentUrl = typeof window !== 'undefined' ? window.location.href : ''
+    const localhostUrl = currentUrl.replace(/\/\/127\.0\.0\.1/, '//localhost')
+    return (
+      <div style={s.root}>
+        <div style={s.banner('210,153,34')}>
+          <span style={s.bannerIcon}>🔒</span>
+          <div style={s.bannerText('#e3b341')}>
+            <strong style={s.bannerBold}>Web Bluetooth requires a secure origin.</strong>
+            Chrome supports Web Bluetooth, but only on{' '}
+            <code style={s.codeChip}>https://</code> or the literal hostname{' '}
+            <code style={s.codeChip}>localhost</code>. You are currently on{' '}
+            <code style={s.codeChip}>127.0.0.1</code>, which Chrome treats as insecure.
+            <br /><br />
+            <strong>Fix:</strong> reload the page at{' '}
+            <a href={localhostUrl} style={s.link}>{localhostUrl}</a>
+            {' '}— just swap <code style={s.codeChip}>127.0.0.1</code> for{' '}
+            <code style={s.codeChip}>localhost</code> in the address bar.
+            <br /><br />
+            Or use the <strong>Backend BLE</strong> tab — it does not require a
+            secure origin because it talks to the Python server, not the browser's
+            Bluetooth stack.
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Unsupported-browser banner (Firefox / Safari) ─────────────────────────
   if (isUnsupported) {
     return (
       <div style={s.root}>
-        <div style={s.unsupportedBanner}>
-          <span style={s.unsupportedIcon}>⚠️</span>
-          <div style={s.unsupportedText}>
-            <strong style={s.unsupportedBold}>Web Bluetooth is not supported in this browser.</strong>
+        <div style={s.banner('210,153,34')}>
+          <span style={s.bannerIcon}>⚠️</span>
+          <div style={s.bannerText('#e3b341')}>
+            <strong style={s.bannerBold}>Web Bluetooth is not supported in this browser.</strong>
             To connect your Muse headband directly, please open this page in{' '}
             <a
               href="https://www.google.com/chrome/"
               target="_blank"
               rel="noopener noreferrer"
-              style={s.chromeLink}
+              style={s.link}
             >Google Chrome</a>
             {' '}or{' '}
             <a
               href="https://www.microsoft.com/en-us/edge"
               target="_blank"
               rel="noopener noreferrer"
-              style={s.chromeLink}
+              style={s.link}
             >Microsoft Edge</a>
             . Firefox and Safari do not support Web Bluetooth.
             <br /><br />
