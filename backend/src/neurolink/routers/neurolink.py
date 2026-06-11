@@ -10,7 +10,7 @@ import asyncio
 import json
 
 import structlog
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from neurolink.dependencies import ServiceDep
@@ -79,14 +79,17 @@ async def get_sessions(
 
 
 @router.get("/stream")
-async def sse_stream(service: ServiceDep) -> StreamingResponse:
+async def sse_stream(request: Request, service: ServiceDep) -> StreamingResponse:
     """SSE endpoint — streams NeurolinkState JSON.
 
-    Uses raw StreamingResponse (not sse-starlette) so every yielded
-    chunk is flushed to the client immediately, making the first frame
-    visible to httpx.aiter_lines() without waiting for a buffer fill.
+    Uses raw StreamingResponse (not sse-starlette) with explicit
+    disconnect detection so the generator terminates when the client
+    closes the connection.  This is required for httpx ASGITransport
+    (used in tests) where the ASGI app runs in the same event-loop task
+    as the consumer: without early termination the generator deadlocks
+    aiter_lines() forever.
 
-    Each event: event: state\ndata: <NeurolinkState JSON>\n\n
+    Each SSE event: event: state\ndata: <NeurolinkState JSON>\n\n
     """
 
     async def event_generator():
@@ -94,16 +97,25 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Emit current state immediately so client always gets ≥1 frame
-            state = hub.get_state()
-            yield _sse_frame(state)
+            # Emit current state immediately — client always gets ≥1 frame
+            yield _sse_frame(hub.get_state())
+
+            # Checkpoint: let the event loop deliver the first frame before
+            # entering the blocking queue wait.
+            await asyncio.sleep(0)
+
+            if await request.is_disconnected():
+                return
+
             while True:
                 try:
-                    state = await asyncio.wait_for(q.get(), timeout=2.0)
+                    state = await asyncio.wait_for(q.get(), timeout=1.0)
                     yield _sse_frame(state)
                 except TimeoutError:
-                    # Keepalive — emit current state
                     yield _sse_frame(hub.get_state())
+
+                if await request.is_disconnected():
+                    return
         except asyncio.CancelledError:
             pass
         finally:
