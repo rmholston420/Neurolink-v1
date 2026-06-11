@@ -1,5 +1,5 @@
 import React from 'react'
-import type { EA1Result } from '../hooks/useNeurolinkSSE'
+import type { EA1Result } from '../types'
 
 interface Props {
   ea1: EA1Result | null
@@ -14,16 +14,18 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: { fontSize: 12, color: '#484f58' },
 }
 
-const badgeStyle = (eligible: boolean): React.CSSProperties => ({
-  display: 'inline-block',
-  padding: '4px 14px',
-  borderRadius: 20,
-  fontWeight: 600,
-  fontSize: 14,
-  background: eligible ? 'rgba(46,160,67,0.15)' : 'rgba(248,81,73,0.15)',
-  color: eligible ? '#3fb950' : '#f85149',
-  border: `1px solid ${eligible ? '#238636' : '#da3633'}`,
-})
+function badgeStyle(eligible: boolean): React.CSSProperties {
+  return {
+    display: 'inline-block',
+    padding: '4px 14px',
+    borderRadius: 20,
+    fontWeight: 600,
+    fontSize: 14,
+    background: eligible ? 'rgba(46,160,67,0.15)' : 'rgba(248,81,73,0.15)',
+    color: eligible ? '#3fb950' : '#f85149',
+    border: `1px solid ${eligible ? '#238636' : '#da3633'}`,
+  }
+}
 
 export default function EA1Score({ ea1 }: Props) {
   if (!ea1) {

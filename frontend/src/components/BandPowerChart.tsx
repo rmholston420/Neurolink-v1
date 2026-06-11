@@ -1,5 +1,5 @@
 import React from 'react'
-import type { BandPowers } from '../hooks/useNeurolinkSSE'
+import type { BandPowers } from '../types'
 
 interface Props {
   bands: BandPowers | null
@@ -40,7 +40,7 @@ export default function BandPowerChart({ bands }: Props) {
     return <div style={{ color: '#484f58', fontSize: 14 }}>No data</div>
   }
 
-  const entries = Object.entries(bands) as [keyof BandPowers, number][]
+  const entries = Object.entries(bands) as [string, number][]
 
   return (
     <div style={styles.container}>

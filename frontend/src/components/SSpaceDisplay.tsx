@@ -13,10 +13,10 @@ interface Props {
 
 // Map stage names to accent colours – unknown stages fall back to neutral.
 const STAGE_COLOURS: Record<string, string> = {
-  Nigredo:   '#6e7681',
-  Albedo:    '#79c0ff',
+  Nigredo: '#6e7681',
+  Albedo: '#79c0ff',
   Citrinitas: '#e3b341',
-  Rubedo:    '#ff7b72',
+  Rubedo: '#ff7b72',
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -56,7 +56,15 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#e6edf3',
     flexShrink: 0,
   },
-  stageBadge: (colour: string): React.CSSProperties => ({
+  divider: {
+    height: 1,
+    background: '#21262d',
+  },
+}
+
+// Standalone helper — NOT inside the styles Record so it can be called as a function.
+function stageBadgeStyle(colour: string): React.CSSProperties {
+  return {
     display: 'inline-block',
     padding: '2px 10px',
     borderRadius: 20,
@@ -65,11 +73,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: colour,
     background: colour + '22',
     border: `1px solid ${colour}55`,
-  }),
-  divider: {
-    height: 1,
-    background: '#21262d',
-  },
+  }
 }
 
 function Section({
@@ -87,7 +91,7 @@ function Section({
       <span style={styles.sectionLabel}>{label}</span>
       <div style={styles.row}>
         <span style={styles.regionBadge}>{region}</span>
-        <span style={styles.stageBadge(colour) as React.CSSProperties}>{stage}</span>
+        <span style={stageBadgeStyle(colour)}>{stage}</span>
       </div>
     </div>
   )
