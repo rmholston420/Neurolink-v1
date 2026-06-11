@@ -10,7 +10,7 @@ import asyncio
 import json
 
 import structlog
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from neurolink.dependencies import ServiceDep
@@ -79,17 +79,25 @@ async def get_sessions(
 
 
 @router.get("/stream")
-async def sse_stream(request: Request, service: ServiceDep) -> StreamingResponse:
-    """SSE endpoint — streams NeurolinkState JSON.
+async def sse_stream(service: ServiceDep) -> StreamingResponse:
+    """SSE endpoint — streams NeurolinkState JSON as server-sent events.
 
-    Uses raw StreamingResponse (not sse-starlette) with explicit
-    disconnect detection so the generator terminates when the client
-    closes the connection.  This is required for httpx ASGITransport
-    (used in tests) where the ASGI app runs in the same event-loop task
-    as the consumer: without early termination the generator deadlocks
-    aiter_lines() forever.
+    Design notes
+    ------------
+    * Uses raw StreamingResponse (not sse-starlette) for full control over
+      flushing behaviour.
+    * Does NOT call request.is_disconnected(): that helper blocks on the ASGI
+      receive() callable until an http.disconnect event arrives, which creates
+      a deadlock under httpx ASGITransport (used in tests) because the client
+      cannot close while the generator is blocked.
+    * Cleanup on client disconnect is handled via asyncio.CancelledError:
+      when the httpx reader task closes the response, it cancels the ASGI
+      background task, which propagates CancelledError into this generator.
+      The finally block then unregisters the SSE queue.
+    * asyncio.sleep(0) after the first yield gives the httpx reader one event-
+      loop tick to consume the frame before we block on q.get().
 
-    Each SSE event: event: state\ndata: <NeurolinkState JSON>\n\n
+    Each event: event: state\ndata: <NeurolinkState JSON>\n\n
     """
 
     async def event_generator():
@@ -97,26 +105,29 @@ async def sse_stream(request: Request, service: ServiceDep) -> StreamingResponse
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Emit current state immediately — client always gets ≥1 frame
+            # Always emit the current state immediately so the client
+            # receives at least one frame even if the pump is idle.
             yield _sse_frame(hub.get_state())
 
-            # Checkpoint: let the event loop deliver the first frame before
-            # entering the blocking queue wait.
+            # Yield control so the httpx reader task can consume the
+            # frame above before we block on the queue.
             await asyncio.sleep(0)
-
-            if await request.is_disconnected():
-                return
 
             while True:
                 try:
-                    state = await asyncio.wait_for(q.get(), timeout=1.0)
+                    state = await asyncio.wait_for(q.get(), timeout=2.0)
                     yield _sse_frame(state)
                 except TimeoutError:
+                    # Keepalive: re-emit current state so the connection
+                    # stays alive through proxies that close idle streams.
                     yield _sse_frame(hub.get_state())
 
-                if await request.is_disconnected():
-                    return
+                # One tick after each frame so the reader can drain
+                # before we wait on the next queue item.
+                await asyncio.sleep(0)
+
         except asyncio.CancelledError:
+            # Client disconnected — httpx cancelled the ASGI task.
             pass
         finally:
             hub.unregister_sse_queue(q)
