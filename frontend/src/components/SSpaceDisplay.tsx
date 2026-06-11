@@ -1,65 +1,104 @@
 import React from 'react'
 
 interface Props {
+  /** v2 classifier: single-letter region label (e.g. 'A'–'F') */
   region: string
+  /** v2 alchemical stage name */
   stage: string
+  /** v0.1 S-Space region label */
   regionV01: string
+  /** v0.1 alchemical stage name */
   stageV01: string
 }
 
-const STAGE_COLORS: Record<string, string> = {
-  Nigredo: '#6e7681',
-  Albedo: '#388bfd',
-  Citrinitas: '#d29922',
-  Rubedo: '#f85149',
-  Multiplicatio: '#bc8cff',
-  Coagulatio: '#8b949e',
-  Sublimatio: '#3fb950',
-  Solutio: '#58a6ff',
+// Map stage names to accent colours – unknown stages fall back to neutral.
+const STAGE_COLOURS: Record<string, string> = {
+  Nigredo:   '#6e7681',
+  Albedo:    '#79c0ff',
+  Citrinitas: '#e3b341',
+  Rubedo:    '#ff7b72',
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: { display: 'flex', flexDirection: 'column', gap: 12 },
-  row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  label: { fontSize: 12, color: '#8b949e' },
-  region: { fontSize: 28, fontWeight: 700, color: '#e6edf3' },
-  divider: { height: 1, background: '#21262d', margin: '4px 0' },
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 14,
+  },
+  section: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase' as const,
+    color: '#484f58',
+  },
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+  },
+  regionBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    background: '#21262d',
+    border: '1px solid #30363d',
+    fontSize: 18,
+    fontWeight: 700,
+    color: '#e6edf3',
+    flexShrink: 0,
+  },
+  stageBadge: (colour: string): React.CSSProperties => ({
+    display: 'inline-block',
+    padding: '2px 10px',
+    borderRadius: 20,
+    fontSize: 13,
+    fontWeight: 600,
+    color: colour,
+    background: colour + '22',
+    border: `1px solid ${colour}55`,
+  }),
+  divider: {
+    height: 1,
+    background: '#21262d',
+  },
 }
 
-const badgeStyle = (color: string): React.CSSProperties => ({
-  display: 'inline-block',
-  padding: '3px 10px',
-  borderRadius: 12,
-  background: `${color}22`,
-  color,
-  border: `1px solid ${color}66`,
-  fontSize: 13,
-  fontWeight: 600,
-})
+function Section({
+  label,
+  region,
+  stage,
+}: {
+  label: string
+  region: string
+  stage: string
+}) {
+  const colour = STAGE_COLOURS[stage] ?? '#8b949e'
+  return (
+    <div style={styles.section}>
+      <span style={styles.sectionLabel}>{label}</span>
+      <div style={styles.row}>
+        <span style={styles.regionBadge}>{region}</span>
+        <span style={styles.stageBadge(colour) as React.CSSProperties}>{stage}</span>
+      </div>
+    </div>
+  )
+}
 
 export default function SSpaceDisplay({ region, stage, regionV01, stageV01 }: Props) {
-  const color = STAGE_COLORS[stage] ?? '#58a6ff'
-  const colorV01 = STAGE_COLORS[stageV01] ?? '#58a6ff'
-
   return (
     <div style={styles.container}>
-      <div style={styles.row}>
-        <div>
-          <div style={styles.label}>v2 Alchemical</div>
-          <span style={{ ...styles.region, color }}>{region}</span>
-        </div>
-        <span style={badgeStyle(color)}>{stage}</span>
-      </div>
-
+      <Section label="v2 Alchemical" region={region} stage={stage} />
       <div style={styles.divider} />
-
-      <div style={styles.row}>
-        <div>
-          <div style={styles.label}>v0.1 S-Space</div>
-          <span style={{ fontSize: 20, fontWeight: 600, color: colorV01 }}>{regionV01}</span>
-        </div>
-        <span style={badgeStyle(colorV01)}>{stageV01}</span>
-      </div>
+      <Section label="v0.1 S-Space" region={regionV01} stage={stageV01} />
     </div>
   )
 }

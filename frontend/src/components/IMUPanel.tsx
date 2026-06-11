@@ -13,68 +13,40 @@ const styles: Record<string, React.CSSProperties> = {
   metricValue: { fontSize: 22, fontWeight: 700, color: '#e6edf3' },
   metricUnit: { fontSize: 12, color: '#484f58', marginLeft: 4 },
   divider: { height: 1, background: '#21262d' },
-  motionBar: {
-    height: 8,
-    background: '#21262d',
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
 }
 
 function MetricRow({
   label,
   value,
   unit,
+  decimals = 1,
 }: {
   label: string
   value: number | null
   unit: string
+  decimals?: number
 }) {
   return (
     <div style={styles.metric}>
       <span style={styles.metricLabel}>{label}</span>
       <span>
         <span style={styles.metricValue}>
-          {value !== null ? value.toFixed(1) : '—'}
+          {value !== null ? value.toFixed(decimals) : '\u2014'}
         </span>
-        <span style={styles.metricUnit}>{unit}</span>
+        {value !== null && <span style={styles.metricUnit}>{unit}</span>}
       </span>
     </div>
   )
 }
 
 export default function IMUPanel({ pitchDeg, rollDeg, motionRms }: Props) {
-  const motionPct = motionRms !== null ? Math.min(motionRms * 100, 100) : 0
-  const motionColor = motionPct > 60 ? '#f85149' : motionPct > 30 ? '#d29922' : '#3fb950'
-
   return (
     <div style={styles.container}>
-      <MetricRow label="Pitch" value={pitchDeg} unit="°" />
+      <MetricRow label="Pitch" value={pitchDeg} unit="\u00b0" />
       <div style={styles.divider} />
-      <MetricRow label="Roll" value={rollDeg} unit="°" />
+      <MetricRow label="Roll" value={rollDeg} unit="\u00b0" />
       <div style={styles.divider} />
-      <div>
-        <div style={styles.metric}>
-          <span style={styles.metricLabel}>Motion RMS</span>
-          <span>
-            <span style={{ ...styles.metricValue, fontSize: 16 }}>
-              {motionRms !== null ? motionRms.toFixed(3) : '—'}
-            </span>
-          </span>
-        </div>
-        <div style={styles.motionBar}>
-          <div
-            style={{
-              height: '100%',
-              width: `${motionPct}%`,
-              background: motionColor,
-              borderRadius: 4,
-              transition: 'width 0.25s ease',
-            }}
-          />
-        </div>
-      </div>
+      <MetricRow label="Motion RMS" value={motionRms} unit="g" decimals={3} />
     </div>
   )
 }
