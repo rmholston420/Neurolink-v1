@@ -8,133 +8,117 @@ import pytest
 
 from neurolink.eeg_pump import EEGPump
 from neurolink.hub import EEGHub
-from neurolink.models.eeg import BandPowers, IngestPayload
 
 
 def _hub() -> EEGHub:
     return EEGHub()
 
 
+def _pump(hub=None, adapter=None, hz=4.0) -> EEGPump:
+    return EEGPump(adapter=adapter or AsyncMock(), hub=hub or _hub(), publish_hz=hz)
+
+
 # ---------------------------------------------------------------------------
-# __init__ inspection
+# __init__ field inspection
 # ---------------------------------------------------------------------------
 
 def test_pump_init_fields():
     hub = _hub()
-    pump = EEGPump(hub=hub, adapter=MagicMock(), device_model="mock")
+    adapter = AsyncMock()
+    pump = EEGPump(adapter=adapter, hub=hub, publish_hz=4.0)
     assert pump._hub is hub
+    assert pump._adapter is adapter
+    assert pump._running is False
+    assert pump._publish_hz == 4.0
+
+
+# ---------------------------------------------------------------------------
+# stop() while task is None (not started)
+# ---------------------------------------------------------------------------
+
+async def test_stop_while_not_started_is_noop():
+    pump = _pump()
+    await pump.stop()  # _task is None, must not raise
     assert pump._running is False
 
 
 # ---------------------------------------------------------------------------
-# stop() while not running
+# _tick() with None sample (continue branch)
 # ---------------------------------------------------------------------------
 
-def test_stop_while_not_running_is_noop():
-    pump = EEGPump(hub=_hub(), adapter=MagicMock(), device_model="mock")
-    pump.stop()  # must not raise
-    assert pump._running is False
-
-
-# ---------------------------------------------------------------------------
-# run() — adapter returns None (continue branch)
-# ---------------------------------------------------------------------------
-
-async def test_run_none_sample_continues():
-    """When adapter.read_sample() returns None the pump continues the loop."""
+async def test_tick_none_sample_is_noop():
+    """_tick() returns immediately when adapter.read_sample() returns None."""
     hub = _hub()
     adapter = AsyncMock()
-    call_count = 0
-
-    async def read_sample():
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return None  # triggers continue branch
-        # Second call: stop the pump then raise CancelledError to exit
-        pump.stop()
-        raise asyncio.CancelledError
-
-    adapter.read_sample = read_sample
-    pump = EEGPump(hub=hub, adapter=adapter, device_model="mock")
-
-    with pytest.raises(asyncio.CancelledError):
-        await pump.run()
-
-    assert call_count == 2
+    adapter.read_sample.return_value = None
+    pump = EEGPump(adapter=adapter, hub=hub)
+    await pump._tick()  # must not raise, hub should not be updated
+    assert hub.get_state().frame_count == 0
 
 
 # ---------------------------------------------------------------------------
-# run() — CancelledError exits cleanly
+# _tick() with a real MockAdapter sample
 # ---------------------------------------------------------------------------
 
-async def test_run_cancelled_error_exits():
-    adapter = AsyncMock()
-    adapter.read_sample.side_effect = asyncio.CancelledError
-    pump = EEGPump(hub=_hub(), adapter=adapter, device_model="mock")
-    with pytest.raises(asyncio.CancelledError):
-        await pump.run()
-
-
-# ---------------------------------------------------------------------------
-# run() — one real frame processed via MockAdapter
-# ---------------------------------------------------------------------------
-
-async def test_run_processes_one_frame():
-    """Full pump cycle with MockAdapter: one frame reaches the hub."""
+async def test_tick_real_sample_updates_hub():
+    """_tick() with a real EEGSample updates the hub frame_count."""
     from neurolink.hardware.mock import MockAdapter
 
     hub = _hub()
     adapter = MockAdapter()
     await adapter.connect()
-    pump = EEGPump(hub=hub, adapter=adapter, device_model="mock")
-
-    # Run pump inside a task; cancel after first hub update
-    task = asyncio.create_task(pump.run())
-    # Wait until hub receives at least one frame
-    for _ in range(40):  # max ~10 s
-        await asyncio.sleep(0.05)
-        if hub.get_state().frame_count >= 1:
-            break
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-    assert hub.get_state().frame_count >= 1
+    pump = EEGPump(adapter=adapter, hub=hub)
+    await pump._tick()
+    assert hub.get_state().frame_count == 1
+    await adapter.disconnect()
 
 
 # ---------------------------------------------------------------------------
-# run() — unexpected exception is logged and re-raised
+# start() creates background task; stop() cancels it
 # ---------------------------------------------------------------------------
 
-async def test_run_unexpected_exception_reraises():
-    adapter = AsyncMock()
-    adapter.read_sample.side_effect = RuntimeError("hardware exploded")
-    pump = EEGPump(hub=_hub(), adapter=adapter, device_model="mock")
-    with pytest.raises(RuntimeError, match="hardware exploded"):
-        await pump.run()
+async def test_start_and_stop():
+    from neurolink.hardware.mock import MockAdapter
 
-
-# ---------------------------------------------------------------------------
-# stop() while running
-# ---------------------------------------------------------------------------
-
-async def test_stop_while_running_terminates_loop():
-    adapter = AsyncMock()
-    frames = 0
-
-    async def read_sample():
-        nonlocal frames
-        frames += 1
-        if frames >= 2:
-            pump.stop()
-            raise asyncio.CancelledError
-        return None  # keep looping
-
-    adapter.read_sample = read_sample
-    pump = EEGPump(hub=_hub(), adapter=adapter, device_model="mock")
-    with pytest.raises(asyncio.CancelledError):
-        await pump.run()
+    hub = _hub()
+    adapter = MockAdapter()
+    await adapter.connect()
+    pump = EEGPump(adapter=adapter, hub=hub, publish_hz=20.0)  # fast for test
+    await pump.start()
+    assert pump._running is True
+    assert pump._task is not None
+    await asyncio.sleep(0.1)  # let at least one tick fire
+    await pump.stop()
     assert pump._running is False
+    assert pump._task is None
+
+
+# ---------------------------------------------------------------------------
+# _pump_loop watchdog branch (last_frame_ts set, then time passes)
+# ---------------------------------------------------------------------------
+
+async def test_pump_loop_tick_error_is_logged_not_raised():
+    """Errors inside _tick are caught by _pump_loop and logged, not re-raised."""
+    hub = _hub()
+    adapter = AsyncMock()
+    call_count = 0
+
+    async def flaky_read():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("transient hardware error")
+        # Second call: stop the pump cleanly
+        pump._running = False
+        return None
+
+    adapter.read_sample = flaky_read
+    pump = EEGPump(adapter=adapter, hub=hub, publish_hz=100.0)
+    await pump.start()
+    # Wait for both ticks to complete
+    for _ in range(20):
+        await asyncio.sleep(0.02)
+        if call_count >= 2:
+            break
+    await pump.stop()
+    assert call_count >= 2  # loop continued after the error
