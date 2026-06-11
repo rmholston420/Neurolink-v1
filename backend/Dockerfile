@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
-# Copy project files
-COPY pyproject.toml ./
+# Copy project metadata first (README required by hatchling before pip install)
+COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
 # Install Python deps
