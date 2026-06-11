@@ -22,8 +22,16 @@ describe('BandPowerChart', () => {
   it('renders without crashing when all band values are zero', () => {
     const bands: BandPowers = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
     const { container } = render(<BandPowerChart bands={bands} />)
-    // Should still render the band label rows, not the "No data" fallback
     expect(container.querySelector('[style*="flex"]')).toBeTruthy()
     expect(screen.queryByText('No data')).toBeNull()
+  })
+
+  it('falls back to raw key name for an unrecognised band', () => {
+    // Cast lets us slip an extra key past TypeScript to exercise the
+    // BAND_LABELS[band] ?? band fallback on lines 49-55
+    const bands = { delta: 0.1, theta: 0.1, alpha: 0.1, beta: 0.1, gamma: 0.1, unknown_band: 0.2 } as unknown as BandPowers
+    render(<BandPowerChart bands={bands} />)
+    // The label falls back to the raw key when not found in BAND_LABELS
+    expect(screen.getByText('unknown_band')).toBeTruthy()
   })
 })

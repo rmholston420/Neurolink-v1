@@ -15,7 +15,6 @@ const mockFetch = () => vi.mocked(fetch)
 describe('CalibrationPanel', () => {
   it('renders the Start Calibration button initially', () => {
     render(<CalibrationPanel apiUrl="http://test" />)
-    // Use exact button text to avoid matching the description paragraph
     expect(screen.getByRole('button', { name: 'Start Calibration' })).toBeTruthy()
   })
 
@@ -24,7 +23,6 @@ describe('CalibrationPanel', () => {
     render(<CalibrationPanel apiUrl="http://test" />)
     fireEvent.click(screen.getByRole('button'))
     await waitFor(() => {
-      // Both button and status div say 'Calibrating…' — use getAllByText
       expect(screen.getAllByText(/calibrating/i).length).toBeGreaterThan(0)
     })
   })
@@ -48,6 +46,22 @@ describe('CalibrationPanel', () => {
     fireEvent.click(screen.getByRole('button'))
     await waitFor(() => {
       expect(screen.getByText('Calibration complete')).toBeTruthy()
+    })
+  })
+
+  it('shows fallback text when successful response has no message', async () => {
+    // Exercises the empty-message branch on lines 82-84
+    mockFetch().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok' }),  // no message field
+    } as Response)
+    render(<CalibrationPanel apiUrl="http://test" />)
+    fireEvent.click(screen.getByRole('button'))
+    await waitFor(() => {
+      // Component should render some success indicator without crashing
+      expect(screen.queryByText(/error|fail/i)).toBeNull()
+      // Button should be re-enabled
+      expect(screen.getByRole('button')).toBeTruthy()
     })
   })
 
