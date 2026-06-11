@@ -2,38 +2,44 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.imu import head_orientation
-from neurolink.models.eeg import IMUPayload
 
 
 def test_head_orientation_pitch_roll_bounded():
-    """Pitch and roll should be within +-90 degrees."""
-    accel = np.array([[0.0] * 10, [0.0] * 10, [1.0] * 10])  # 3xN
+    """Pitch and roll should be bounded to +-90 degrees."""
+    # Near-static head: accel points down (z=1g)
+    n = 100
+    accel = np.zeros((3, n))
+    accel[2] = 1.0  # z = 1g
     result = head_orientation(accel)
-    assert isinstance(result, IMUPayload)
     assert -90.0 <= result.pitch_deg <= 90.0
     assert -90.0 <= result.roll_deg <= 90.0
 
 
-def test_head_orientation_upright_head():
-    """With pure vertical accel, pitch and roll should be ~0."""
-    accel = np.array([[0.0] * 20, [0.0] * 20, [1.0] * 20])
+def test_head_orientation_motion_rms_low_when_static():
+    """motion_rms should be near 0 for a static head."""
+    n = 100
+    accel = np.zeros((3, n))
+    accel[2] = 1.0  # perfectly static: 1g on z
     result = head_orientation(accel)
-    assert abs(result.pitch_deg) < 5.0
-    assert abs(result.roll_deg) < 5.0
+    assert result.motion_rms < 0.1
 
 
-def test_head_orientation_motion_rms_computed():
-    """motion_rms should be a non-negative float."""
-    accel = np.random.default_rng(42).normal(0, 0.1, (3, 50)) + np.array([[0], [0], [1.0]])
-    gyro = np.random.default_rng(99).normal(0, 0.05, (3, 50))
-    result = head_orientation(accel, gyro)
-    assert result.motion_rms >= 0.0
-
-
-def test_head_orientation_empty_returns_default():
+def test_head_orientation_empty_returns_zeros():
+    """Empty accel buffer should return default zeros."""
     accel = np.zeros((3, 0))
     result = head_orientation(accel)
-    assert isinstance(result, IMUPayload)
+    assert result.pitch_deg == 0.0
+    assert result.roll_deg == 0.0
+    assert result.motion_rms == 0.0
+
+
+def test_head_orientation_with_gyro():
+    """Should not raise when gyro is provided."""
+    n = 100
+    accel = np.zeros((3, n))
+    accel[2] = 1.0
+    gyro = np.zeros((3, n))
+    result = head_orientation(accel, gyro)
+    assert isinstance(result.motion_rms, float)

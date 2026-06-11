@@ -6,42 +6,53 @@ import pytest
 
 from neurolink.calibration import CalibrationSession
 from neurolink.hub import EEGHub
-from neurolink.models.eeg import BandPowers, IngestPayload
+from neurolink.hardware.mock import MockAdapter
 
 
-async def _pump_hub(hub: EEGHub, n: int = 40) -> None:
-    """Inject synthetic frames into the hub."""
-    for _ in range(n):
-        payload = IngestPayload(
-            source="mock",
-            bands=BandPowers(alpha=0.30, theta=0.18, beta=0.12, delta=0.20, gamma=0.05),
-            timestamp=1000.0,
-        )
-        hub.update(payload)
-
-
-async def test_calibration_not_running_initially():
-    hub = EEGHub()
-    cal = CalibrationSession(hub)
-    assert cal.is_running is False
-
-
-async def test_calibrate_sets_baseline():
-    """After calibration with enough frames, hub.baseline_alpha is set."""
-    hub = EEGHub()
-    await _pump_hub(hub, n=40)
-    cal = CalibrationSession(hub)
-
-    # Shorten calibration for test by patching _CALIBRATION_SEC
+async def test_calibration_sets_baseline_alpha():
+    """Calibration should set hub.baseline_alpha to a positive float."""
     import neurolink.calibration as cal_module
-    original = cal_module._CALIBRATION_SEC
-    cal_module._CALIBRATION_SEC = 1.0  # 1 second for test speed
+    # Override duration for test speed
+    original = cal_module._CALIBRATION_DURATION_SEC
+    cal_module._CALIBRATION_DURATION_SEC = 1.5  # 1.5 seconds for test
+    cal_module._MIN_FRAMES = 2
     try:
-        await cal.start()
-        await asyncio.wait_for(cal.wait_for_completion(), timeout=5.0)
+        hub = EEGHub()
+        adapter = MockAdapter()
+        await adapter.connect()
+        session = CalibrationSession(adapter=adapter, hub=hub)
+        baseline = await session.run()
+        assert baseline is not None
+        assert isinstance(baseline, float)
+        assert baseline > 0.0
+        assert hub.baseline_alpha == baseline
     finally:
-        cal_module._CALIBRATION_SEC = original
+        cal_module._CALIBRATION_DURATION_SEC = original
+        cal_module._MIN_FRAMES = 10
+        await adapter.disconnect()
 
-    assert hub.baseline_alpha is not None
-    assert isinstance(hub.baseline_alpha, float)
-    assert hub.baseline_alpha > 0.0
+
+async def test_calibration_returns_none_for_no_data():
+    """Returns None when adapter gives no EEG buffer."""
+    from unittest.mock import AsyncMock, MagicMock
+    from neurolink.hardware.base import EEGSample
+    import time
+
+    hub = EEGHub()
+    adapter = MagicMock()
+    adapter.read_sample = AsyncMock(
+        return_value=EEGSample(channels=[0.0] * 5, eeg_buffer=None)
+    )
+
+    import neurolink.calibration as cal_module
+    original_dur = cal_module._CALIBRATION_DURATION_SEC
+    original_min = cal_module._MIN_FRAMES
+    cal_module._CALIBRATION_DURATION_SEC = 0.2
+    cal_module._MIN_FRAMES = 100  # impossible to meet
+    try:
+        session = CalibrationSession(adapter=adapter, hub=hub)
+        result = await session.run()
+        assert result is None
+    finally:
+        cal_module._CALIBRATION_DURATION_SEC = original_dur
+        cal_module._MIN_FRAMES = original_min

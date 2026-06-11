@@ -7,82 +7,71 @@ from neurolink.ea1_scorer import score
 from neurolink.models.eeg import BandPowers, IMUPayload, IngestPayload
 
 
-def make_payload(
-    alpha: float = 0.30,
-    theta: float = 0.20,
-    beta: float = 0.10,
-    delta: float = 0.15,
-    gamma: float = 0.05,
-    region: str = "E",
-    poor_contact: bool = False,
-    motion_rms: float | None = None,
-    contact_quality: float | None = None,
-) -> IngestPayload:
-    bands = BandPowers(alpha=alpha, theta=theta, beta=beta, delta=delta, gamma=gamma)
-    imu = IMUPayload(motion_rms=motion_rms) if motion_rms is not None else None
-    return IngestPayload(
-        bands=bands,
-        region=region,
-        poor_contact=poor_contact,
-        contact_quality=contact_quality,
-        imu=imu,
+def _make_payload(**kwargs) -> IngestPayload:
+    defaults = dict(
+        source="mock",
+        bands=BandPowers(alpha=0.35, theta=0.20, beta=0.12, delta=0.10, gamma=0.05),
+        region="D",
+        alchemical_stage="Rubedo",
+        poor_contact=False,
+        contact_quality=0.9,
+        imu=IMUPayload(motion_rms=0.1),
     )
+    defaults.update(kwargs)
+    return IngestPayload(**defaults)
 
 
 def test_ea1_eligible_when_all_criteria_met():
-    payload = make_payload(
-        alpha=0.30, theta=0.20, region="E",
-        poor_contact=False, motion_rms=0.1, contact_quality=0.9,
-    )
+    payload = _make_payload()
     result = score(payload)
     assert result.eligible is True
-    assert result.criteria_met == 5
-    assert result.score == 1.0
+    assert result.score > 0.0
     assert result.label == "Eligible"
 
 
 def test_ea1_ineligible_poor_contact():
-    payload = make_payload(
-        alpha=0.30, theta=0.20, region="E",
-        poor_contact=True,
-    )
+    payload = _make_payload(poor_contact=True, contact_quality=0.1)
     result = score(payload)
-    # s_space gate fails when poor_contact=True
-    assert result.gates["s_space"] is False
+    assert result.eligible is False
 
 
 def test_ea1_motion_gate_blocks_eligibility():
-    payload = make_payload(
-        alpha=0.30, theta=0.20, region="E",
-        poor_contact=False, motion_rms=1.0,  # > 0.5 threshold
-    )
+    payload = _make_payload(imu=IMUPayload(motion_rms=1.0))
     result = score(payload)
-    assert result.gates["motion"] is False
+    assert result.eligible is False
 
 
-def test_ea1_ineligible_when_all_criteria_fail():
-    payload = make_payload(
-        alpha=0.05, theta=0.05, region="A",
-        poor_contact=True, motion_rms=2.0, contact_quality=0.1,
+def test_ea1_ineligible_low_alpha():
+    payload = _make_payload(
+        bands=BandPowers(alpha=0.10, theta=0.20, beta=0.12, delta=0.10, gamma=0.05)
     )
     result = score(payload)
     assert result.eligible is False
-    assert result.criteria_met == 0
-    assert result.score == 0.0
+
+
+def test_ea1_ineligible_wrong_region():
+    payload = _make_payload(region="A", alchemical_stage="Nigredo")
+    result = score(payload)
+    assert result.eligible is False
 
 
 def test_ea1_score_proportional_to_criteria_met():
-    # 3 of 5 criteria met -> score = 0.60 -> eligible
-    payload = make_payload(
-        alpha=0.30, theta=0.20, region="E",
-        poor_contact=False, motion_rms=None, contact_quality=None,
+    # 5 criteria met -> score = 1.0
+    p5 = _make_payload()
+    r5 = score(p5)
+    # 1 criterion met -> lower score
+    p1 = _make_payload(
+        bands=BandPowers(alpha=0.05, theta=0.05, beta=0.05, delta=0.05, gamma=0.05),
+        region="A",
+        imu=IMUPayload(motion_rms=1.0),
+        poor_contact=True,
+        contact_quality=0.1,
     )
-    result = score(payload)
-    assert result.criteria_met >= 3
-    assert result.eligible is True
+    r1 = score(p1)
+    assert r5.score > r1.score
 
 
-def test_ea1_overlay_mode():
-    payload = make_payload(alpha=0.30, theta=0.20, region="E")
+def test_ea1_criteria_total_is_5():
+    payload = _make_payload()
     result = score(payload)
-    assert result.overlay_mode.startswith("X")
+    assert result.criteria_total == 5

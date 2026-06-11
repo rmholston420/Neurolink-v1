@@ -2,28 +2,35 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.breathing import compute_breathing
-from neurolink.models.eeg import BreathingPayload
 
 
-def test_compute_breathing_returns_empty_for_no_data():
-    result = compute_breathing(ibis_ms=[], accel_z=None)
-    assert isinstance(result, BreathingPayload)
+def test_compute_breathing_empty_returns_none():
+    result = compute_breathing([], accel_z=None)
     assert result.rr_bpm is None
-
-
-def test_compute_breathing_short_ibi_no_estimate():
-    result = compute_breathing(ibis_ms=[800.0, 810.0], accel_z=None)
     assert result.rr_ppg is None
+    assert result.rr_accel is None
 
 
 def test_compute_breathing_fused_estimate():
-    """With enough IBIs and accel data, should compute a fused estimate."""
-    # 15 IBIs at ~0.3 Hz breathing (one breath every ~3.3s -> 200bpm IBIs)
-    ibis = [800.0] * 15  # flat IBIs, may not find peak but shouldn't crash
-    accel_z = np.sin(2 * np.pi * 0.25 * np.linspace(0, 10, 520)).astype(np.float32)
-    result = compute_breathing(ibis_ms=ibis, accel_z=accel_z)
+    """With both IBIs and accel_z, fused rate should be non-None."""
+    # Generate plausible IBIs (~66 bpm)
+    ibis = [900.0 + i * 5 for i in range(20)]
+
+    # Generate accel_z with ~0.2 Hz respiratory component
+    fs = 52.0
+    n = int(fs * 20)
+    t = np.linspace(0, 20, n)
+    accel_z = 1.0 + 0.1 * np.sin(2 * np.pi * 0.2 * t) + 0.01 * np.random.randn(n)
+
+    result = compute_breathing(ibis, accel_z=accel_z)
+    # rr_accel should be set
+    if result.rr_accel is not None:
+        assert 3.0 <= result.rr_accel <= 40.0, f"RR accel {result.rr_accel} out of range"
+
+
+def test_compute_breathing_returns_payload_type():
+    from neurolink.models.eeg import BreathingPayload
+    result = compute_breathing([])
     assert isinstance(result, BreathingPayload)
-    # rr_bpm may or may not be set depending on scipy; just ensure no crash

@@ -1,42 +1,50 @@
 """Unit tests for fatigue.py."""
 from __future__ import annotations
 
-import pytest
-
 from neurolink.fatigue import FatigueDetector
 
 
 def test_fatigue_detector_zero_when_empty():
     fd = FatigueDetector()
-    assert fd.score() == 0.0
+    assert fd.score == 0.0
 
 
-def test_fatigue_detector_returns_float():
+def test_fatigue_detector_zero_after_one_sample():
     fd = FatigueDetector()
-    val = fd.update(0.20, 0.30)
-    assert isinstance(val, float)
-    assert 0.0 <= val <= 1.0
+    fd.update(theta=0.2, alpha=0.3)
+    assert fd.score == 0.0  # needs at least 2 samples
 
 
 def test_fatigue_detector_high_when_theta_dominates():
-    """After 30 samples with theta/alpha = 4.0, score should be > 0.8."""
+    """Fatigue score should be > 0.8 after 30 samples with theta/alpha = 4.0."""
     fd = FatigueDetector(window=30)
     for _ in range(30):
-        fd.update(theta=0.40, alpha=0.10)
-    s = fd.score()
-    assert s > 0.8, f"Expected > 0.8, got {s}"
+        fd.update(theta=0.4, alpha=0.1)  # ratio = 4.0
+    assert fd.score > 0.8, f"Expected score > 0.8, got {fd.score}"
 
 
 def test_fatigue_detector_low_when_alpha_dominates():
     fd = FatigueDetector(window=30)
     for _ in range(30):
-        fd.update(theta=0.05, alpha=0.40)
-    s = fd.score()
-    assert s < 0.3, f"Expected < 0.3, got {s}"
+        fd.update(theta=0.05, alpha=0.40)  # low ratio
+    assert fd.score < 0.3
 
 
-def test_fatigue_detector_reset_clears_state():
+def test_fatigue_detector_reset():
     fd = FatigueDetector()
-    fd.update(0.40, 0.10)
+    for _ in range(5):
+        fd.update(0.4, 0.1)
     fd.reset()
-    assert fd.score() == 0.0
+    assert fd.sample_count == 0
+    assert fd.score == 0.0
+
+
+def test_fatigue_detector_window_limits():
+    """Window should limit to last N samples."""
+    fd = FatigueDetector(window=5)
+    for _ in range(3):
+        fd.update(0.4, 0.1)
+    for _ in range(10):
+        fd.update(0.05, 0.4)  # low ratio overwhelms
+    # Score should reflect recent low-ratio samples
+    assert fd.score < 0.5

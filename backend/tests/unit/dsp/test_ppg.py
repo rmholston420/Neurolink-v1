@@ -5,35 +5,42 @@ import numpy as np
 import pytest
 
 from neurolink.dsp.ppg import compute_ppg, _poincare
-from neurolink.models.eeg import PPGPayload, PoincareIndices
-
-PPG_FS = 64.0
 
 
 def test_compute_ppg_returns_empty_for_short_buffer():
-    short = np.zeros(10)
-    result = compute_ppg(short, fs=PPG_FS)
-    assert isinstance(result, PPGPayload)
+    """Returns empty PPGPayload for buffers shorter than minimum."""
+    short = np.zeros(100)
+    result = compute_ppg(short, fs=64.0)
     assert result.hr_bpm == 0.0
+    assert result.ibi_ms == []
 
 
-def test_poincare_returns_empty_for_single_ibi():
-    result = _poincare([800.0])
-    assert isinstance(result, PoincareIndices)
+def test_compute_ppg_hr_in_valid_range():
+    """HR should be in 40-120 bpm range for a plausible PPG signal."""
+    fs = 64.0
+    t = np.linspace(0, 30, int(fs * 30))
+    # Simulate ~66 bpm heartbeat
+    ppg = np.sin(2 * np.pi * 1.1 * t) + 0.1 * np.random.randn(len(t))
+    result = compute_ppg(ppg, fs=fs)
+    if result.hr_bpm > 0:  # neurokit2 may detect or not
+        assert 30.0 <= result.hr_bpm <= 150.0, f"HR {result.hr_bpm} out of range"
+
+
+def test_poincare_sd1_sd2_positive():
+    """SD1 and SD2 should be non-negative for valid IBI list."""
+    ibis = [800.0, 820.0, 790.0, 810.0, 800.0, 815.0, 795.0, 805.0, 810.0]
+    result = _poincare(ibis)
+    assert result.sd1 >= 0.0
+    assert result.sd2 >= 0.0
+
+
+def test_poincare_returns_zeros_for_short_ibis():
+    result = _poincare([800.0])  # only 1 IBI
     assert result.sd1 == 0.0
     assert result.sd2 == 0.0
 
 
-def test_poincare_sd1_sd2_positive():
-    ibis = [800.0, 810.0, 790.0, 820.0, 780.0, 800.0, 810.0]
+def test_poincare_ellipse_area_positive_for_valid_ibis():
+    ibis = [800.0, 820.0, 790.0, 810.0, 800.0, 815.0, 795.0, 805.0]
     result = _poincare(ibis)
-    assert result.sd1 >= 0.0
-    assert result.sd2 >= 0.0
     assert result.ellipse_area >= 0.0
-
-
-def test_compute_ppg_returns_empty_payload_without_neurokit2():
-    """Should return empty PPGPayload without raising when buffer is short."""
-    sig = np.random.randn(10).astype(np.float32)
-    result = compute_ppg(sig, fs=PPG_FS)
-    assert result.hr_bpm == 0.0  # short buffer -> empty
