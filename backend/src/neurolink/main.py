@@ -1,72 +1,88 @@
-"""Neurolink FastAPI application factory and lifespan."""
+"""Neurolink FastAPI application factory and lifespan.
+
+Entry point: uvicorn neurolink.main:app
+"""
 from __future__ import annotations
 
-import structlog
-from contextlib import asynccontextmanager
+import contextlib
+import os
 from typing import AsyncGenerator
 
+import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from neurolink.config import get_settings
-from neurolink.db.engine import create_tables, dispose_engine
 from neurolink.exceptions import (
+    AdapterAlreadyConnectedError,
     AdapterNotConnectedError,
-    BLETimeoutError,
-    CalibrationBusyError,
     NeurolinkError,
-    NoEEGDataError,
-    UnknownDeviceError,
 )
-from neurolink.models.eeg import HealthResponse
-from neurolink.routers import calibration, eeg_gate, neurolink as neurolink_router
+from neurolink.logging_config import configure_logging
 
 log = structlog.get_logger(__name__)
 
 
-def _configure_logging(json_logs: bool) -> None:
-    import logging
-    import sys
-
-    processors = [
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-    ]
-    if json_logs:
-        processors.append(structlog.processors.JSONRenderer())
-    else:
-        processors.append(structlog.dev.ConsoleRenderer())
-
-    structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(logging.DEBUG),
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-    )
-
-
-@asynccontextmanager
+@contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Startup and shutdown lifecycle."""
+    """Application lifespan: startup and shutdown logic."""
     settings = get_settings()
-    _configure_logging(settings.log_json)
-    log.info("neurolink_starting", adapter_type=settings.adapter_type)
+    configure_logging(log_json=settings.log_json, log_level=settings.log_level)
+    log.info("neurolink_starting",
+             adapter_type=settings.adapter_type,
+             device_model=settings.device_model)
+
+    # Create data directory for SQLite
+    if settings.db_path != ":memory:":
+        os.makedirs(os.path.dirname(os.path.abspath(settings.db_path)), exist_ok=True)
+
+    # Initialize database
+    from neurolink.db.engine import create_tables, get_session_factory, dispose_engine
     await create_tables()
+    log.info("neurolink_db_initialized", db_path=settings.db_path)
+
+    # Inject DB session factory into service
+    from neurolink.dependencies import get_neurolink_service
+    service = get_neurolink_service()
+    service.set_db_session_factory(get_session_factory())
+
+    # Optional: auto-connect if adapter_type is set to non-mock
+    # (only auto-connect mock; BLE/LSL require explicit POST /connect)
+    if settings.adapter_type == "mock":
+        try:
+            await service.connect(
+                adapter_type="mock",
+                device_model="mock",
+            )
+            log.info("neurolink_mock_auto_connected")
+        except Exception as exc:
+            log.warning("neurolink_mock_auto_connect_failed", error=str(exc))
+
     yield
+
+    # Shutdown
+    log.info("neurolink_shutting_down")
+    try:
+        await service.disconnect()
+    except Exception:
+        pass
     await dispose_engine()
-    log.info("neurolink_shutdown")
+    log.info("neurolink_stopped")
 
 
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
+    """Create and configure the FastAPI application.
+
+    Returns:
+        Configured FastAPI app instance.
+    """
     settings = get_settings()
 
     app = FastAPI(
         title="Neurolink",
+        description="EEG-based meditation and contemplative practice API",
         version="1.0.0",
-        description="EEG-based meditation and contemplative practice app",
         lifespan=lifespan,
     )
 
@@ -81,104 +97,37 @@ def create_app() -> FastAPI:
 
     # Exception handlers
     @app.exception_handler(AdapterNotConnectedError)
-    async def not_connected_handler(
+    async def adapter_not_connected_handler(
         request: Request, exc: AdapterNotConnectedError
     ) -> JSONResponse:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": str(exc), "code": "NOT_CONNECTED"},
-        )
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    @app.exception_handler(CalibrationBusyError)
-    async def calibration_busy_handler(
-        request: Request, exc: CalibrationBusyError
+    @app.exception_handler(AdapterAlreadyConnectedError)
+    async def adapter_already_connected_handler(
+        request: Request, exc: AdapterAlreadyConnectedError
     ) -> JSONResponse:
-        return JSONResponse(
-            status_code=409,
-            content={"detail": str(exc), "code": "CALIBRATION_BUSY"},
-        )
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    @app.exception_handler(BLETimeoutError)
-    async def ble_timeout_handler(
-        request: Request, exc: BLETimeoutError
+    @app.exception_handler(NeurolinkError)
+    async def neurolink_error_handler(
+        request: Request, exc: NeurolinkError
     ) -> JSONResponse:
-        return JSONResponse(
-            status_code=504,
-            content={"detail": str(exc), "code": "BLE_TIMEOUT"},
-        )
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    @app.exception_handler(UnknownDeviceError)
-    async def unknown_device_handler(
-        request: Request, exc: UnknownDeviceError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": str(exc), "code": "UNKNOWN_DEVICE"},
-        )
+    # Include routers
+    from neurolink.routers.neurolink import router as neurolink_router
+    from neurolink.routers.calibration import router as calibration_router
+    from neurolink.routers.eeg_gate import router as eeg_gate_router
+    from neurolink.routers.health import router as health_router
 
-    @app.exception_handler(NoEEGDataError)
-    async def no_data_handler(
-        request: Request, exc: NoEEGDataError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=202,
-            content={"detail": str(exc), "code": "NO_DATA"},
-        )
+    app.include_router(health_router)
+    app.include_router(neurolink_router, prefix="/api/v1")
+    app.include_router(calibration_router, prefix="/api/v1")
+    app.include_router(eeg_gate_router, prefix="/api/v1")
 
-    # Routers
-    app.include_router(neurolink_router.router)
-    app.include_router(calibration.router)
-    app.include_router(eeg_gate.router)
-
-    # Health endpoint
-    @app.get("/health", response_model=HealthResponse)
-    async def health() -> HealthResponse:
-        """Report adapter status, hub frame count, Redis and DB reachability."""
-        from neurolink.hub import get_hub
-        from neurolink.dependencies import get_neurolink_service
-
-        hub = get_hub()
-        state = hub.get_state()
-
-        # Redis check
-        redis_status = "disabled"
-        try:
-            import redis.asyncio as aioredis
-            r = aioredis.from_url(settings.redis_url, socket_connect_timeout=1)
-            await r.ping()
-            await r.aclose()
-            redis_status = "connected"
-        except Exception:
-            redis_status = "error"
-
-        # DB check
-        db_status = "error"
-        try:
-            from neurolink.db.engine import get_engine
-            engine = get_engine()
-            async with engine.connect() as conn:
-                from sqlalchemy import text
-                await conn.execute(text("SELECT 1"))
-            db_status = "connected"
-        except Exception:
-            db_status = "error"
-
-        # Adapter status
-        _service = get_neurolink_service(hub=hub)
-        adapter_connected = _service.adapter_connected
-        adapter_type_str = _service.adapter_type
-
-        return HealthResponse(
-            status="ok" if db_status == "connected" else "degraded",
-            adapter_type=adapter_type_str,
-            adapter_connected=adapter_connected,
-            hub_frame_count=state.frame_count,
-            redis=redis_status,
-            db=db_status,
-        )
-
+    log.info("neurolink_app_created")
     return app
 
 
-# Default app instance
+# Module-level app instance for uvicorn
 app = create_app()
