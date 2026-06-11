@@ -20,7 +20,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0,<3",
   "bleak>=0.22,<0.23",
   "pylsl>=1.16",
-  "numpy>=1.26,<2",
+  "numpy>=1.26",
   "neurokit2>=0.2",
   "scipy>=1.13",
   "structlog>=24.0",
@@ -69,7 +69,7 @@ exclude_lines = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RUF"]
@@ -87,7 +87,7 @@ ignore = [
 known-first-party = ["neurolink"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = false
 ignore_missing_imports = true
 warn_unused_ignores = true
