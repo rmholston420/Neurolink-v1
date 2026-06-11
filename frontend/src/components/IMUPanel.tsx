@@ -11,29 +11,39 @@ const styles: Record<string, React.CSSProperties> = {
   metric: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' },
   metricLabel: { fontSize: 13, color: '#8b949e' },
   metricValue: { fontSize: 22, fontWeight: 700, color: '#e6edf3' },
-  metricUnit: { fontSize: 12, color: '#484f58', marginLeft: 4 },
+  metricUnit: { fontSize: 12, color: '#484f58', marginLeft: 2 },
   divider: { height: 1, background: '#21262d' },
 }
 
 /**
- * Degree rows (Pitch, Roll): value and ° are combined into a single text
- * node so that getAllByText('°') can locate the symbol directly.
+ * Degree rows (Pitch, Roll).
+ *
+ * The tests require:
+ *   getByText('10.0')   → needs value in its own text node
+ *   getAllByText('°')   → needs symbol in its own text node
+ *
+ * So value and symbol live in two sibling <span> elements inside one
+ * wrapper <span>. When value is null we render a single '—' with no
+ * unit span (satisfies the em-dash test).
  */
 function DegreeRow({ label, value }: { label: string; value: number | null }) {
   return (
     <div style={styles.metric}>
       <span style={styles.metricLabel}>{label}</span>
-      <span style={styles.metricValue}>
-        {value !== null ? `${value.toFixed(1)}\u00b0` : '\u2014'}
+      <span>
+        {value !== null ? (
+          <>
+            <span style={styles.metricValue}>{value.toFixed(1)}</span>
+            <span style={styles.metricUnit}>{'°'}</span>
+          </>
+        ) : (
+          <span style={styles.metricValue}>{'\u2014'}</span>
+        )}
       </span>
     </div>
   )
 }
 
-/**
- * Generic metric row — value and unit in separate spans.
- * Used for Motion RMS where the unit is not degree-symbol.
- */
 function MetricRow({
   label,
   value,
