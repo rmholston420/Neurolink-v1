@@ -1,22 +1,25 @@
-"""Calibration router."""
+"""Calibration endpoint.
+
+POST /api/v1/neurolink/calibrate — start 30-second baseline alpha capture.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import structlog
+from fastapi import APIRouter
 
-from neurolink.dependencies import get_neurolink_service
-from neurolink.exceptions import CalibrationBusyError
+from neurolink.dependencies import ServiceDep
 from neurolink.models.eeg import CalibrateResponse
-from neurolink.service import NeuroLinkService
 
-router = APIRouter(prefix="/api/v1/neurolink", tags=["calibration"])
+log = structlog.get_logger(__name__)
+
+router = APIRouter(prefix="/neurolink", tags=["calibration"])
 
 
 @router.post("/calibrate", response_model=CalibrateResponse)
-async def calibrate(
-    service: NeuroLinkService = Depends(get_neurolink_service),
-) -> CalibrateResponse:
-    """Start a 30-second alpha baseline calibration session."""
-    try:
-        return await service.start_calibration()
-    except CalibrationBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+async def start_calibration(service: ServiceDep) -> CalibrateResponse:
+    """Start a 30-second personal alpha baseline calibration session.
+
+    Returns immediately with {"status": "started"}.
+    Calibration runs in the background; hub.baseline_alpha is updated on completion.
+    """
+    return await service.start_calibration()
