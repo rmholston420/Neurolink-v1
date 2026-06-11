@@ -63,6 +63,9 @@ omit = [
   "*/neurolink/routers/*",
   "*/neurolink/ble_bridge.py",
   "*/neurolink/hardware/muse_ble*",
+  # LSL/BLE adapters require muselsl / OpenMuse running externally
+  "*/neurolink/hardware/muse_s/lsl_adapter.py",
+  "*/neurolink/hardware/muse_athena/ble_adapter.py",
   "*/neurolink/cache/*",
   "*/neurolink/db/*",
   "*/neurolink/logging_config.py",
