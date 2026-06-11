@@ -9,6 +9,7 @@ import ContactQuality from './components/ContactQuality'
 import BreathingPanel from './components/BreathingPanel'
 import IMUPanel from './components/IMUPanel'
 import CalibrationPanel from './components/CalibrationPanel'
+import ConnectionPanel from './components/ConnectionPanel'
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000'
 
@@ -42,6 +43,13 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #30363d',
     borderRadius: 12,
     padding: 20,
+  },
+  cardWide: {
+    background: '#161b22',
+    border: '1px solid #30363d',
+    borderRadius: 12,
+    padding: 20,
+    gridColumn: '1 / -1',
   },
   cardTitle: {
     fontSize: 13,
@@ -94,6 +102,12 @@ export default function App() {
       </header>
 
       <div style={styles.grid}>
+        {/* Connection control — spans full width */}
+        <div style={styles.cardWide}>
+          <div style={styles.cardTitle}>Device Connection</div>
+          <ConnectionPanel apiUrl={API_URL} connected={connected} />
+        </div>
+
         <div style={styles.card}>
           <div style={styles.cardTitle}>Band Powers</div>
           <BandPowerChart bands={state?.bands ?? null} />
