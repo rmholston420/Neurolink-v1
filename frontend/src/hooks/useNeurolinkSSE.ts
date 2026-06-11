@@ -8,6 +8,12 @@ export interface BandPowers {
   gamma: number
 }
 
+export interface SSpace {
+  x: number
+  y: number
+  region: string
+}
+
 export interface EA1Result {
   eligible: boolean
   score: number
@@ -27,6 +33,7 @@ export interface NeurolinkState {
   integration_coverage: number
   engagement_index: number
   bands: BandPowers
+  s_space: SSpace | null
   ea1: EA1Result
   frame_count: number
   poor_contact: boolean
@@ -36,43 +43,61 @@ export interface NeurolinkState {
   rr_bpm: number | null
   pitch_deg: number | null
   roll_deg: number | null
+  motion_rms: number | null
   focus_state: string
   focus_score: number
   fatigue_score: number
+  faa: number | null
+  fmt: number | null
   fnirs_oxy: number | null
   fnirs_deoxy: number | null
+  last_ts: number | null
 }
 
 /**
  * SSE consumer hook for Neurolink stream.
- * Reconnects automatically after disconnection.
+ *
+ * The backend emits named SSE events:  event: state\ndata: <json>\n\n
+ * EventSource.onmessage only fires for un-named events (event: message).
+ * We must use addEventListener('state', handler) to receive named events.
+ *
+ * Auto-reconnects after disconnection with 3-second back-off.
  */
 export function useNeurolinkSSE(url: string): NeurolinkState | null {
   const [state, setState] = useState<NeurolinkState | null>(null)
   const esRef = useRef<EventSource | null>(null)
+  const cancelledRef = useRef(false)
 
   useEffect(() => {
-    let cancelled = false
+    cancelledRef.current = false
 
     function connect() {
-      if (cancelled) return
+      if (cancelledRef.current) return
+
       const es = new EventSource(url)
       esRef.current = es
 
-      es.onmessage = (event) => {
+      // Handle named 'state' events from the backend SSE stream
+      const stateHandler = (event: MessageEvent) => {
         try {
           const data: NeurolinkState = JSON.parse(event.data)
           setState(data)
         } catch {
-          // Ignore parse errors
+          // Ignore malformed JSON frames
         }
       }
 
+      // Also handle generic message events as a fallback
+      // (some SSE proxies strip the event: field)
+      es.addEventListener('state', stateHandler)
+      es.onmessage = stateHandler
+
       es.onerror = () => {
+        es.removeEventListener('state', stateHandler)
         es.close()
         esRef.current = null
-        if (!cancelled) {
-          // Reconnect after 3 seconds
+        if (!cancelledRef.current) {
+          // Exponential-ish back-off capped at 3 s
           setTimeout(connect, 3000)
         }
       }
@@ -81,8 +106,12 @@ export function useNeurolinkSSE(url: string): NeurolinkState | null {
     connect()
 
     return () => {
-      cancelled = true
-      esRef.current?.close()
+      cancelledRef.current = true
+      const es = esRef.current
+      if (es) {
+        es.close()
+        esRef.current = null
+      }
     }
   }, [url])
 
