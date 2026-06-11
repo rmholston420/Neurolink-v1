@@ -6,8 +6,15 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Any, MutableMapping, Union
 
 import structlog
+
+# Type alias that satisfies structlog's Processor signature for mypy
+_Renderer = Union[
+    structlog.processors.JSONRenderer,
+    structlog.dev.ConsoleRenderer,
+]
 
 
 def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:
@@ -17,7 +24,7 @@ def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:
         log_json: If True, emit JSON-formatted log lines.
         log_level: Python logging level name.
     """
-    shared_processors = [
+    shared_processors: list[Any] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
@@ -25,6 +32,7 @@ def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:
         structlog.processors.StackInfoRenderer(),
     ]
 
+    renderer: _Renderer
     if log_json:
         renderer = structlog.processors.JSONRenderer()
     else:
@@ -45,7 +53,7 @@ def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:
 
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=renderer,
-        foreign_pre_chain=shared_processors,
+        foreign_pre_chain=shared_processors,  # type: ignore[arg-type]
     )
 
     handler = logging.StreamHandler(sys.stdout)

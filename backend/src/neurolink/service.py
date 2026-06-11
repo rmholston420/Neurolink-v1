@@ -5,14 +5,14 @@ All router handlers delegate here. Never instantiate adapters or hub in routers.
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import structlog
 
 from neurolink.calibration import CalibrationSession
 from neurolink.eeg_pump import EEGPump
 from neurolink.exceptions import AdapterAlreadyConnectedError, AdapterNotConnectedError
+from neurolink.hardware.base import HardwareAdapter
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import (
     BandPowerResponse,
@@ -32,7 +32,7 @@ class NeuroLinkService:
 
     def __init__(self, hub: EEGHub) -> None:
         self._hub = hub
-        self._adapter = None
+        self._adapter: HardwareAdapter | None = None
         self._pump: EEGPump | None = None
         self._calibration_task: asyncio.Task | None = None
         self._db_session_id: int | None = None
@@ -68,16 +68,15 @@ class NeuroLinkService:
         )
 
         await self._adapter.connect()
-        log.info("neurolink_adapter_connected",
-                 adapter_type=adapter_type, device_model=device_model)
-
-        # Start EEG pump
-        self._pump = EEGPump(
-            self._adapter, self._hub, publish_hz=settings.publish_hz
+        log.info(
+            "neurolink_adapter_connected",
+            adapter_type=adapter_type,
+            device_model=device_model,
         )
+
+        self._pump = EEGPump(self._adapter, self._hub, publish_hz=settings.publish_hz)
         await self._pump.start()
 
-        # Log session to DB
         await self._create_db_session(adapter_type, device_model, address)
 
         return ConnectResponse(
@@ -100,7 +99,6 @@ class NeuroLinkService:
             finally:
                 self._adapter = None
 
-        # Close DB session
         await self._close_db_session()
         self._hub.reset()
 
@@ -154,8 +152,7 @@ class NeuroLinkService:
             while True:
                 state = await asyncio.wait_for(q.get(), timeout=2.0)
                 yield state
-        except asyncio.TimeoutError:
-            # Yield current state to keep connection alive
+        except TimeoutError:
             yield self._hub.get_state()
         except asyncio.CancelledError:
             pass
@@ -167,6 +164,7 @@ class NeuroLinkService:
         if self._db_session_factory is None:
             return []
         from neurolink.db.repository import SessionLogRepository
+
         async with self._db_session_factory() as db:
             repo = SessionLogRepository(db)
             sessions = await repo.list_recent(limit=limit)
@@ -199,6 +197,7 @@ class NeuroLinkService:
             return
         try:
             from neurolink.db.repository import SessionLogRepository
+
             async with self._db_session_factory() as db:
                 repo = SessionLogRepository(db)
                 entry = await repo.create_session(
@@ -217,6 +216,7 @@ class NeuroLinkService:
         try:
             state = self._hub.get_state()
             from neurolink.db.repository import SessionLogRepository
+
             async with self._db_session_factory() as db:
                 repo = SessionLogRepository(db)
                 await repo.end_session(

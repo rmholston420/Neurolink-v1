@@ -9,47 +9,42 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import Deque
+from typing import TYPE_CHECKING
 
 import structlog
 
 from neurolink.hardware.base import EEGSample, HardwareAdapter
 
+if TYPE_CHECKING:
+    from bleak import BleakClient
+
 log = structlog.get_logger(__name__)
 
-# ── FIXED BLE PROTOCOL CONSTANTS ───────────────────────────────────────────────
-# DO NOT MODIFY. These encode hard-won Muse S Gen 2 firmware behavior.
-# Source: Rigpa-v2 ble_bridge.py, verified against Muse SDK docs.
-
-# GATT Service UUIDs
+# ── FIXED BLE PROTOCOL CONSTANTS ──────────────────────────────────────────────
 MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
 
-# GATT Characteristic UUIDs
-CHAR_EEG_TP9 = "273e0003-4c4d-454d-96be-a864010b7d2c"  # EEG TP9
-CHAR_EEG_AF7 = "273e0004-4c4d-454d-96be-a864010b7d2c"  # EEG AF7
-CHAR_EEG_AF8 = "273e0005-4c4d-454d-96be-a864010b7d2c"  # EEG AF8
-CHAR_EEG_TP10 = "273e0006-4c4d-454d-96be-a864010b7d2c"  # EEG TP10
-CHAR_EEG_RIGHTAUX = "273e0007-4c4d-454d-96be-a864010b7d2c"  # EEG AUX
-CHAR_CONTROL = "273e0001-4c4d-454d-96be-a864010b7d2c"  # Control channel
-CHAR_TELEMETRY = "273e000b-4c4d-454d-96be-a864010b7d2c"  # Battery etc.
-CHAR_ACCEL = "273e000a-4c4d-454d-96be-a864010b7d2c"  # Accelerometer
-CHAR_GYRO = "273e0009-4c4d-454d-96be-a864010b7d2c"  # Gyroscope
-CHAR_PPG_AMBIENT = "273e000f-4c4d-454d-96be-a864010b7d2c"  # PPG ambient
-CHAR_PPG_IR = "273e0010-4c4d-454d-96be-a864010b7d2c"  # PPG IR
-CHAR_PPG_RED = "273e0011-4c4d-454d-96be-a864010b7d2c"  # PPG red
+CHAR_EEG_TP9 = "273e0003-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_AF7 = "273e0004-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_AF8 = "273e0005-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_TP10 = "273e0006-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_RIGHTAUX = "273e0007-4c4d-454d-96be-a864010b7d2c"
+CHAR_CONTROL = "273e0001-4c4d-454d-96be-a864010b7d2c"
+CHAR_TELEMETRY = "273e000b-4c4d-454d-96be-a864010b7d2c"
+CHAR_ACCEL = "273e000a-4c4d-454d-96be-a864010b7d2c"
+CHAR_GYRO = "273e0009-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_AMBIENT = "273e000f-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_IR = "273e0010-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_RED = "273e0011-4c4d-454d-96be-a864010b7d2c"
 
-# Control commands (FIXED — DO NOT MODIFY)
-CMD_PRESET_20 = b"\x02\x31\x30\x0a"   # Preset 20 (EEG+PPG+accel)
-CMD_DATA = b"\x02\x64\x0a"            # Start streaming
-CMD_STOP = b"\x02\x68\x0a"            # Stop streaming
-CMD_KEEPALIVE = b"\x02\x6b\x0a"       # Keepalive
+CMD_PRESET_20 = b"\x02\x31\x30\x0a"
+CMD_DATA = b"\x02\x64\x0a"
+CMD_STOP = b"\x02\x68\x0a"
+CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
-# Timing constants (FIXED)
-CMD_DATA_DELAY_SEC: float = 0.250     # gap between double CMD_DATA send
-KEEPALIVE_SEC: float = 30.0           # keepalive interval
-RECONNECT_WAIT_SEC: float = 20.0      # wait after link drop before reconnecting
+CMD_DATA_DELAY_SEC: float = 0.250
+KEEPALIVE_SEC: float = 30.0
+RECONNECT_WAIT_SEC: float = 20.0
 
-# EEG channel characteristic list (order: TP9, AF7, AF8, TP10, AUX)
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
 
 _RING_SECS: float = 4.0
@@ -65,10 +60,9 @@ class MuseSBleAdapter(HardwareAdapter):
 
     def __init__(self, address: str) -> None:
         self._address = address
-        self._client = None
+        self._client: BleakClient | None = None
         self._connected: bool = False
-        self._sample_queue: Deque[EEGSample] = deque(maxlen=16)
-        # Ring buffers per channel
+        self._sample_queue: deque[EEGSample] = deque(maxlen=16)
         self._eeg_rings: list[deque] = [deque(maxlen=_N_EEG) for _ in range(5)]
         self._ppg_ring: deque = deque(maxlen=1920)
         self._accel_ring: list[deque] = [deque(maxlen=208) for _ in range(3)]
@@ -78,15 +72,14 @@ class MuseSBleAdapter(HardwareAdapter):
 
     async def connect(self) -> None:
         """Connect to the Muse S BLE device and start EEG streaming."""
-        from bleak import BleakClient  # lazy import
-        from neurolink.dsp.decoders import decode_eeg, decode_ppg, decode_imu
+        from bleak import BleakClient  # noqa: PLC0415
+        from neurolink.dsp.decoders import decode_eeg
 
         self._client = BleakClient(self._address, timeout=15.0)
         await self._client.connect()
         self._connected = True
         log.info("muse_ble_connected", address=self._address)
 
-        # Subscribe to EEG channels
         for i, char_uuid in enumerate(_EEG_CHARS):
             ch_idx = i
 
@@ -98,19 +91,18 @@ class MuseSBleAdapter(HardwareAdapter):
 
             await self._client.start_notify(char_uuid, make_eeg_handler(ch_idx))
 
-        # Subscribe to PPG IR
         def ppg_handler(_sender, data: bytes) -> None:
             from neurolink.dsp.decoders import decode_ppg
+
             samples = decode_ppg(data)
             self._ppg_ring.extend(samples)
 
         await self._client.start_notify(CHAR_PPG_IR, ppg_handler)
 
-        # Subscribe to Accel / Gyro
         def accel_handler(_sender, data: bytes) -> None:
             from neurolink.dsp.decoders import decode_imu
+
             accel_flat, _ = decode_imu(data)
-            # flat list: [x0,y0,z0, x1,y1,z1, x2,y2,z2]
             for j in range(0, len(accel_flat), 3):
                 if j + 2 < len(accel_flat):
                     self._accel_ring[0].append(accel_flat[j])
@@ -119,6 +111,7 @@ class MuseSBleAdapter(HardwareAdapter):
 
         def gyro_handler(_sender, data: bytes) -> None:
             from neurolink.dsp.decoders import decode_imu
+
             _, gyro_flat = decode_imu(data)
             for j in range(0, len(gyro_flat), 3):
                 if j + 2 < len(gyro_flat):
@@ -129,14 +122,12 @@ class MuseSBleAdapter(HardwareAdapter):
         await self._client.start_notify(CHAR_ACCEL, accel_handler)
         await self._client.start_notify(CHAR_GYRO, gyro_handler)
 
-        # Send preset + double CMD_DATA with 250 ms gap (FIXED PROTOCOL)
         await self._client.write_gatt_char(CHAR_CONTROL, CMD_PRESET_20, response=True)
         await asyncio.sleep(0.1)
         await self._client.write_gatt_char(CHAR_CONTROL, CMD_DATA, response=True)
         await asyncio.sleep(CMD_DATA_DELAY_SEC)
         await self._client.write_gatt_char(CHAR_CONTROL, CMD_DATA, response=True)
 
-        # Start keepalive task
         self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     async def disconnect(self) -> None:
@@ -179,7 +170,6 @@ class MuseSBleAdapter(HardwareAdapter):
         if not self._connected:
             return None
 
-        # Build snapshot from ring buffers
         eeg_buf = [list(ring) for ring in self._eeg_rings]
         ppg_buf = list(self._ppg_ring)
         accel_buf = [list(ring) for ring in self._accel_ring]

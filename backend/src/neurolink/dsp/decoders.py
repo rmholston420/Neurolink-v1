@@ -9,27 +9,19 @@ from __future__ import annotations
 
 import struct
 
-# EEG: 20-byte packet → 12 float samples
-# First 2 bytes = sequence/status, then 3 bytes per sample * 12
-_EEG_MIN_PACKET_LEN: int = 14  # 2 header + 12 sample bytes
-_EEG_SCALE: float = 0.48828125  # uV per LSB (from Muse SDK)
-_EEG_OFFSET: float = 2048.0     # 12-bit unsigned centre
+_EEG_MIN_PACKET_LEN: int = 14
+_EEG_SCALE: float = 0.48828125
+_EEG_OFFSET: float = 2048.0
 
-# PPG: 20-byte packet → 6 samples (3-byte each, big-endian)
-# A valid packet needs 2-byte header + at least 6 full 3-byte samples = 20 bytes.
-# Reject anything shorter than a full packet (short = corrupt / test sentinel).
 _PPG_SAMPLE_SIZE: int = 3
-_PPG_MIN_PACKET_LEN: int = 2 + _PPG_SAMPLE_SIZE * _PPG_SAMPLE_SIZE + 1  # 12 bytes
+_PPG_MIN_PACKET_LEN: int = 12  # 2-byte header + at least 3 full 3-byte samples
 _PPG_SAMPLES_PER_PACKET: int = 6
 
-# IMU: 20-byte packet → 9 accel + 9 gyro int16 values (big-endian)
-# A valid IMU packet is always 20 bytes (2 header + 18 data).
-# Reject anything under 20 bytes as corrupt / short sentinel.
 _IMU_PACKET_LEN: int = 20
 _IMU_MIN_PACKET_LEN: int = _IMU_PACKET_LEN
-_IMU_N_VALUES: int = 9  # 3 axes * 3 samples
-_ACCEL_SCALE: float = 0.0000610352   # g per LSB (Muse SDK)
-_GYRO_SCALE: float = 0.0074768       # deg/s per LSB (Muse SDK)
+_IMU_N_VALUES: int = 9
+_ACCEL_SCALE: float = 0.0000610352
+_GYRO_SCALE: float = 0.0074768
 
 
 def decode_eeg(data: bytes) -> list[float]:
@@ -41,10 +33,8 @@ def decode_eeg(data: bytes) -> list[float]:
     if len(data) < _EEG_MIN_PACKET_LEN:
         return []
 
-    # Bytes 2..14: 12 samples, packed as 12-bit big-endian (unusual Muse encoding)
-    # Each sample is packed in 1.5 bytes; use 3-byte groups for 2 samples.
-    payload = data[2:]  # Skip header
-    samples = []
+    payload = data[2:]
+    samples: list[float] = []
     i = 0
     while i + 2 < len(payload) and len(samples) < 12:
         b0, b1, b2 = payload[i], payload[i + 1], payload[i + 2]
@@ -67,9 +57,13 @@ def decode_ppg(data: bytes) -> list[float]:
     if len(data) < _PPG_MIN_PACKET_LEN:
         return []
 
-    payload = data[2:]  # Skip 2-byte header
-    samples = []
-    for i in range(0, min(len(payload), _PPG_SAMPLES_PER_PACKET * _PPG_SAMPLE_SIZE), _PPG_SAMPLE_SIZE):
+    payload = data[2:]
+    samples: list[float] = []
+    for i in range(
+        0,
+        min(len(payload), _PPG_SAMPLES_PER_PACKET * _PPG_SAMPLE_SIZE),
+        _PPG_SAMPLE_SIZE,
+    ):
         if i + 2 < len(payload):
             val = (payload[i] << 16) | (payload[i + 1] << 8) | payload[i + 2]
             samples.append(float(val))
@@ -87,14 +81,13 @@ def decode_imu(data: bytes) -> tuple[list[float], list[float]]:
     if len(data) < _IMU_MIN_PACKET_LEN:
         return [], []
 
-    payload = data[2:]  # Skip header
+    payload = data[2:]
     n_int16 = min(_IMU_N_VALUES, len(payload) // 2)
-    values = []
+    values: list[float] = []
     for i in range(n_int16):
         raw = struct.unpack_from(">h", payload, i * 2)[0]
         values.append(float(raw))
 
-    # Pad to 9 if shorter
     while len(values) < _IMU_N_VALUES:
         values.append(0.0)
 
