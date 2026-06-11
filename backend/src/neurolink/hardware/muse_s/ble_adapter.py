@@ -1,145 +1,170 @@
-"""Muse S Gen 1 direct BLE adapter.
+"""Muse S Gen 1 direct BLE adapter via bleak.
 
-Ported from Rigpa-v2 ble_bridge.py + Rigpa-v3 hardware/muse_s/ble_adapter.py.
-All protocol constants are firmware-level. DO NOT MODIFY.
+Ported from Rigpa-v2 ble_bridge.py.
+All BLE protocol constants are FIXED and must not be modified.
+See Section 14 of neurolink-app-spec.md for authoritative values.
 """
 from __future__ import annotations
 
 import asyncio
 import time
-from typing import AsyncGenerator
+from collections import deque
+from typing import Deque
 
-import numpy as np
 import structlog
 
 from neurolink.hardware.base import EEGSample, HardwareAdapter
-from neurolink.dsp.decoders import decode_eeg, decode_ppg, decode_imu
 
 log = structlog.get_logger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────
-# BLE GATT UUIDs — DO NOT MODIFY (firmware constants)
-# ──────────────────────────────────────────────────────────────────────
-_UUID_CONTROL = "273e0001-4c4d-454d-96be-f03bac821358"
-_UUID_EEG_TP9 = "273e0003-4c4d-454d-96be-f03bac821358"
-_UUID_EEG_AF7 = "273e0004-4c4d-454d-96be-f03bac821358"
-_UUID_EEG_AF8 = "273e0005-4c4d-454d-96be-f03bac821358"
-_UUID_EEG_TP10 = "273e0006-4c4d-454d-96be-f03bac821358"
-_UUID_EEG_AUX = "273e0007-4c4d-454d-96be-f03bac821358"
-_UUID_PPG1 = "273e000f-4c4d-454d-96be-f03bac821358"
-_UUID_PPG2 = "273e0010-4c4d-454d-96be-f03bac821358"
-_UUID_PPG3 = "273e0011-4c4d-454d-96be-f03bac821358"
-_UUID_ACC = "273e000a-4c4d-454d-96be-f03bac821358"
-_UUID_GYRO = "273e0009-4c4d-454d-96be-f03bac821358"
+# ── FIXED BLE PROTOCOL CONSTANTS ───────────────────────────────────────────────
+# DO NOT MODIFY. These encode hard-won Muse S Gen 2 firmware behavior.
+# Source: Rigpa-v2 ble_bridge.py, verified against Muse SDK docs.
 
-# ──────────────────────────────────────────────────────────────────────
-# Control commands — DO NOT MODIFY (firmware constants)
-# ──────────────────────────────────────────────────────────────────────
-_CMD_HALT = bytes([0x02, 0x68, 0x0A])           # "h"
-_CMD_PRESET = bytes([0x05, 0x70, 0x35, 0x30, 0x0A])  # "p50"
-_CMD_START = bytes([0x02, 0x73, 0x0A])           # "s"
-_CMD_DATA = bytes([0x02, 0x64, 0x0A])            # "d"
+# GATT Service UUIDs
+MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
 
-_DATA_DOUBLE_SEND_GAP: float = 0.25   # seconds between two CMD_DATA sends
-KEEPALIVE_SEC: float = 30.0           # re-arm interval
-RECONNECT_WAIT: float = 20.0          # wait after link drop before reconnect
-PUBLISH_HZ: float = 4.0              # hub publish cadence
+# GATT Characteristic UUIDs
+CHAR_EEG_TP9 = "273e0003-4c4d-454d-96be-a864010b7d2c"  # EEG TP9
+CHAR_EEG_AF7 = "273e0004-4c4d-454d-96be-a864010b7d2c"  # EEG AF7
+CHAR_EEG_AF8 = "273e0005-4c4d-454d-96be-a864010b7d2c"  # EEG AF8
+CHAR_EEG_TP10 = "273e0006-4c4d-454d-96be-a864010b7d2c"  # EEG TP10
+CHAR_EEG_RIGHTAUX = "273e0007-4c4d-454d-96be-a864010b7d2c"  # EEG AUX
+CHAR_CONTROL = "273e0001-4c4d-454d-96be-a864010b7d2c"  # Control channel
+CHAR_TELEMETRY = "273e000b-4c4d-454d-96be-a864010b7d2c"  # Battery etc.
+CHAR_ACCEL = "273e000a-4c4d-454d-96be-a864010b7d2c"  # Accelerometer
+CHAR_GYRO = "273e0009-4c4d-454d-96be-a864010b7d2c"  # Gyroscope
+CHAR_PPG_AMBIENT = "273e000f-4c4d-454d-96be-a864010b7d2c"  # PPG ambient
+CHAR_PPG_IR = "273e0010-4c4d-454d-96be-a864010b7d2c"  # PPG IR
+CHAR_PPG_RED = "273e0011-4c4d-454d-96be-a864010b7d2c"  # PPG red
 
-_EEG_CHANNELS = ["TP9", "AF7", "AF8", "TP10", "AUX"]
-_EEG_UUIDS = [_UUID_EEG_TP9, _UUID_EEG_AF7, _UUID_EEG_AF8, _UUID_EEG_TP10, _UUID_EEG_AUX]
+# Control commands (FIXED — DO NOT MODIFY)
+CMD_PRESET_20 = b"\x02\x31\x30\x0a"   # Preset 20 (EEG+PPG+accel)
+CMD_DATA = b"\x02\x64\x0a"            # Start streaming
+CMD_STOP = b"\x02\x68\x0a"            # Stop streaming
+CMD_KEEPALIVE = b"\x02\x6b\x0a"       # Keepalive
+
+# Timing constants (FIXED)
+CMD_DATA_DELAY_SEC: float = 0.250     # gap between double CMD_DATA send
+KEEPALIVE_SEC: float = 30.0           # keepalive interval
+RECONNECT_WAIT_SEC: float = 20.0      # wait after link drop before reconnecting
+
+# EEG channel characteristic list (order: TP9, AF7, AF8, TP10, AUX)
+_EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
+
+_RING_SECS: float = 4.0
+_EEG_FS: float = 256.0
+_N_EEG: int = int(_EEG_FS * _RING_SECS)
 
 
 class MuseSBleAdapter(HardwareAdapter):
-    """Direct BLE adapter for Muse S Gen 1/Gen 2 via bleak GATT.
+    """Direct BLE adapter for Muse S Gen 1 using bleak.
 
-    Supports BLE arming sequence, keepalive, and reconnect supervisor.
-    Hardware imports are lazy (bleak only imported on connect).
+    Lazy-imports bleak so mock mode never loads BLE drivers.
     """
 
     def __init__(self, address: str) -> None:
         self._address = address
-        self._connected = False
-        self._client = None  # type: ignore[assignment]
-        self._sample_queue: asyncio.Queue[EEGSample] = asyncio.Queue(maxsize=64)
-        self._eeg_bufs: dict[str, list[float]] = {ch: [] for ch in _EEG_CHANNELS}
-        self._ppg_buf: list[float] = []
-        self._accel_buf: list[float] = []
-        self._gyro_buf: list[float] = []
-        self._keepalive_task: asyncio.Task | None = None  # type: ignore[type-arg]
+        self._client = None
+        self._connected: bool = False
+        self._sample_queue: Deque[EEGSample] = deque(maxlen=16)
+        # Ring buffers per channel
+        self._eeg_rings: list[deque] = [deque(maxlen=_N_EEG) for _ in range(5)]
+        self._ppg_ring: deque = deque(maxlen=1920)
+        self._accel_ring: list[deque] = [deque(maxlen=208) for _ in range(3)]
+        self._gyro_ring: list[deque] = [deque(maxlen=208) for _ in range(3)]
+        self._poor_contact: bool = False
+        self._keepalive_task: asyncio.Task | None = None
 
     async def connect(self) -> None:
-        """Connect to Muse S via BLE and arm the stream."""
-        await self._connect_with_retry()
-
-    async def _connect_with_retry(self, max_attempts: int = 3) -> None:
-        """Connect with retry on failure."""
+        """Connect to the Muse S BLE device and start EEG streaming."""
         from bleak import BleakClient  # lazy import
+        from neurolink.dsp.decoders import decode_eeg, decode_ppg, decode_imu
 
-        for attempt in range(1, max_attempts + 1):
-            try:
-                log.info("ble_connecting", address=self._address, attempt=attempt)
-                self._client = BleakClient(self._address)
-                await self._client.connect()
-                await self._arm_stream()
-                self._connected = True
-                log.info("ble_connected", address=self._address)
-                return
-            except Exception as exc:
-                log.warning(
-                    "ble_connect_failed",
-                    address=self._address,
-                    attempt=attempt,
-                    error=str(exc),
-                )
-                if attempt < max_attempts:
-                    await asyncio.sleep(2.0)
-        raise RuntimeError(f"Failed to connect to Muse S at {self._address}")
+        self._client = BleakClient(self._address, timeout=15.0)
+        await self._client.connect()
+        self._connected = True
+        log.info("muse_ble_connected", address=self._address)
 
-    async def _arm_stream(self) -> None:
-        """Send BLE arming sequence.
+        # Subscribe to EEG channels
+        for i, char_uuid in enumerate(_EEG_CHARS):
+            ch_idx = i
 
-        Arming sequence: halt -> 50ms -> preset[p50] -> 50ms -> start -> 50ms
-        -> data[1/2] -> 250ms -> data[2/2]
-        """
-        client = self._client
-        await client.write_gatt_char(_UUID_CONTROL, _CMD_HALT, response=True)
-        await asyncio.sleep(0.05)
-        await client.write_gatt_char(_UUID_CONTROL, _CMD_PRESET, response=True)
-        await asyncio.sleep(0.05)
-        await client.write_gatt_char(_UUID_CONTROL, _CMD_START, response=True)
-        await asyncio.sleep(0.05)
-        await self._ctrl_data_double()
+            def make_eeg_handler(idx: int):
+                def handler(_sender, data: bytes) -> None:
+                    samples = decode_eeg(data)
+                    self._eeg_rings[idx].extend(samples)
+                return handler
 
-    async def _ctrl_data_double(self) -> None:
-        """Send CMD_DATA twice with 250ms gap (critical Muse S Gen 2 protocol)."""
-        client = self._client
-        await client.write_gatt_char(_UUID_CONTROL, _CMD_DATA, response=True)
-        await asyncio.sleep(_DATA_DOUBLE_SEND_GAP)
-        await client.write_gatt_char(_UUID_CONTROL, _CMD_DATA, response=True)
+            await self._client.start_notify(char_uuid, make_eeg_handler(ch_idx))
 
-    async def _keepalive_task_fn(self) -> None:
-        """Re-arm stream every KEEPALIVE_SEC to prevent Muse S idle timeout."""
-        try:
-            while self._connected:
-                await asyncio.sleep(KEEPALIVE_SEC)
-                if self._connected and self._client is not None:
-                    log.debug("ble_keepalive", address=self._address)
-                    await self._ctrl_data_double()
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            log.warning("ble_keepalive_error", error=str(exc))
+        # Subscribe to PPG IR
+        def ppg_handler(_sender, data: bytes) -> None:
+            from neurolink.dsp.decoders import decode_ppg
+            samples = decode_ppg(data)
+            self._ppg_ring.extend(samples)
+
+        await self._client.start_notify(CHAR_PPG_IR, ppg_handler)
+
+        # Subscribe to Accel / Gyro
+        def accel_handler(_sender, data: bytes) -> None:
+            from neurolink.dsp.decoders import decode_imu
+            accel_flat, _ = decode_imu(data)
+            # flat list: [x0,y0,z0, x1,y1,z1, x2,y2,z2]
+            for j in range(0, len(accel_flat), 3):
+                if j + 2 < len(accel_flat):
+                    self._accel_ring[0].append(accel_flat[j])
+                    self._accel_ring[1].append(accel_flat[j + 1])
+                    self._accel_ring[2].append(accel_flat[j + 2])
+
+        def gyro_handler(_sender, data: bytes) -> None:
+            from neurolink.dsp.decoders import decode_imu
+            _, gyro_flat = decode_imu(data)
+            for j in range(0, len(gyro_flat), 3):
+                if j + 2 < len(gyro_flat):
+                    self._gyro_ring[0].append(gyro_flat[j])
+                    self._gyro_ring[1].append(gyro_flat[j + 1])
+                    self._gyro_ring[2].append(gyro_flat[j + 2])
+
+        await self._client.start_notify(CHAR_ACCEL, accel_handler)
+        await self._client.start_notify(CHAR_GYRO, gyro_handler)
+
+        # Send preset + double CMD_DATA with 250 ms gap (FIXED PROTOCOL)
+        await self._client.write_gatt_char(CHAR_CONTROL, CMD_PRESET_20, response=True)
+        await asyncio.sleep(0.1)
+        await self._client.write_gatt_char(CHAR_CONTROL, CMD_DATA, response=True)
+        await asyncio.sleep(CMD_DATA_DELAY_SEC)
+        await self._client.write_gatt_char(CHAR_CONTROL, CMD_DATA, response=True)
+
+        # Start keepalive task
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
     async def disconnect(self) -> None:
-        """Disconnect BLE client."""
-        self._connected = False
-        if self._keepalive_task is not None:
+        """Stop streaming and disconnect BLE."""
+        if self._keepalive_task:
             self._keepalive_task.cancel()
-        if self._client is not None:
+            self._keepalive_task = None
+        if self._client and self._connected:
             try:
+                await self._client.write_gatt_char(CHAR_CONTROL, CMD_STOP, response=True)
                 await self._client.disconnect()
             except Exception as exc:
-                log.warning("ble_disconnect_error", error=str(exc))
+                log.warning("muse_ble_disconnect_error", error=str(exc))
+        self._connected = False
+        log.info("muse_ble_disconnected", address=self._address)
+
+    async def _keepalive_loop(self) -> None:
+        """Send periodic keepalive commands to prevent firmware timeout."""
+        while self._connected:
+            await asyncio.sleep(KEEPALIVE_SEC)
+            if self._connected and self._client:
+                try:
+                    await self._client.write_gatt_char(
+                        CHAR_CONTROL, CMD_KEEPALIVE, response=True
+                    )
+                    log.debug("muse_ble_keepalive_sent", address=self._address)
+                except Exception as exc:
+                    log.warning("muse_ble_keepalive_error", error=str(exc))
 
     @property
     def is_connected(self) -> bool:
@@ -149,73 +174,27 @@ class MuseSBleAdapter(HardwareAdapter):
     def source_name(self) -> str:
         return "muse_ble"
 
-    def _eeg_callback(self, channel: str, sender: object, data: bytearray) -> None:  # noqa: ARG002
-        """Notification callback for EEG GATT characteristic."""
-        samples = decode_eeg(bytes(data))
-        self._eeg_bufs[channel].extend(samples)
+    async def read_sample(self) -> EEGSample | None:
+        """Snapshot current ring buffer state as an EEGSample."""
+        if not self._connected:
+            return None
 
-    def _ppg_callback(self, sender: object, data: bytearray) -> None:  # noqa: ARG002
-        """Notification callback for PPG GATT characteristic."""
-        samples = decode_ppg(bytes(data))
-        self._ppg_buf.extend(samples)
+        # Build snapshot from ring buffers
+        eeg_buf = [list(ring) for ring in self._eeg_rings]
+        ppg_buf = list(self._ppg_ring)
+        accel_buf = [list(ring) for ring in self._accel_ring]
+        gyro_buf = [list(ring) for ring in self._gyro_ring]
 
-    def _accel_callback(self, sender: object, data: bytearray) -> None:  # noqa: ARG002
-        """Notification callback for accelerometer GATT characteristic."""
-        flat, _ = decode_imu(bytes(data))
-        self._accel_buf.extend(flat)
+        channels = [buf[-1] if buf else 0.0 for buf in eeg_buf]
 
-    def _gyro_callback(self, sender: object, data: bytearray) -> None:  # noqa: ARG002
-        """Notification callback for gyroscope GATT characteristic."""
-        _, flat = decode_imu(bytes(data))
-        self._gyro_buf.extend(flat)
-
-    async def stream(self) -> AsyncGenerator[EEGSample, None]:  # type: ignore[override]
-        """Subscribe to GATT notifications and yield EEGSamples at PUBLISH_HZ."""
-        client = self._client
-        interval = 1.0 / PUBLISH_HZ
-
-        # Subscribe to EEG channels
-        for ch, uuid in zip(_EEG_CHANNELS, _EEG_UUIDS):
-            ch_name = ch
-
-            def make_eeg_cb(channel: str):
-                def cb(sender: object, data: bytearray) -> None:
-                    self._eeg_callback(channel, sender, data)
-                return cb
-
-            await client.start_notify(uuid, make_eeg_cb(ch_name))
-
-        # Subscribe to PPG
-        await client.start_notify(_UUID_PPG1, self._ppg_callback)
-
-        # Subscribe to IMU
-        await client.start_notify(_UUID_ACC, self._accel_callback)
-        await client.start_notify(_UUID_GYRO, self._gyro_callback)
-
-        # Start keepalive
-        self._keepalive_task = asyncio.create_task(self._keepalive_task_fn())
-
-        # Publish frames at PUBLISH_HZ
-        while self._connected:
-            await asyncio.sleep(interval)
-            sample = EEGSample(
-                timestamp=time.time(),
-                eeg={ch: list(self._eeg_bufs[ch]) for ch in _EEG_CHANNELS},
-                ppg=list(self._ppg_buf),
-                accel=list(self._accel_buf),
-                gyro=list(self._gyro_buf),
-                source="muse_ble",
-                address=self._address,
-                poor_contact=False,
-                contact_quality=None,
-            )
-            # Rotate buffers (keep last N samples)
-            _max_eeg = int(256 * 4)
-            _max_ppg = int(64 * 30)
-            _max_imu = int(52 * 4) * 3
-            for ch in _EEG_CHANNELS:
-                self._eeg_bufs[ch] = self._eeg_bufs[ch][-_max_eeg:]
-            self._ppg_buf = self._ppg_buf[-_max_ppg:]
-            self._accel_buf = self._accel_buf[-_max_imu:]
-            self._gyro_buf = self._gyro_buf[-_max_imu:]
-            yield sample
+        return EEGSample(
+            channels=channels,
+            timestamp=time.time(),
+            source="muse_ble",
+            address=self._address,
+            poor_contact=self._poor_contact,
+            eeg_buffer=eeg_buf,
+            ppg_buffer=ppg_buf if ppg_buf else None,
+            accel_buffer=accel_buf if any(accel_buf) else None,
+            gyro_buffer=gyro_buf if any(gyro_buf) else None,
+        )

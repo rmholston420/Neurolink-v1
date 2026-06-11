@@ -1,81 +1,61 @@
-"""Hardware adapter abstract base class.
+"""Hardware adapter abstract base class and supporting types.
 
-Ported from Rigpa-v3 hardware/base.py.
+All concrete adapters inherit from HardwareAdapter and implement:
+    connect(), disconnect(), read_sample(), is_connected
 """
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import AsyncGenerator
-
-import numpy as np
+from typing import Any
 
 
 class DeviceModel(str, Enum):
-    """Supported EEG device models."""
-
+    """Supported Muse device models."""
     MUSE_S_GEN1 = "muse_s_gen1"
     MUSE_S_ATHENA = "muse_s_athena"
     MOCK = "mock"
 
 
+@dataclass
 class EEGSample:
-    """A single EEG sample frame from any hardware adapter."""
-
-    __slots__ = (
-        "timestamp",
-        "eeg",       # dict[channel_name, list[float]] or np.ndarray
-        "ppg",       # list[float] | None
-        "accel",     # list[float] | None
-        "gyro",      # list[float] | None
-        "source",    # str
-        "address",   # str
-        "poor_contact",   # bool
-        "contact_quality",  # float | None
-        "fnirs",     # list[float] | None (Athena only)
-    )
-
-    def __init__(
-        self,
-        timestamp: float,
-        eeg: dict[str, list[float]] | np.ndarray | None = None,
-        ppg: list[float] | None = None,
-        accel: list[float] | None = None,
-        gyro: list[float] | None = None,
-        source: str = "unknown",
-        address: str = "",
-        poor_contact: bool = False,
-        contact_quality: float | None = None,
-        fnirs: list[float] | None = None,
-    ) -> None:
-        self.timestamp = timestamp
-        self.eeg = eeg or {}
-        self.ppg = ppg
-        self.accel = accel
-        self.gyro = gyro
-        self.source = source
-        self.address = address
-        self.poor_contact = poor_contact
-        self.contact_quality = contact_quality
-        self.fnirs = fnirs
+    """A single EEG sample snapshot from any adapter."""
+    # Core EEG — one value per channel (TP9, AF7, AF8, TP10, AUX)
+    channels: list[float] = field(default_factory=lambda: [0.0] * 5)
+    timestamp: float = field(default_factory=time.time)
+    source: str = "mock"
+    address: str = ""
+    poor_contact: bool = False
+    # Raw multi-sample ring data (optional; filled by adapters)
+    eeg_buffer: list[list[float]] | None = None      # (5, N) as nested list
+    ppg_buffer: list[float] | None = None             # (N,)
+    accel_buffer: list[list[float]] | None = None     # (3, N)
+    gyro_buffer: list[list[float]] | None = None      # (3, N)
+    # Extra metadata
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class HardwareAdapter(ABC):
-    """Abstract base class for all EEG hardware adapters."""
+    """Abstract base class for all Neurolink hardware adapters."""
 
     @abstractmethod
     async def connect(self) -> None:
-        """Establish connection to the hardware device."""
+        """Establish connection to the EEG device."""
         ...
 
     @abstractmethod
     async def disconnect(self) -> None:
-        """Disconnect from the hardware device."""
+        """Disconnect from the EEG device and release resources."""
         ...
 
     @abstractmethod
-    async def stream(self) -> AsyncGenerator[EEGSample, None]:
-        """Yield EEGSample frames as they arrive from the hardware."""
+    async def read_sample(self) -> EEGSample | None:
+        """Read the latest EEG sample from the device buffer.
+
+        Returns None if no new sample is available.
+        """
         ...
 
     @property
@@ -85,7 +65,6 @@ class HardwareAdapter(ABC):
         ...
 
     @property
-    @abstractmethod
     def source_name(self) -> str:
-        """Return the source identifier string for this adapter."""
-        ...
+        """Human-readable source identifier for IngestPayload.source."""
+        return "unknown"
