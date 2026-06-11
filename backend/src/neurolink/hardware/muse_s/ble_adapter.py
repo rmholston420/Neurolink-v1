@@ -24,34 +24,40 @@ log = structlog.get_logger(__name__)
 # ── FIXED BLE PROTOCOL CONSTANTS ────────────────────────────────────────────────────
 MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
 
-CHAR_EEG_TP9 = "273e0003-4c4d-454d-96be-a864010b7d2c"
-CHAR_EEG_AF7 = "273e0004-4c4d-454d-96be-a864010b7d2c"
-CHAR_EEG_AF8 = "273e0005-4c4d-454d-96be-a864010b7d2c"
-CHAR_EEG_TP10 = "273e0006-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_TP9     = "273e0003-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_AF7     = "273e0004-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_AF8     = "273e0005-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_TP10    = "273e0006-4c4d-454d-96be-a864010b7d2c"
 CHAR_EEG_RIGHTAUX = "273e0007-4c4d-454d-96be-a864010b7d2c"
-CHAR_CONTROL = "273e0001-4c4d-454d-96be-a864010b7d2c"
-CHAR_TELEMETRY = "273e000b-4c4d-454d-96be-a864010b7d2c"
-CHAR_ACCEL = "273e000a-4c4d-454d-96be-a864010b7d2c"
-CHAR_GYRO = "273e0009-4c4d-454d-96be-a864010b7d2c"
+CHAR_CONTROL     = "273e0001-4c4d-454d-96be-a864010b7d2c"
+CHAR_TELEMETRY   = "273e000b-4c4d-454d-96be-a864010b7d2c"
+CHAR_ACCEL       = "273e000a-4c4d-454d-96be-a864010b7d2c"
+CHAR_GYRO        = "273e0009-4c4d-454d-96be-a864010b7d2c"
 CHAR_PPG_AMBIENT = "273e000f-4c4d-454d-96be-a864010b7d2c"
-CHAR_PPG_IR = "273e0010-4c4d-454d-96be-a864010b7d2c"
-CHAR_PPG_RED = "273e0011-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_IR      = "273e0010-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_RED     = "273e0011-4c4d-454d-96be-a864010b7d2c"
 
 CMD_PRESET_20 = b"\x02\x31\x30\x0a"
-CMD_DATA = b"\x02\x64\x0a"
-CMD_STOP = b"\x02\x68\x0a"
+CMD_DATA      = b"\x02\x64\x0a"
+CMD_STOP      = b"\x02\x68\x0a"
 CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
-CMD_DATA_DELAY_SEC: float = 0.250
-KEEPALIVE_SEC: float = 30.0
-RECONNECT_WAIT_SEC: float = 20.0  # spec-mandated wait before BLE reconnect attempt
-MAX_RECONNECT_ATTEMPTS: int = 10  # give up after this many consecutive failures
+CMD_DATA_DELAY_SEC: float  = 0.250
+KEEPALIVE_SEC: float       = 30.0
+RECONNECT_WAIT_SEC: float  = 20.0  # spec-mandated wait before BLE reconnect attempt
+MAX_RECONNECT_ATTEMPTS: int = 10   # give up after this many consecutive failures
+
+# Increased from 15 s — GATT discovery through D-Bus/Docker needs extra headroom
+BLE_CONNECT_TIMEOUT: float = 30.0
+
+# Pre-scan duration before connecting so BlueZ has seen the device recently
+PRE_SCAN_SEC: float = 5.0
 
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
 
 _RING_SECS: float = 4.0
-_EEG_FS: float = 256.0
-_N_EEG: int = int(_EEG_FS * _RING_SECS)
+_EEG_FS: float    = 256.0
+_N_EEG: int       = int(_EEG_FS * _RING_SECS)
 
 
 class MuseSBleAdapter(HardwareAdapter):
@@ -89,17 +95,35 @@ class MuseSBleAdapter(HardwareAdapter):
 
         Idempotent: if already connected, returns immediately.
         Called both from service.connect() and from the reconnect supervisor.
+
+        Pre-scans for PRE_SCAN_SEC before connecting so BlueZ has a warm
+        cache entry for the device, avoiding GATT-discovery timeouts that
+        occur when the device was not recently seen by the host daemon.
         """
         if self._connected:
             return
 
-        from bleak import BleakClient
+        from bleak import BleakClient, BleakScanner
 
         from neurolink.dsp.decoders import decode_eeg
 
+        # ── Pre-scan: warm the BlueZ cache so GATT discovery succeeds ──────────
+        log.info("muse_ble_prescanning", address=self._address, duration=PRE_SCAN_SEC)
+        found = await BleakScanner.find_device_by_address(
+            self._address,
+            timeout=PRE_SCAN_SEC,
+        )
+        if found is None:
+            raise ConnectionError(
+                f"Muse S not found during pre-scan ({self._address}). "
+                "Power-cycle the headset and try again."
+            )
+        log.info("muse_ble_device_found", address=self._address, name=found.name)
+
+        # ── Connect ────────────────────────────────────────────────────────────
         self._client = BleakClient(
             self._address,
-            timeout=15.0,
+            timeout=BLE_CONNECT_TIMEOUT,
             disconnected_callback=self._on_ble_disconnect,
         )
         await self._client.connect()
@@ -216,10 +240,10 @@ class MuseSBleAdapter(HardwareAdapter):
         if not self._connected:
             return None
 
-        eeg_buf = [list(ring) for ring in self._eeg_rings]
-        ppg_buf = list(self._ppg_ring)
+        eeg_buf  = [list(ring) for ring in self._eeg_rings]
+        ppg_buf  = list(self._ppg_ring)
         accel_buf = [list(ring) for ring in self._accel_ring]
-        gyro_buf = [list(ring) for ring in self._gyro_ring]
+        gyro_buf  = [list(ring) for ring in self._gyro_ring]
 
         channels = [buf[-1] if buf else 0.0 for buf in eeg_buf]
 
