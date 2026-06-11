@@ -27,7 +27,20 @@ async def test_session_log_created_on_connect(client):
 
 
 async def test_calibrate_starts_and_returns_started(client):
-    """POST /calibrate should return status 'started'."""
+    """POST /calibrate should return status 'started'.
+
+    The conftest reset_hub fixture tears down the service singleton before each
+    test, so the mock adapter is not auto-connected.  Connect explicitly here
+    so that start_calibration finds a live adapter instead of raising
+    AdapterNotConnectedError (which maps to 409).
+    """
+    # Ensure mock adapter is connected before calibrating
+    connect_resp = await client.post(
+        "/api/v1/neurolink/connect",
+        json={"adapter_type": "mock", "device_model": "mock"},
+    )
+    assert connect_resp.status_code == 200, connect_resp.text
+
     resp = await client.post("/api/v1/neurolink/calibrate")
     assert resp.status_code == 200
     data = resp.json()

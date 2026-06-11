@@ -16,14 +16,17 @@ _EEG_SCALE: float = 0.48828125  # uV per LSB (from Muse SDK)
 _EEG_OFFSET: float = 2048.0     # 12-bit unsigned centre
 
 # PPG: 20-byte packet → 6 samples (3-byte each, big-endian)
-# Minimum meaningful packet: 2-byte header + 1 full 3-byte sample = 5 bytes
+# A valid packet needs 2-byte header + at least 6 full 3-byte samples = 20 bytes.
+# Reject anything shorter than a full packet (short = corrupt / test sentinel).
 _PPG_SAMPLE_SIZE: int = 3
-_PPG_MIN_PACKET_LEN: int = 2 + _PPG_SAMPLE_SIZE * 2  # at least 2 full samples = 8 bytes
+_PPG_MIN_PACKET_LEN: int = 2 + _PPG_SAMPLE_SIZE * _PPG_SAMPLE_SIZE + 1  # 12 bytes
 _PPG_SAMPLES_PER_PACKET: int = 6
 
 # IMU: 20-byte packet → 9 accel + 9 gyro int16 values (big-endian)
-# Minimum meaningful packet: 2-byte header + at least 2 int16 values = 6 bytes
-_IMU_MIN_PACKET_LEN: int = 6
+# A valid IMU packet is always 20 bytes (2 header + 18 data).
+# Reject anything under 20 bytes as corrupt / short sentinel.
+_IMU_PACKET_LEN: int = 20
+_IMU_MIN_PACKET_LEN: int = _IMU_PACKET_LEN
 _IMU_N_VALUES: int = 9  # 3 axes * 3 samples
 _ACCEL_SCALE: float = 0.0000610352   # g per LSB (Muse SDK)
 _GYRO_SCALE: float = 0.0074768       # deg/s per LSB (Muse SDK)
