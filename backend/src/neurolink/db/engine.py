@@ -1,6 +1,7 @@
-"""Async SQLAlchemy engine and session factory for Neurolink.
+"""SQLAlchemy async engine and session factory.
 
-Uses aiosqlite driver with SQLite.
+Ported from Rigpa-v3 db/engine.py.
+Uses aiosqlite for SQLite backend.
 """
 from __future__ import annotations
 
@@ -8,66 +9,62 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
 
 from neurolink.config import get_settings
-from neurolink.models.session import Base
 
-_engine: AsyncEngine | None = None
-_session_factory: async_sessionmaker[AsyncSession] | None = None
+_engine = None
+_session_factory = None
 
 
-def get_engine() -> AsyncEngine:
-    """Return or create the global async engine."""
+def get_engine():
+    """Return the global async SQLAlchemy engine (lazy init)."""
     global _engine
     if _engine is None:
         settings = get_settings()
+        db_path = settings.db_path
+        if db_path == ":memory:":
+            url = "sqlite+aiosqlite:///:memory:"
+        else:
+            url = f"sqlite+aiosqlite:///{db_path}"
         _engine = create_async_engine(
-            settings.db_url,
-            connect_args={"check_same_thread": False},
+            url,
             echo=False,
+            connect_args={"check_same_thread": False},
         )
     return _engine
 
 
-def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    """Return or create the global session factory."""
-    global _session_factory
-    if _session_factory is None:
-        engine = get_engine()
-        _session_factory = async_sessionmaker(
-            engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            autoflush=False,
-            autocommit=False,
-        )
-    return _session_factory
-
-
 async def create_tables() -> None:
-    """Create all SQLAlchemy tables if they don't exist."""
+    """Create all DB tables if not present."""
+    from neurolink.db.models import Base
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 
 async def dispose_engine() -> None:
-    """Dispose the global engine on shutdown."""
+    """Dispose the engine connection pool."""
     global _engine, _session_factory
-    if _engine is not None:
+    if _engine:
         await _engine.dispose()
         _engine = None
         _session_factory = None
 
 
-@asynccontextmanager
-async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
-    """Context manager that yields an AsyncSession."""
-    factory = get_session_factory()
-    async with factory() as session:
-        yield session
+def get_session_factory():
+    """Return a session factory context manager callable."""
+    engine = get_engine()
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    @asynccontextmanager
+    async def session_cm() -> AsyncGenerator[AsyncSession, None]:
+        async with factory() as session:
+            yield session
+
+    return session_cm

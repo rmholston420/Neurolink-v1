@@ -1,70 +1,58 @@
-"""Pydantic-settings configuration for Neurolink.
+"""Neurolink application settings.
 
-All configuration is read from environment variables with NEUROLINK_ prefix.
+All configuration via environment variables (NEUROLINK_* prefix).
+Pydantic v2 BaseSettings with automatic validation.
 """
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Literal
 
-from pydantic import Field
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_settings = None
 
 
 class Settings(BaseSettings):
+    """Application settings loaded from environment."""
+
     model_config = SettingsConfigDict(
         env_prefix="NEUROLINK_",
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore",
+        case_sensitive=False,
     )
 
-    # Adapter
-    adapter_type: str = Field(default="mock")       # "mock" | "ble" | "lsl"
-    device_model: str = Field(default="muse_s_gen1") # "muse_s_gen1" | "muse_s_athena"
-    muse_ble_address: str = Field(default="")        # BLE MAC address
-    publish_hz: float = Field(default=4.0)
+    # Hardware adapter
+    adapter_type: str = "mock"  # mock | ble | lsl
+    device_model: str = "muse_s_gen1"  # muse_s_gen1 | muse_s_athena | mock
+    muse_ble_address: str = ""  # BLE MAC address for direct BLE mode
+
+    # EEG pump
+    publish_hz: float = 4.0
 
     # Database
-    db_path: str = Field(default="./data/neurolink.db")
+    db_path: str = "data/neurolink.db"  # relative path; use :memory: for tests
 
-    # Redis
-    redis_url: str = Field(default="redis://localhost:6379/0")
-    redis_enabled: bool = Field(default=False)
-
-    # CORS
-    cors_origins: str = Field(default="http://localhost:5173,http://localhost:3000")
+    # Redis (optional)
+    redis_url: str = "redis://localhost:6379"
+    redis_enabled: bool = False
 
     # Logging
-    log_json: bool = Field(default=False)
-    log_level: str = Field(default="INFO")
+    log_level: str = "INFO"
+    log_json: bool = False
 
-    # Auth (optional, disabled by default)
-    auth_enabled: bool = Field(default=False)
+    # CORS
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
     @property
     def cors_origins_list(self) -> list[str]:
-        """Parse CORS origins from comma-separated string."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
-
-    @property
-    def db_url(self) -> str:
-        """SQLAlchemy async DB URL."""
-        path = self.db_path
-        if path == ":memory:":
-            return "sqlite+aiosqlite:///:memory:"
-        return f"sqlite+aiosqlite:///{path}"
-
-
-# Module-level mutable settings singleton (can be reset in tests)
-_settings: Settings | None = None
 
 
 def get_settings() -> Settings:
-    """Return the cached Settings instance.
-
-    Can be reset by setting neurolink.config._settings = None in tests.
-    """
+    """Return the global Settings singleton."""
     global _settings
     if _settings is None:
         _settings = Settings()

@@ -1,2 +1,2 @@
-"""Neurolink EEG meditation and contemplative practice app."""
+"""Neurolink EEG processing backend."""
 __version__ = "1.0.0"
