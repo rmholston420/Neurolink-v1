@@ -351,7 +351,7 @@ class MuseSBleAdapter(HardwareAdapter):
         last_exc: Exception | None = None
         for attempt in range(1, _WRITE_RETRIES + 1):
             try:
-                await self._client.write_gatt_char(CHAR_CONTROL, cmd, response=True)
+                await self._client.write_gatt_char(CHAR_CONTROL, cmd, response=False)
                 return
             except Exception as exc:
                 last_exc = exc
