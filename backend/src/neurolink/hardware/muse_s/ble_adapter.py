@@ -21,37 +21,37 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# ── FIXED BLE PROTOCOL CONSTANTS ─────────────────────────────────────────────
+# ── FIXED BLE PROTOCOL CONSTANTS ────────────────────────────────────────────────────
 MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
 
-CHAR_EEG_TP9      = "273e0003-4c4d-454d-96be-a864010b7d2c"
-CHAR_EEG_AF7      = "273e0004-4c4d-454d-96be-a864010b7d2c"
-CHAR_EEG_AF8      = "273e0005-4c4d-454d-96be-a864010b7d2c"
-CHAR_EEG_TP10     = "273e0006-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_TP9 = "273e0003-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_AF7 = "273e0004-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_AF8 = "273e0005-4c4d-454d-96be-a864010b7d2c"
+CHAR_EEG_TP10 = "273e0006-4c4d-454d-96be-a864010b7d2c"
 CHAR_EEG_RIGHTAUX = "273e0007-4c4d-454d-96be-a864010b7d2c"
-CHAR_CONTROL      = "273e0001-4c4d-454d-96be-a864010b7d2c"
-CHAR_TELEMETRY    = "273e000b-4c4d-454d-96be-a864010b7d2c"
-CHAR_ACCEL        = "273e000a-4c4d-454d-96be-a864010b7d2c"
-CHAR_GYRO         = "273e0009-4c4d-454d-96be-a864010b7d2c"
-CHAR_PPG_AMBIENT  = "273e000f-4c4d-454d-96be-a864010b7d2c"
-CHAR_PPG_IR       = "273e0010-4c4d-454d-96be-a864010b7d2c"
-CHAR_PPG_RED      = "273e0011-4c4d-454d-96be-a864010b7d2c"
+CHAR_CONTROL = "273e0001-4c4d-454d-96be-a864010b7d2c"
+CHAR_TELEMETRY = "273e000b-4c4d-454d-96be-a864010b7d2c"
+CHAR_ACCEL = "273e000a-4c4d-454d-96be-a864010b7d2c"
+CHAR_GYRO = "273e0009-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_AMBIENT = "273e000f-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_IR = "273e0010-4c4d-454d-96be-a864010b7d2c"
+CHAR_PPG_RED = "273e0011-4c4d-454d-96be-a864010b7d2c"
 
-CMD_PRESET_20  = b"\x02\x31\x30\x0a"
-CMD_DATA       = b"\x02\x64\x0a"
-CMD_STOP       = b"\x02\x68\x0a"
-CMD_KEEPALIVE  = b"\x02\x6b\x0a"
+CMD_PRESET_20 = b"\x02\x31\x30\x0a"
+CMD_DATA = b"\x02\x64\x0a"
+CMD_STOP = b"\x02\x68\x0a"
+CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
 CMD_DATA_DELAY_SEC: float = 0.250
-KEEPALIVE_SEC:      float = 30.0
-RECONNECT_WAIT_SEC: float = 20.0   # spec-mandated wait before BLE reconnect attempt
-MAX_RECONNECT_ATTEMPTS: int = 10   # give up after this many consecutive failures
+KEEPALIVE_SEC: float = 30.0
+RECONNECT_WAIT_SEC: float = 20.0  # spec-mandated wait before BLE reconnect attempt
+MAX_RECONNECT_ATTEMPTS: int = 10  # give up after this many consecutive failures
 
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
 
 _RING_SECS: float = 4.0
-_EEG_FS:    float = 256.0
-_N_EEG:     int   = int(_EEG_FS * _RING_SECS)
+_EEG_FS: float = 256.0
+_N_EEG: int = int(_EEG_FS * _RING_SECS)
 
 
 class MuseSBleAdapter(HardwareAdapter):
@@ -113,6 +113,7 @@ class MuseSBleAdapter(HardwareAdapter):
                 def handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
                     samples = decode_eeg(bytes(data))
                     self._eeg_rings[idx].extend(samples)
+
                 return handler
 
             await self._client.start_notify(char_uuid, make_eeg_handler(ch_idx))
@@ -120,6 +121,7 @@ class MuseSBleAdapter(HardwareAdapter):
         # PPG
         def ppg_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_ppg
+
             samples = decode_ppg(bytes(data))
             self._ppg_ring.extend(samples)
 
@@ -128,6 +130,7 @@ class MuseSBleAdapter(HardwareAdapter):
         # IMU — accelerometer
         def accel_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_imu
+
             accel_flat, _ = decode_imu(bytes(data))
             for j in range(0, len(accel_flat), 3):
                 if j + 2 < len(accel_flat):
@@ -138,6 +141,7 @@ class MuseSBleAdapter(HardwareAdapter):
         # IMU — gyroscope
         def gyro_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_imu
+
             _, gyro_flat = decode_imu(bytes(data))
             for j in range(0, len(gyro_flat), 3):
                 if j + 2 < len(gyro_flat):
@@ -211,10 +215,10 @@ class MuseSBleAdapter(HardwareAdapter):
         if not self._connected:
             return None
 
-        eeg_buf   = [list(ring) for ring in self._eeg_rings]
-        ppg_buf   = list(self._ppg_ring)
+        eeg_buf = [list(ring) for ring in self._eeg_rings]
+        ppg_buf = list(self._ppg_ring)
         accel_buf = [list(ring) for ring in self._accel_ring]
-        gyro_buf  = [list(ring) for ring in self._gyro_ring]
+        gyro_buf = [list(ring) for ring in self._gyro_ring]
 
         channels = [buf[-1] if buf else 0.0 for buf in eeg_buf]
 

@@ -58,6 +58,7 @@ async def gate_status(service: ServiceDep) -> JSONResponse:
 async def force_block(service: ServiceDep) -> JSONResponse:
     """Force the EEG gate to blocking state (test/debug only)."""
     from neurolink.focus_state import set_current_focus_score
+
     set_current_focus_score(0.0)
     return JSONResponse(status_code=200, content={"active": True, "reason": "forced"})
 
@@ -66,5 +67,6 @@ async def force_block(service: ServiceDep) -> JSONResponse:
 async def force_unblock(service: ServiceDep) -> JSONResponse:
     """Force the EEG gate to unblocked state (test/debug only)."""
     from neurolink.focus_state import set_current_focus_score
+
     set_current_focus_score(1.0)
     return JSONResponse(status_code=200, content={"active": False, "reason": "forced"})

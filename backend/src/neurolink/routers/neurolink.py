@@ -116,9 +116,7 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
 
             while True:
                 try:
-                    state = await asyncio.wait_for(
-                        q.get(), timeout=_SSE_IDLE_TIMEOUT_S
-                    )
+                    state = await asyncio.wait_for(q.get(), timeout=_SSE_IDLE_TIMEOUT_S)
                     yield _sse_frame(state)
                 except TimeoutError:
                     if q.empty():
