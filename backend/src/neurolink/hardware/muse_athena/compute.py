@@ -1,22 +1,11 @@
-"""Athena-specific band power computation.
+"""Band power computation for Muse S Athena (Gen 2).
 
 Ported from Rigpa-v3 hardware/muse_athena/compute.py.
-Uses the same Welch approach as Muse S but may receive different channel layouts.
+Delegates to muse_s compute for EEG; adds fNIRS support.
 """
 from __future__ import annotations
 
-import numpy as np
+from neurolink.hardware.muse_s.compute import compute_all_bands
 
-from neurolink.models.eeg import BandPowers
-from neurolink.hardware.muse_s.compute import compute_all_bands, EEG_FS
-
-
-def compute_athena_bands(
-    channel_samples: dict[str, np.ndarray] | np.ndarray,
-    fs: float = EEG_FS,
-) -> BandPowers:
-    """Compute band powers for Muse Athena EEG data.
-
-    Delegates to the shared Welch-based compute_all_bands function.
-    """
-    return compute_all_bands(channel_samples, fs=fs)
+# Re-export for Athena consumers
+__all__ = ["compute_all_bands"]

@@ -1,79 +1,72 @@
-"""Welch-based band power computation for Muse S EEG data.
+"""Welch-based band power computation for Muse S Gen 1.
 
 Ported from Rigpa-v3 hardware/muse_s/compute.py.
+All functions are pure.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from neurolink.models.eeg import BandPowers
-
-EEG_FS: float = 256.0
-
-_BAND_RANGES: dict[str, tuple[float, float]] = {
-    "delta": (1.0, 4.0),
+_EEG_FS: float = 256.0
+_BANDS: dict[str, tuple[float, float]] = {
+    "delta": (0.5, 4.0),
     "theta": (4.0, 8.0),
     "alpha": (8.0, 13.0),
     "beta": (13.0, 30.0),
-    "gamma": (30.0, 50.0),
+    "gamma": (30.0, 45.0),
 }
 
 
 def compute_all_bands(
-    channel_samples: dict[str, np.ndarray] | np.ndarray,
-    fs: float = EEG_FS,
-) -> BandPowers:
-    """Compute band powers using Welch PSD, averaged across channels.
+    channel_samples: dict[str, list[float]],
+    fs: float = _EEG_FS,
+) -> dict[str, float]:
+    """Compute Welch-based normalised band powers from channel samples.
 
     Args:
-        channel_samples: dict of {channel_name: 1D array} OR 2D array (ch x samples)
-        fs: sampling frequency in Hz
+        channel_samples: dict mapping channel name to list of float samples
+        fs: sampling frequency (Hz)
 
     Returns:
-        BandPowers with normalised power fractions (sum ~ 1.0)
+        Dict mapping band name to normalised fraction [0, 1].
     """
     try:
-        import scipy.signal as signal  # lazy import
-
-        # Normalise input to list of arrays
-        if isinstance(channel_samples, np.ndarray):
-            if channel_samples.ndim == 1:
-                arrays = [channel_samples]
-            else:
-                arrays = [channel_samples[i] for i in range(channel_samples.shape[0])]
-        else:
-            arrays = list(channel_samples.values())
-
-        if not arrays or all(len(a) < 2 for a in arrays):
-            return BandPowers()
-
-        band_powers: dict[str, list[float]] = {b: [] for b in _BAND_RANGES}
-
-        for arr in arrays:
-            if len(arr) < 2:
-                continue
-            nperseg = min(len(arr), int(fs * 2))  # 2-second window
-            freqs, pxx = signal.welch(arr.astype(float), fs=fs, nperseg=nperseg)
-            for band, (lo, hi) in _BAND_RANGES.items():
-                mask = (freqs >= lo) & (freqs <= hi)
-                if mask.any():
-                    band_powers[band].append(float(np.mean(pxx[mask])))
-
-        means: dict[str, float] = {}
-        for band in _BAND_RANGES:
-            vals = band_powers[band]
-            means[band] = float(np.mean(vals)) if vals else 0.0
-
-        total = sum(means.values())
-        if total > 0:
-            means = {b: v / total for b, v in means.items()}
-
-        return BandPowers(
-            delta=means.get("delta", 0.0),
-            theta=means.get("theta", 0.0),
-            alpha=means.get("alpha", 0.0),
-            beta=means.get("beta", 0.0),
-            gamma=means.get("gamma", 0.0),
+        from scipy.signal import welch
+    except ImportError:
+        from neurolink.dsp.bandpower import compute_band_powers_from_buffer
+        arrays = np.array(
+            [channel_samples.get(ch, [0.0]) for ch in ["TP9", "AF7", "AF8", "TP10", "AUX"]],
+            dtype=np.float32,
         )
-    except Exception:
-        return BandPowers()
+        # Pad if needed
+        max_len = max(arr.shape[0] for arr in arrays) if arrays.shape[0] else 2
+        padded = np.zeros((arrays.shape[0], max_len), dtype=np.float32)
+        for i, arr in enumerate(arrays):
+            padded[i, :len(arr)] = arr
+        return compute_band_powers_from_buffer(padded, fs=fs)
+
+    band_powers: dict[str, float] = {k: 0.0 for k in _BANDS}
+    n_channels = 0
+
+    for ch_samples in channel_samples.values():
+        if len(ch_samples) < 4:
+            continue
+        sig = np.array(ch_samples, dtype=np.float32)
+        nperseg = min(len(sig), 256)
+        freqs, psd = welch(sig, fs=fs, nperseg=nperseg)
+        for band, (lo, hi) in _BANDS.items():
+            mask = (freqs >= lo) & (freqs < hi)
+            if np.any(mask):
+                band_powers[band] += float(np.mean(psd[mask]))
+        n_channels += 1
+
+    if n_channels == 0:
+        return {k: 0.0 for k in _BANDS}
+
+    # Average across channels and normalise
+    for k in band_powers:
+        band_powers[k] /= n_channels
+    total = sum(band_powers.values())
+    if total <= 0:
+        return {k: 0.0 for k in _BANDS}
+    return {k: v / total for k, v in band_powers.items()}

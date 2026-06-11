@@ -1,43 +1,38 @@
 """fNIRS decoder for Muse S Athena (Gen 2).
 
 Ported from Rigpa-v3 hardware/muse_athena/fnirs.py.
-Decodes interleaved oxy/deoxy channels from OpenMuse LSL outlet.
+Decodes interleaved oxy/deoxy fNIRS samples from OpenMuse LSL.
 """
 from __future__ import annotations
 
-import numpy as np
-
 
 class FNIRSDecoder:
-    """Decodes interleaved fNIRS samples from Muse Athena.
+    """Decodes Athena fNIRS samples.
 
-    The OpenMuse LSL outlet interleaves oxy and deoxy channels:
-        [oxy_ch0, deoxy_ch0, oxy_ch1, deoxy_ch1, ...]
-
-    Average of all oxy channels -> fnirs_oxy
-    Average of all deoxy channels -> fnirs_deoxy
+    OpenMuse LSL exports fNIRS as interleaved [oxy0, deoxy0, oxy1, deoxy1, ...].
+    Even indices (0, 2, 4, ...) are oxygenated channels.
+    Odd indices (1, 3, 5, ...) are deoxygenated channels.
     """
 
-    def decode(self, raw_sample: list[float] | np.ndarray) -> dict[str, float]:
-        """Decode a single fNIRS sample to oxy/deoxy averages.
+    def decode(self, raw_sample: list[float]) -> dict[str, float]:
+        """Decode a raw fNIRS LSL sample to oxy/deoxy averages.
 
         Args:
-            raw_sample: interleaved list [oxy0, deoxy0, oxy1, deoxy1, ...]
-                        Length must be even; odd index = oxy, even index+1 = deoxy.
+            raw_sample: list of float values from OpenMuse fNIRS LSL outlet
+                        [oxy0, deoxy0, oxy1, deoxy1, ...]
 
         Returns:
-            dict with 'fnirs_oxy' and 'fnirs_deoxy' keys.
+            Dict with keys:
+            - "fnirs_oxy": mean oxygenated hemoglobin (even-indexed channels)
+            - "fnirs_deoxy": mean deoxygenated hemoglobin (odd-indexed channels)
         """
-        if len(raw_sample) < 2:
+        if not raw_sample:
             return {"fnirs_oxy": 0.0, "fnirs_deoxy": 0.0}
 
-        sample = np.array(raw_sample, dtype=float)
-        # Even indices (0, 2, 4, ...) = oxy channels
-        oxy_vals = sample[0::2]
-        # Odd indices (1, 3, 5, ...) = deoxy channels
-        deoxy_vals = sample[1::2]
+        oxy_vals = [raw_sample[i] for i in range(0, len(raw_sample), 2)]
+        deoxy_vals = [raw_sample[i] for i in range(1, len(raw_sample), 2)]
 
-        fnirs_oxy = float(np.mean(oxy_vals)) if len(oxy_vals) > 0 else 0.0
-        fnirs_deoxy = float(np.mean(deoxy_vals)) if len(deoxy_vals) > 0 else 0.0
+        fnirs_oxy = float(sum(oxy_vals) / len(oxy_vals)) if oxy_vals else 0.0
+        fnirs_deoxy = float(sum(deoxy_vals) / len(deoxy_vals)) if deoxy_vals else 0.0
 
         return {"fnirs_oxy": fnirs_oxy, "fnirs_deoxy": fnirs_deoxy}
