@@ -48,6 +48,10 @@ async def create_tables() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+# Alias used by tests and app startup
+init_db = create_tables
+
+
 async def dispose_engine() -> None:
     """Dispose the engine connection pool."""
     global _engine, _session_factory

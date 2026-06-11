@@ -89,14 +89,6 @@ async def sse_stream(service: ServiceDep) -> EventSourceResponse:
     """
 
     async def event_generator():
-        # Emit current state immediately on connect (before queue registration)
-        # so that tests and clients that prime the hub before connecting
-        # receive a frame without waiting for the keepalive timeout.
-        current = service._hub.get_state()
-        yield {
-            "data": current.model_dump_json(),
-            "event": "state",
-        }
         async for state in _stream_with_retry(service):
             yield {
                 "data": state.model_dump_json(),
@@ -109,6 +101,8 @@ async def sse_stream(service: ServiceDep) -> EventSourceResponse:
 async def _stream_with_retry(service):
     """Yield NeurolinkState frames from the hub SSE queue.
 
+    Emits the current state immediately on registration so the client
+    always receives at least one frame, then fans out from the queue.
     Handles reconnect: if the service is not connected, yields
     the current (disconnected) state every 2 seconds until connected.
     """
@@ -116,6 +110,9 @@ async def _stream_with_retry(service):
     hub = service._hub
     hub.register_sse_queue(q)
     try:
+        # Yield current state immediately so client gets a frame right away
+        # without waiting for the next pump tick or keepalive timeout.
+        yield hub.get_state()
         while True:
             try:
                 state = await asyncio.wait_for(q.get(), timeout=2.0)
