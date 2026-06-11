@@ -1,6 +1,7 @@
-"""Pydantic v2 EEG data models."""
+"""Pydantic v2 data models for Neurolink EEG pipeline."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class BandPowers(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     alpha: float = 0.0
     theta: float = 0.0
     beta: float = 0.0
@@ -18,15 +18,13 @@ class BandPowers(BaseModel):
 
 class SSpaceCoords(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
-    x: float = 0.0  # engagement index = beta / (alpha + theta)
-    y: float = 0.0  # integration coverage = alpha / beta
-    z: float = 0.0  # theta fraction (raw)
+    x: float = 0.0   # engagement index = beta / (alpha + theta)
+    y: float = 0.0   # integration coverage = alpha / beta
+    z: float = 0.0   # theta fraction (raw)
 
 
 class PoincareIndices(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     sd1: float = 0.0
     sd2: float = 0.0
     sd1_sd2_ratio: float = 0.0
@@ -35,7 +33,6 @@ class PoincareIndices(BaseModel):
 
 class PPGPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     hr_bpm: float = 0.0
     ibi_ms: list[float] = Field(default_factory=list)
     hrv_rmssd: float = 0.0
@@ -46,7 +43,6 @@ class PPGPayload(BaseModel):
 
 class BreathingPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     rr_bpm: float | None = None
     rr_ppg: float | None = None
     rr_accel: float | None = None
@@ -54,7 +50,6 @@ class BreathingPayload(BaseModel):
 
 class IMUPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     pitch_deg: float = 0.0
     roll_deg: float = 0.0
     motion_rms: float = 0.0
@@ -62,9 +57,7 @@ class IMUPayload(BaseModel):
 
 class IngestPayload(BaseModel):
     """Full multimodal ingest payload from any hardware adapter."""
-
     model_config = ConfigDict(extra="ignore")
-
     # Core EEG
     region: str = "A"
     alchemical_stage: str = "Nigredo"
@@ -74,14 +67,14 @@ class IngestPayload(BaseModel):
     bands: BandPowers = Field(default_factory=BandPowers)
     s_space: SSpaceCoords = Field(default_factory=SSpaceCoords)
     timestamp: float = 0.0
-    source: str = "mock"  # muse_ble | muse_lsl | athena_ble | mock
+    source: str = "mock"               # "muse_ble" | "muse_lsl" | "athena_ble" | "mock"
     address: str = ""
     # Contact
     poor_contact: bool = False
     contact_quality: float | None = None
     # Derived EEG
-    faa: float | None = None  # Frontal Alpha Asymmetry
-    fmt: float | None = None  # Frontal Midline Theta
+    faa: float | None = None           # Frontal Alpha Asymmetry
+    fmt: float | None = None           # Frontal Midline Theta
     # Optional multimodal
     ppg: PPGPayload | None = None
     breathing: BreathingPayload | None = None
@@ -93,7 +86,6 @@ class IngestPayload(BaseModel):
 
 class EA1Criterion(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     value: float | None = None
     threshold: float | None = None
     units: str = ""
@@ -102,9 +94,7 @@ class EA1Criterion(BaseModel):
 
 class EA1Result(BaseModel):
     """EA-1 multimodal eligibility score."""
-
     model_config = ConfigDict(extra="ignore")
-
     eligible: bool = False
     score: float = 0.0
     criteria_met: int = 0
@@ -121,9 +111,7 @@ class EA1Result(BaseModel):
 
 class NeurolinkState(BaseModel):
     """Current live state of the Neurolink hub."""
-
     model_config = ConfigDict(extra="ignore")
-
     connected: bool = False
     source: str = "none"
     region: str = "A"
@@ -150,7 +138,7 @@ class NeurolinkState(BaseModel):
     motion_rms: float | None = None
     contact_quality: float | None = None
     # Focus + Fatigue
-    focus_state: str = "unknown"
+    focus_state: str = "unknown"       # FocusState enum value
     focus_score: float = 0.0
     fatigue_score: float = 0.0
     # Athena-only
@@ -158,17 +146,17 @@ class NeurolinkState(BaseModel):
     fnirs_deoxy: float | None = None
 
 
+# ── API request/response schemas ──────────────────────────────────────────
+
 class ConnectRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
-    adapter_type: str = "ble"
-    device_model: str = "muse_s_gen1"
-    address: str | None = None
+    adapter_type: str = "ble"          # "ble" | "lsl" | "mock"
+    device_model: str = "muse_s_gen1"  # "muse_s_gen1" | "muse_s_athena"
+    address: str | None = None         # BLE MAC address (required for ble mode)
 
 
 class ConnectResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     ok: bool
     source: str
     message: str
@@ -176,13 +164,11 @@ class ConnectResponse(BaseModel):
 
 class DisconnectResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     ok: bool
 
 
 class BandPowerResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     channel: str
     alpha: float | None = None
     theta: float | None = None
@@ -194,17 +180,15 @@ class BandPowerResponse(BaseModel):
 
 class CalibrateResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
-    status: str
+    status: str                        # "started" | "complete" | "error"
     baseline_alpha: float | None = None
 
 
 class SessionSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
     id: int
-    started_at: Any  # datetime
-    ended_at: Any | None  # datetime | None
+    started_at: datetime
+    ended_at: datetime | None = None
     device_model: str
     adapter_type: str
     frame_count: int
@@ -213,10 +197,9 @@ class SessionSummary(BaseModel):
 
 class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
-
-    status: str
+    status: str                        # "ok" | "degraded"
     adapter_type: str
     adapter_connected: bool
     hub_frame_count: int
-    redis: str
-    db: str
+    redis: str                         # "connected" | "error" | "disabled"
+    db: str                            # "connected" | "error"
