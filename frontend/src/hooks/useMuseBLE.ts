@@ -38,6 +38,13 @@
  *   browser flag for this. We surface this as the 'insecure_origin' status
  *   so the UI can show a specific, actionable error rather than the generic
  *   "browser not supported" warning.
+ *
+ * optionalServices note:
+ *   requestDevice({ filters, optionalServices }) expects SERVICE UUIDs in
+ *   optionalServices — NOT characteristic UUIDs. All Muse S characteristics
+ *   live under the single 0xfe8d service declared in filters, so
+ *   optionalServices is omitted entirely. Chrome grants full access to every
+ *   characteristic under a service that appears in filters.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -235,11 +242,10 @@ export function useMuseBLE(apiUrl: string): UseMuseBLEReturn {
     let device: BluetoothDevice
     try {
       device = await (navigator as Navigator & { bluetooth: Bluetooth }).bluetooth.requestDevice({
+        // filters grants access to all characteristics under 0xfe8d.
+        // optionalServices is intentionally omitted — it expects service UUIDs,
+        // not characteristic UUIDs, and all Muse S chars live under 0xfe8d.
         filters: [{ services: [MUSE_SERVICE] }],
-        optionalServices: [
-          CHAR_CONTROL, CHAR_EEG_TP9, CHAR_EEG_AF7,
-          CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_TELEMETRY,
-        ],
       })
     } catch (err) {
       // User cancelled the picker — return to idle cleanly
