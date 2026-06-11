@@ -43,6 +43,14 @@ def _service() -> NeuroLinkService:
     return NeuroLinkService(hub=EEGHub())
 
 
+# Patch target for SessionLogRepository.
+# Each service method does a LAZY import:
+#   from neurolink.db.repository import SessionLogRepository
+# so the class is never bound on the service module. We must patch it
+# at its definition site so the lazy import picks up the mock.
+_REPO_PATH = "neurolink.db.repository.SessionLogRepository"
+
+
 # ===========================================================================
 # hub._schedule_redis_push — loop.is_running() == True path
 # ===========================================================================
@@ -78,16 +86,6 @@ async def test_push_state_to_redis_calls_cache():
 
 # ===========================================================================
 # service._create_db_session — success path
-#
-# service._create_db_session does:
-#   async with self._db_session_factory() as db:
-#       repo = SessionLogRepository(db)
-#       entry = await repo.create_session(...)
-#       self._db_session_id = entry.id
-#
-# The factory yields an AsyncSession, NOT a repo.
-# Patch SessionLogRepository at class level so the one created internally
-# returns our controlled mock.
 # ===========================================================================
 
 async def test_create_db_session_success():
@@ -102,11 +100,11 @@ async def test_create_db_session_success():
 
     @asynccontextmanager
     async def _factory():
-        yield MagicMock()  # yields a fake AsyncSession
+        yield MagicMock()  # fake AsyncSession
 
     svc.set_db_session_factory(_factory)
 
-    with patch("neurolink.service.SessionLogRepository", return_value=mock_repo):
+    with patch(_REPO_PATH, return_value=mock_repo):
         await svc._create_db_session("mock", "muse_s_gen1", "AA:BB:CC")
 
     assert svc._db_session_id == 42
@@ -143,7 +141,7 @@ async def test_close_db_session_with_session_id():
 
     svc.set_db_session_factory(_factory)
 
-    with patch("neurolink.service.SessionLogRepository", return_value=mock_repo):
+    with patch(_REPO_PATH, return_value=mock_repo):
         await svc._close_db_session()
 
     mock_repo.end_session.assert_called_once()
@@ -189,7 +187,7 @@ async def test_get_sessions_with_factory():
 
     svc.set_db_session_factory(_factory)
 
-    with patch("neurolink.service.SessionLogRepository", return_value=mock_repo):
+    with patch(_REPO_PATH, return_value=mock_repo):
         sessions = await svc.get_sessions(limit=5)
 
     assert len(sessions) == 1
@@ -257,23 +255,17 @@ async def test_build_payload_fnirs_extra():
 
 # ===========================================================================
 # eeg_pump._build_payload — accel_buffer present but no gyro_buffer
-#
-# accel_buffer shape is (3, N). Providing 3 rows satisfies the
-# `len(sample.accel_buffer) >= 3` check so accel_z is extracted, but
-# gyro_buffer=None means the `if accel_buffer and gyro_buffer` branch
-# is False → imu_payload stays None.
 # ===========================================================================
 
 async def test_build_payload_accel_no_gyro_no_imu():
-    """accel_buffer present but gyro_buffer=None → imu_payload is None."""
+    """accel_buffer (3,N) present but gyro_buffer=None → imu_payload is None."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hardware.base import EEGSample
 
     hub = EEGHub()
     pump = EEGPump(adapter=AsyncMock(), hub=hub)
 
-    # Shape (3, 10) — correct format, 3 axis rows
-    accel_buf = np.zeros((3, 10), dtype=np.float32).tolist()
+    accel_buf = np.zeros((3, 10), dtype=np.float32).tolist()  # correct (3,N) shape
 
     sample = EEGSample(
         source="mock",
@@ -302,10 +294,10 @@ async def test_pump_loop_watchdog_fires():
 
     hub = EEGHub()
     adapter = AsyncMock()
-    adapter.read_sample.return_value = None  # no-op tick
+    adapter.read_sample.return_value = None
 
     pump = EEGPump(adapter=adapter, hub=hub, publish_hz=100.0)
-    pump._last_frame_ts = time.time() - 30.0  # 30 seconds ago → triggers watchdog
+    pump._last_frame_ts = time.time() - 30.0  # stale → triggers watchdog
     pump._running = True
 
     original_sleep = asyncio.sleep
@@ -326,7 +318,6 @@ async def test_pump_loop_watchdog_fires():
 # ===========================================================================
 
 def test_v01_region_b_high_beta():
-    """High beta with low alpha/theta should yield Region B (Albedo)."""
     region, stage = classify_v01(
         alpha=0.10, theta=0.10, beta=0.35, delta=0.10, gamma=0.05
     )
@@ -339,7 +330,6 @@ def test_v01_region_b_high_beta():
 # ===========================================================================
 
 def test_v01_region_d_citrinitas():
-    """High theta with low alpha should yield Region D (Citrinitas)."""
     region, stage = classify_v01(
         alpha=0.10, theta=0.25, beta=0.10, delta=0.05, gamma=0.05
     )
@@ -352,7 +342,6 @@ def test_v01_region_d_citrinitas():
 # ===========================================================================
 
 def test_v01_multiplicatio_faa_gate_blocks():
-    """Negative faa below threshold should fall back to Rubedo, not Multiplicatio."""
     region, stage = classify_v01(
         alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05,
         faa=-0.10,  # below _V01_MULTIPLICATIO_FAA threshold of -0.05
@@ -366,7 +355,6 @@ def test_v01_multiplicatio_faa_gate_blocks():
 # ===========================================================================
 
 def test_v2_citrinitas():
-    """Balanced alpha + theta below Rubedo thresholds → Citrinitas."""
     region, stage = classify_v2(
         BandPowers(alpha=0.22, theta=0.12, beta=0.10, delta=0.10, gamma=0.05)
     )
