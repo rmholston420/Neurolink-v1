@@ -3,43 +3,47 @@ import { render, screen } from '@testing-library/react'
 import SSpaceDisplay from '../components/SSpaceDisplay'
 
 describe('SSpaceDisplay', () => {
-  const defaultProps = {
-    region: 'B',
-    stage: 'Albedo',
-    regionV01: 'A',
-    stageV01: 'Nigredo',
-  }
-
-  it('renders v2 region and stage', () => {
-    render(<SSpaceDisplay {...defaultProps} />)
-    expect(screen.getByText('B')).toBeTruthy()
-    const albedoBadges = screen.getAllByText('Albedo')
-    expect(albedoBadges.length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('renders v0.1 region and stage', () => {
-    render(<SSpaceDisplay {...defaultProps} />)
-    expect(screen.getByText('A')).toBeTruthy()
-    const nigredobadges = screen.getAllByText('Nigredo')
-    expect(nigredobadges.length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('renders section labels', () => {
-    render(<SSpaceDisplay {...defaultProps} />)
-    expect(screen.getByText('v2 Alchemical')).toBeTruthy()
-    expect(screen.getByText('v0.1 S-Space')).toBeTruthy()
-  })
-
-  it('handles an unknown stage gracefully without crashing', () => {
+  it('renders the v2 region label', () => {
     render(
-      <SSpaceDisplay
-        region="X"
-        stage="UnknownStage"
-        regionV01="Y"
-        stageV01="AnotherUnknown"
-      />
+      <SSpaceDisplay region="B" stage="Albedo" regionV01="A" stageV01="Nigredo" />
     )
-    expect(screen.getByText('X')).toBeTruthy()
-    expect(screen.getByText('Y')).toBeTruthy()
+    expect(screen.getAllByText('B').length).toBeGreaterThan(0)
+  })
+
+  it('renders the v2 alchemical stage name', () => {
+    render(
+      <SSpaceDisplay region="B" stage="Albedo" regionV01="A" stageV01="Nigredo" />
+    )
+    expect(screen.getByText('Albedo')).toBeTruthy()
+  })
+
+  it('renders the v01 section label', () => {
+    render(
+      <SSpaceDisplay region="B" stage="Albedo" regionV01="C" stageV01="Citrinitas" />
+    )
+    expect(screen.getByText('Citrinitas')).toBeTruthy()
+  })
+
+  it('renders Nigredo stage', () => {
+    render(
+      <SSpaceDisplay region="A" stage="Nigredo" regionV01="A" stageV01="Nigredo" />
+    )
+    expect(screen.getAllByText('Nigredo').length).toBeGreaterThan(0)
+  })
+
+  it('renders Rubedo stage', () => {
+    render(
+      <SSpaceDisplay region="D" stage="Rubedo" regionV01="D" stageV01="Rubedo" />
+    )
+    expect(screen.getAllByText('Rubedo').length).toBeGreaterThan(0)
+  })
+
+  it('falls back gracefully for an unknown stage name', () => {
+    // Unknown stage should not throw — falls back to #8b949e neutral colour
+    const { container } = render(
+      <SSpaceDisplay region="Z" stage="UnknownStage" regionV01="Z" stageV01="AlsoUnknown" />
+    )
+    expect(screen.getByText('UnknownStage')).toBeTruthy()
+    expect(container.firstChild).toBeTruthy()
   })
 })

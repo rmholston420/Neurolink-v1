@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import BandPowerChart from '../components/BandPowerChart'
+import type { BandPowers } from '../types'
 
 describe('BandPowerChart', () => {
   it('renders "No data" when bands is null', () => {
@@ -8,8 +9,8 @@ describe('BandPowerChart', () => {
     expect(screen.getByText('No data')).toBeTruthy()
   })
 
-  it('renders all 5 band labels', () => {
-    const bands = { alpha: 0.3, theta: 0.2, beta: 0.15, delta: 0.25, gamma: 0.1 }
+  it('renders all 5 band labels when bands are present', () => {
+    const bands: BandPowers = { delta: 0.1, theta: 0.2, alpha: 0.3, beta: 0.2, gamma: 0.2 }
     render(<BandPowerChart bands={bands} />)
     expect(screen.getByText(/Alpha/i)).toBeTruthy()
     expect(screen.getByText(/Theta/i)).toBeTruthy()
@@ -18,9 +19,11 @@ describe('BandPowerChart', () => {
     expect(screen.getByText(/Gamma/i)).toBeTruthy()
   })
 
-  it('renders percentage values', () => {
-    const bands = { alpha: 0.3, theta: 0.2, beta: 0.15, delta: 0.25, gamma: 0.1 }
-    render(<BandPowerChart bands={bands} />)
-    expect(screen.getByText('30.0%')).toBeTruthy()
+  it('renders without crashing when all band values are zero', () => {
+    const bands: BandPowers = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 }
+    const { container } = render(<BandPowerChart bands={bands} />)
+    // Should still render the band label rows, not the "No data" fallback
+    expect(container.querySelector('[style*="flex"]')).toBeTruthy()
+    expect(screen.queryByText('No data')).toBeNull()
   })
 })

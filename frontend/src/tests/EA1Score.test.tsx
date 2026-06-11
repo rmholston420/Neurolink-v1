@@ -25,13 +25,26 @@ describe('EA1Score', () => {
     expect(screen.getByText('No data')).toBeTruthy()
   })
 
-  it('shows Eligible badge when eligible', () => {
+  it('shows Eligible badge when eligible is true', () => {
     render(<EA1Score ea1={makeEA1()} />)
     expect(screen.getByText('Eligible')).toBeTruthy()
   })
 
-  it('shows 100% score', () => {
+  it('shows 100% score when score is 1.0', () => {
     render(<EA1Score ea1={makeEA1()} />)
     expect(screen.getByText('100%')).toBeTruthy()
+  })
+
+  it('shows ineligible label and partial score when not eligible', () => {
+    const ea1 = makeEA1({ eligible: false, score: 0.4, criteria_met: 2, label: 'Not eligible' })
+    render(<EA1Score ea1={ea1} />)
+    expect(screen.getByText('Not eligible')).toBeTruthy()
+    expect(screen.getByText('40%')).toBeTruthy()
+  })
+
+  it('shows correct criteria count', () => {
+    const ea1 = makeEA1({ criteria_met: 3, criteria_total: 5 })
+    render(<EA1Score ea1={ea1} />)
+    expect(screen.getByText(/3 \/ 5 criteria met/)).toBeTruthy()
   })
 })
