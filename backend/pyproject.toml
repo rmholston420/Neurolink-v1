@@ -56,6 +56,15 @@ source = ["neurolink"]
 omit = [
   "*/tests/*",
   "*/migrations/*",
+  # Infrastructure requiring live services (hardware, Redis, DB, HTTP layer)
+  "*/neurolink/main.py",
+  "*/neurolink/routers/*",
+  "*/neurolink/ble_bridge.py",
+  "*/neurolink/hardware/muse_ble*",
+  "*/neurolink/cache/*",
+  "*/neurolink/db/*",
+  "*/neurolink/logging_config.py",
+  "*/neurolink/dependencies.py",
 ]
 
 [tool.coverage.report]
