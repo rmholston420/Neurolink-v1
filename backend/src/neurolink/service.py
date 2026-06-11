@@ -134,6 +134,7 @@ class NeuroLinkService:
             raise AdapterNotConnectedError("Cannot calibrate: no adapter connected.")
 
         if self._calibration_task and not self._calibration_task.done():
+            # Calibration already running — return started status idempotently
             return CalibrateResponse(status="started", baseline_alpha=None)
 
         cal_session = CalibrationSession(self._adapter, self._hub)
