@@ -7,10 +7,11 @@ Thin layer — delegates to NeuroLinkService.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import structlog
 from fastapi import APIRouter, Query
-from sse_starlette.sse import EventSourceResponse
+from fastapi.responses import StreamingResponse
 
 from neurolink.dependencies import ServiceDep
 from neurolink.models.eeg import (
@@ -78,49 +79,47 @@ async def get_sessions(
 
 
 @router.get("/stream")
-async def sse_stream(service: ServiceDep) -> EventSourceResponse:
-    """SSE endpoint — streams NeurolinkState JSON at 4 Hz.
+async def sse_stream(service: ServiceDep) -> StreamingResponse:
+    """SSE endpoint — streams NeurolinkState JSON.
 
-    Immediately emits the current hub state on connect so clients
-    receive data without waiting for the first queue push or keepalive.
-    Subsequent frames come from the SSE fan-out queue.
+    Uses raw StreamingResponse (not sse-starlette) so every yielded
+    chunk is flushed to the client immediately, making the first frame
+    visible to httpx.aiter_lines() without waiting for a buffer fill.
 
-    Each event: data: <NeurolinkState JSON>
+    Each event: event: state\ndata: <NeurolinkState JSON>\n\n
     """
 
     async def event_generator():
-        async for state in _stream_with_retry(service):
-            yield {
-                "data": state.model_dump_json(),
-                "event": "state",
-            }
+        q: asyncio.Queue = asyncio.Queue(maxsize=32)
+        hub = service._hub
+        hub.register_sse_queue(q)
+        try:
+            # Emit current state immediately so client always gets ≥1 frame
+            state = hub.get_state()
+            yield _sse_frame(state)
+            while True:
+                try:
+                    state = await asyncio.wait_for(q.get(), timeout=2.0)
+                    yield _sse_frame(state)
+                except TimeoutError:
+                    # Keepalive — emit current state
+                    yield _sse_frame(hub.get_state())
+        except asyncio.CancelledError:
+            pass
+        finally:
+            hub.unregister_sse_queue(q)
 
-    return EventSourceResponse(event_generator())
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
-async def _stream_with_retry(service):
-    """Yield NeurolinkState frames from the hub SSE queue.
-
-    Emits the current state immediately on registration so the client
-    always receives at least one frame, then fans out from the queue.
-    Handles reconnect: if the service is not connected, yields
-    the current (disconnected) state every 2 seconds until connected.
-    """
-    q: asyncio.Queue = asyncio.Queue(maxsize=32)
-    hub = service._hub
-    hub.register_sse_queue(q)
-    try:
-        # Yield current state immediately so client gets a frame right away
-        # without waiting for the next pump tick or keepalive timeout.
-        yield hub.get_state()
-        while True:
-            try:
-                state = await asyncio.wait_for(q.get(), timeout=2.0)
-                yield state
-            except TimeoutError:
-                # Keep connection alive — emit current state as keepalive
-                yield hub.get_state()
-    except asyncio.CancelledError:
-        pass
-    finally:
-        hub.unregister_sse_queue(q)
+def _sse_frame(state: NeurolinkState) -> bytes:
+    """Encode a NeurolinkState as a raw SSE frame (bytes)."""
+    data = json.loads(state.model_dump_json())
+    return f"event: state\ndata: {json.dumps(data)}\n\n".encode()
