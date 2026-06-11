@@ -6,6 +6,9 @@ import EA1Score from './components/EA1Score'
 import HRVPanel from './components/HRVPanel'
 import FocusFatigueGauge from './components/FocusFatigueGauge'
 import ContactQuality from './components/ContactQuality'
+import BreathingPanel from './components/BreathingPanel'
+import IMUPanel from './components/IMUPanel'
+import CalibrationPanel from './components/CalibrationPanel'
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000'
 
@@ -135,6 +138,27 @@ export default function App() {
             poorContact={state?.poor_contact ?? false}
             contactQuality={state?.contact_quality ?? null}
           />
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.cardTitle}>Breathing</div>
+          <BreathingPanel
+            rrBpm={state?.rr_bpm ?? null}
+          />
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.cardTitle}>Head Pose & Motion</div>
+          <IMUPanel
+            pitchDeg={state?.pitch_deg ?? null}
+            rollDeg={state?.roll_deg ?? null}
+            motionRms={state?.motion_rms ?? null}
+          />
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.cardTitle}>Calibration</div>
+          <CalibrationPanel apiUrl={API_URL} />
         </div>
       </div>
 
