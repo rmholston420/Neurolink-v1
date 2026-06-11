@@ -102,8 +102,9 @@ class EEGPump:
         # Band powers
         bands_dict: dict[str, float] = {}
         if sample.eeg_buffer:
-            eeg_arr = np.array(sample.eeg_buffer, dtype=np.float32)
-            if eeg_arr.shape[1] >= 2:
+            _min_len = min(len(b) for b in sample.eeg_buffer)
+            if _min_len >= 2:
+                eeg_arr = np.array([b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32)
                 bands_dict = compute_band_powers_from_buffer(eeg_arr, fs=_EEG_FS)
 
         bands = BandPowers(
