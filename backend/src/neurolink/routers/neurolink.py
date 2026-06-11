@@ -81,10 +81,22 @@ async def get_sessions(
 async def sse_stream(service: ServiceDep) -> EventSourceResponse:
     """SSE endpoint — streams NeurolinkState JSON at 4 Hz.
 
+    Immediately emits the current hub state on connect so clients
+    receive data without waiting for the first queue push or keepalive.
+    Subsequent frames come from the SSE fan-out queue.
+
     Each event: data: <NeurolinkState JSON>
     """
 
     async def event_generator():
+        # Emit current state immediately on connect (before queue registration)
+        # so that tests and clients that prime the hub before connecting
+        # receive a frame without waiting for the keepalive timeout.
+        current = service._hub.get_state()
+        yield {
+            "data": current.model_dump_json(),
+            "event": "state",
+        }
         async for state in _stream_with_retry(service):
             yield {
                 "data": state.model_dump_json(),
@@ -109,7 +121,7 @@ async def _stream_with_retry(service):
                 state = await asyncio.wait_for(q.get(), timeout=2.0)
                 yield state
             except TimeoutError:
-                # Keep connection alive
+                # Keep connection alive — emit current state as keepalive
                 yield hub.get_state()
     except asyncio.CancelledError:
         pass

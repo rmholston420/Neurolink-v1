@@ -11,7 +11,11 @@ import json
 
 
 async def test_sse_stream_emits_at_least_one_frame(app):
-    """SSE /stream must emit at least one 'event: state' frame after hub.update()."""
+    """SSE /stream must emit at least one 'event: state' frame.
+
+    The stream now emits the current hub state immediately on connect
+    (before entering the queue loop), so no keepalive wait is needed.
+    """
     import httpx
     from httpx import ASGITransport
 
@@ -39,8 +43,6 @@ async def test_sse_stream_emits_at_least_one_frame(app):
                         pending_event = line.split(":", 1)[1].strip()
                     elif line.startswith("data:"):
                         raw = line.split(":", 1)[1].strip()
-                        # Accept frames from both named 'state' events and
-                        # un-named message events (proxy compat)
                         if pending_event in ("state", None):
                             try:
                                 received_frames.append(json.loads(raw))
@@ -50,16 +52,15 @@ async def test_sse_stream_emits_at_least_one_frame(app):
                         if received_frames:
                             return  # Got at least one frame — done
 
+    # 4 second timeout is ample — the first frame is emitted immediately now
     try:
-        await asyncio.wait_for(collect_sse(), timeout=8.0)
-    except (TimeoutError, asyncio.TimeoutError):
-        pass  # Timeout is acceptable if SSE keepalive is the only emission
+        await asyncio.wait_for(collect_sse(), timeout=4.0)
+    except TimeoutError:
+        pass
 
-    # The hub was primed with a frame before opening the stream.
-    # On a healthy backend the 2-second SSE keepalive will emit the hub state.
     assert len(received_frames) >= 1, (
-        "SSE stream emitted no frames within 8 s after hub.update(). "
-        "Check that /stream is registered and SSE fan-out is wired."
+        "SSE stream emitted no frames. Check that /stream is registered "
+        "and the event_generator yields the initial state."
     )
 
     frame = received_frames[0]

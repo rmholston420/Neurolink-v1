@@ -12,8 +12,8 @@ from neurolink.routers.health import router as health_router
 from neurolink.routers.neurolink import router as neurolink_router
 
 __all__ = [
-    "neurolink_router",
-    "health_router",
     "calibration_router",
     "eeg_gate_router",
+    "health_router",
+    "neurolink_router",
 ]

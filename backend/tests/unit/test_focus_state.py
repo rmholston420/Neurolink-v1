@@ -1,41 +1,62 @@
-"""Unit tests for focus_state.py."""
+"""Unit tests for neurolink.focus_state — pure functions, no I/O."""
 
 from __future__ import annotations
 
-from neurolink.focus_state import FocusState, classify_focus, compute_focus_score
+import pytest
+
+from neurolink.focus_state import (
+    FocusState,
+    classify_focus,
+    compute_focus_score,
+    is_blocking,
+    set_current_focus_score,
+)
 
 
-def test_classify_focus_high_above_075():
-    state = classify_focus(0.80)
-    assert state == FocusState.HIGH_FOCUS
+def test_classify_focus_high():
+    assert classify_focus(0.80) == FocusState.HIGH_FOCUS
 
 
 def test_classify_focus_moderate():
-    state = classify_focus(0.60)
-    assert state == FocusState.MODERATE_FOCUS
+    assert classify_focus(0.60) == FocusState.MODERATE_FOCUS
 
 
 def test_classify_focus_low():
-    state = classify_focus(0.35)
-    assert state == FocusState.LOW_FOCUS
+    assert classify_focus(0.30) == FocusState.LOW_FOCUS
 
 
-def test_classify_focus_distracted_below_025():
-    state = classify_focus(0.15)
-    assert state == FocusState.DISTRACTED
+def test_classify_focus_distracted():
+    assert classify_focus(0.10) == FocusState.DISTRACTED
 
 
-def test_classify_focus_boundary_at_075():
-    state = classify_focus(0.75)
-    assert state == FocusState.HIGH_FOCUS
+def test_classify_focus_boundary_high():
+    assert classify_focus(0.75) == FocusState.HIGH_FOCUS
 
 
-def test_compute_focus_score_in_range():
-    s = compute_focus_score(bands_alpha=0.2, bands_beta=0.15, baseline_alpha=0.3)
-    assert 0.0 <= s <= 1.0
+def test_compute_focus_score_suppressed_alpha():
+    # alpha well below baseline -> high focus
+    score = compute_focus_score(bands_alpha=0.05, bands_beta=0.10, baseline_alpha=0.30)
+    assert score > 0.5
 
 
-def test_compute_focus_score_high_beta_reduces_focus():
-    s_low_beta = compute_focus_score(0.2, 0.05, 0.3)
-    s_high_beta = compute_focus_score(0.2, 0.45, 0.3)
-    assert s_low_beta > s_high_beta
+def test_compute_focus_score_high_beta_penalty():
+    # Very high beta -> lower score
+    low_beta = compute_focus_score(0.05, 0.05, 0.30)
+    high_beta = compute_focus_score(0.05, 0.50, 0.30)
+    assert high_beta < low_beta
+
+
+def test_compute_focus_score_zero_baseline_fallback():
+    # Zero baseline should not raise — uses fallback 0.3
+    score = compute_focus_score(0.10, 0.10, 0.0)
+    assert 0.0 <= score <= 1.0
+
+
+def test_is_blocking_when_low():
+    set_current_focus_score(0.10)
+    assert is_blocking() is True
+
+
+def test_is_blocking_when_high():
+    set_current_focus_score(0.80)
+    assert is_blocking() is False

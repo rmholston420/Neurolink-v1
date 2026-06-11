@@ -54,25 +54,13 @@ class EEGHub:
         self._sse_lock = threading.Lock()
 
     def update(self, payload: IngestPayload) -> NeurolinkState:
-        """Ingest a new payload, run classifiers, update state, fan-out to SSE.
-
-        Implements Task 7.2: after writing state, schedules an async Redis
-        write-through via asyncio.ensure_future so the hot sync path is not
-        blocked by I/O.
-
-        Args:
-            payload: IngestPayload from EEGPump
-
-        Returns:
-            Updated NeurolinkState.
-        """
+        """Ingest a new payload, run classifiers, update state, fan-out to SSE."""
         bands = payload.bands
 
         # ── v2 classifier (always runs) ─────────────────────────────────────
         region_v2, stage_v2 = classify_v2(bands)
         s_space = compute_s_space(bands)
 
-        # Set v2 region/stage on payload for EA1 scorer
         payload.region = region_v2
         payload.alchemical_stage = stage_v2
         payload.s_space = s_space
@@ -101,7 +89,6 @@ class EEGHub:
         focus_score = compute_focus_score(bands.alpha, bands.beta, self.baseline_alpha)
         focus_state = classify_focus(focus_score)
 
-        # Update module-level focus score cache (used by is_blocking())
         set_current_focus_score(focus_score)
 
         # ── Build NeurolinkState ─────────────────────────────────────────
@@ -140,25 +127,17 @@ class EEGHub:
             self._state = new_state
             self._ea1 = ea1_result
 
-        # Fan-out to SSE queues (non-blocking)
         self._fanout(new_state)
-
-        # Task 7.2: Redis write-through — fire-and-forget async push
         self._schedule_redis_push(new_state)
 
         return new_state
 
     def _schedule_redis_push(self, state: NeurolinkState) -> None:
-        """Schedule a non-blocking Redis write-through for the new state.
-
-        Uses asyncio.get_event_loop().call_soon_threadsafe so this is safe
-        whether update() is called from the event loop thread or a worker.
-        No-op if no running event loop is available (e.g. during tests).
-        """
+        """Schedule a non-blocking Redis write-through for the new state."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.ensure_future(
+                _task = asyncio.ensure_future(  # noqa: RUF006
                     _push_state_to_redis(state.model_dump()),
                     loop=loop,
                 )
@@ -223,11 +202,7 @@ class EEGHub:
 
 
 async def _push_state_to_redis(state_dict: dict) -> None:
-    """Coroutine: push state dict to Redis (Task 7.2 write-through).
-
-    Delegated to cache.redis_client.push_state which handles the
-    NEUROLINK_REDIS_ENABLED guard and swallows connection errors.
-    """
+    """Coroutine: push state dict to Redis (Task 7.2 write-through)."""
     from neurolink.cache.redis_client import push_state
 
     await push_state(state_dict)
