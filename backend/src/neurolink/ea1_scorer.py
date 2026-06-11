@@ -1,108 +1,144 @@
 """EA-1 multimodal eligibility scorer.
 
 Ported from Rigpa-v2 ea1_scorer.py.
-5-criterion gated scorer for advanced contemplative practice protocol.
+5-criterion eligibility system for advanced contemplative protocols.
+All functions are pure.
 """
 from __future__ import annotations
 
 from neurolink.models.eeg import EA1Criterion, EA1Result, IngestPayload, SSpaceCoords
 
-# Default thresholds
-_ALPHA_THRESHOLD: float = 0.25
-_THETA_THRESHOLD: float = 0.15
-_MOTION_RMS_MAX: float = 0.5
-_CONTACT_QUALITY_MIN: float = 0.5
-_S_SPACE_GATE_REGIONS: frozenset[str] = frozenset({"C", "D", "E"})
-_ELIGIBILITY_THRESHOLD: float = 0.60  # score >= 0.60 -> eligible (3+ / 5)
+# ── Thresholds ────────────────────────────────────────────────────────────────────
+ALPHA_THRESHOLD: float = 0.30
+THETA_THRESHOLD: float = 0.15
+MOTION_RMS_GATE: float = 0.5   # above this = too much motion
+CONTACT_QUALITY_MIN: float = 0.5  # below this = poor contact
+
+# S-space gating — must be in region D or E for eligibility
+_ELIGIBLE_REGIONS = {"D", "E"}
+
+# Overlay mode mapping: criteria_met -> mode label
+_OVERLAY_MODES: list[str] = ["X0", "X1", "X2", "X3", "X4", "X5"]
+
+# Alchemical stage -> overlay mode override
+_STAGE_OVERLAY: dict[str, str] = {
+    "Rubedo": "X4",
+    "Multiplicatio": "X5",
+    "Citrinitas": "X3",
+    "Solutio": "X3",
+}
 
 
 def score(payload: IngestPayload) -> EA1Result:
-    """Score EA-1 multimodal eligibility from an ingest payload.
+    """Compute EA-1 eligibility from an IngestPayload.
 
-    5 criteria:
-    1. alpha_power >= 0.25
+    Criteria:
+    1. alpha_power >= 0.30
     2. theta_power >= 0.15
-    3. s_space gate: region in {C,D,E} and not poor_contact
-    4. motion gate: motion_rms < 0.5 (or None -> pass)
-    5. contact_quality >= 0.5 (or None -> pass)
+    3. s_space region in {D, E} (v2 classifier region from payload)
+    4. motion_rms < 0.5 (if IMU data present)
+    5. contact_quality >= 0.5 (if contact data present)
 
-    Score = criteria_met / 5. Eligible if score >= 0.60 (3+).
+    Args:
+        payload: IngestPayload from hub.update()
+
+    Returns:
+        EA1Result with eligibility, score, and per-criterion details.
     """
-    criteria: dict[str, EA1Criterion] = {}
+    bands = payload.bands
 
     # Criterion 1: alpha power
-    alpha_val = payload.bands.alpha
-    c1_met = alpha_val >= _ALPHA_THRESHOLD
-    criteria["alpha_power"] = EA1Criterion(
-        value=alpha_val,
-        threshold=_ALPHA_THRESHOLD,
+    alpha_met = bands.alpha >= ALPHA_THRESHOLD
+    crit_alpha = EA1Criterion(
+        value=bands.alpha,
+        threshold=ALPHA_THRESHOLD,
         units="fraction",
-        met=c1_met,
+        met=alpha_met,
     )
 
     # Criterion 2: theta power
-    theta_val = payload.bands.theta
-    c2_met = theta_val >= _THETA_THRESHOLD
-    criteria["theta_power"] = EA1Criterion(
-        value=theta_val,
-        threshold=_THETA_THRESHOLD,
+    theta_met = bands.theta >= THETA_THRESHOLD
+    crit_theta = EA1Criterion(
+        value=bands.theta,
+        threshold=THETA_THRESHOLD,
         units="fraction",
-        met=c2_met,
+        met=theta_met,
     )
 
-    # Criterion 3: S-space gate
-    s_space_ok = payload.region in _S_SPACE_GATE_REGIONS and not payload.poor_contact
-    criteria["s_space_gate"] = EA1Criterion(
+    # Criterion 3: S-space gating
+    region = payload.region
+    s_space_met = region in _ELIGIBLE_REGIONS
+    crit_sspace = EA1Criterion(
         value=None,
         threshold=None,
         units="region",
-        met=s_space_ok,
+        met=s_space_met,
     )
 
-    # Criterion 4: motion gate
-    motion_rms = payload.imu.motion_rms if payload.imu is not None else None
-    if motion_rms is None:
-        c4_met = True  # no IMU data -> pass
-    else:
-        c4_met = motion_rms < _MOTION_RMS_MAX
-    criteria["motion_gate"] = EA1Criterion(
+    # Criterion 4: motion gating
+    motion_rms = payload.imu.motion_rms if payload.imu else 0.0
+    motion_met = motion_rms < MOTION_RMS_GATE
+    crit_motion = EA1Criterion(
         value=motion_rms,
-        threshold=_MOTION_RMS_MAX,
-        units="g_rms",
-        met=c4_met,
+        threshold=MOTION_RMS_GATE,
+        units="g",
+        met=motion_met,
     )
 
     # Criterion 5: contact quality
     contact_quality = payload.contact_quality
-    if contact_quality is None:
-        c5_met = True  # no contact quality -> pass
+    if contact_quality is not None:
+        contact_met = not payload.poor_contact and contact_quality >= CONTACT_QUALITY_MIN
     else:
-        c5_met = contact_quality >= _CONTACT_QUALITY_MIN
-    criteria["contact_quality"] = EA1Criterion(
+        # No contact data — only fail if poor_contact is explicitly set
+        contact_met = not payload.poor_contact
+    crit_contact = EA1Criterion(
         value=contact_quality,
-        threshold=_CONTACT_QUALITY_MIN,
+        threshold=CONTACT_QUALITY_MIN,
         units="fraction",
-        met=c5_met,
+        met=contact_met,
     )
 
-    criteria_list = [c1_met, c2_met, s_space_ok, c4_met, c5_met]
+    criteria_list = [alpha_met, theta_met, s_space_met, motion_met, contact_met]
     criteria_met = sum(criteria_list)
-    score_val = criteria_met / 5.0
-    eligible = score_val >= _ELIGIBILITY_THRESHOLD
-    overlay_mode = f"X{criteria_met}"
+    total = len(criteria_list)
+    eligible = all(criteria_list)
+
+    raw_score = criteria_met / total
+
+    # Gates
+    gates = {
+        "s_space": s_space_met,
+        "motion": motion_met,
+    }
+
+    # Overlay mode
+    stage = payload.alchemical_stage
+    if eligible:
+        overlay_mode = _STAGE_OVERLAY.get(stage, f"X{criteria_met}")
+    else:
+        idx = min(criteria_met, len(_OVERLAY_MODES) - 1)
+        overlay_mode = _OVERLAY_MODES[idx]
+
     label = "Eligible" if eligible else "Ineligible"
 
     return EA1Result(
         eligible=eligible,
-        score=score_val,
+        score=raw_score,
         criteria_met=criteria_met,
-        criteria_total=5,
+        criteria_total=total,
         label=label,
-        gates={"s_space": s_space_ok, "motion": c4_met},
-        criteria={k: v.model_dump() for k, v in criteria.items()},
+        gates=gates,
+        criteria={
+            "alpha_power": crit_alpha.model_dump(),
+            "theta_power": crit_theta.model_dump(),
+            "s_space": crit_sspace.model_dump(),
+            "motion": crit_motion.model_dump(),
+            "contact_quality": crit_contact.model_dump(),
+        },
         overlay_mode=overlay_mode,
-        alchemical_stage=payload.alchemical_stage,
+        alchemical_stage=stage,
         s_space_coords=payload.s_space,
-        s_space_region=payload.region,
+        s_space_region=region,
         integration_coverage=payload.integration_coverage,
     )

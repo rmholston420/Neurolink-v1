@@ -1,7 +1,10 @@
-"""BLE supervisor loop for Muse S Gen 1/Gen 2.
+"""BLE supervisor loop for Muse S Gen 1.
 
+Wraps MuseSBleAdapter with automatic reconnect on link drop.
 Ported from Rigpa-v2 ble_bridge.py.
-Manages reconnect logic; protocol constants verbatim.
+
+BLE protocol constants (CMD_DATA, KEEPALIVE_SEC, RECONNECT_WAIT_SEC)
+are defined in hardware/muse_s/ble_adapter.py and must not be overridden.
 """
 from __future__ import annotations
 
@@ -9,70 +12,71 @@ import asyncio
 
 import structlog
 
+from neurolink.hardware.muse_s.ble_adapter import RECONNECT_WAIT_SEC
+
 log = structlog.get_logger(__name__)
 
-# Protocol constants — DO NOT MODIFY
-RECONNECT_WAIT: float = 20.0
 
+class BLEBridge:
+    """Supervisor that keeps a MuseSBleAdapter connected.
 
-class BLESupervisor:
-    """Supervisor that restarts the BLE adapter after a link drop.
-
-    Runs as a background asyncio Task. On link drop, waits RECONNECT_WAIT
-    seconds then reconnects.
+    Reconnects automatically after link drop (up to RECONNECT_WAIT_SEC wait).
     """
 
-    def __init__(self, adapter, on_sample=None) -> None:  # type: ignore[type-arg]
-        """
-        Args:
-            adapter: MuseSBleAdapter instance
-            on_sample: optional async callable(EEGSample) called for each frame
-        """
+    def __init__(self, adapter) -> None:  # type: ignore[type-arg]
         self._adapter = adapter
-        self._on_sample = on_sample
-        self._running = False
-        self._task: asyncio.Task | None = None  # type: ignore[type-arg]
+        self._task: asyncio.Task | None = None
+        self._running: bool = False
         self.link_dropped: asyncio.Event = asyncio.Event()
 
     async def start(self) -> None:
         """Start the supervisor loop as a background task."""
         self._running = True
-        self._task = asyncio.create_task(self._run())
+        self._task = asyncio.create_task(self._supervisor())
 
     async def stop(self) -> None:
-        """Stop the supervisor loop."""
+        """Stop the supervisor loop and disconnect."""
         self._running = False
-        if self._task is not None:
+        if self._task:
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        if self._adapter.is_connected:
+            await self._adapter.disconnect()
 
-    async def _run(self) -> None:
-        """Main supervisor loop: connect, stream, reconnect on drop."""
+    async def _supervisor(self) -> None:
+        """Supervisor loop: connect, watch for drops, reconnect."""
         while self._running:
             try:
-                await self._adapter.connect()
-                self.link_dropped.clear()
-                log.info("ble_supervisor_streaming")
-                async for sample in self._adapter.stream():
-                    if not self._running:
-                        return
-                    if self.link_dropped.is_set():
-                        break
-                    if self._on_sample is not None:
-                        await self._on_sample(sample)
-            except asyncio.CancelledError:
-                return
+                if not self._adapter.is_connected:
+                    log.info("ble_bridge_connecting", address=getattr(self._adapter, '_address', ''))
+                    await self._adapter.connect()
+                    self.link_dropped.clear()
+                    log.info("ble_bridge_connected")
+
+                # Wait until link drops or stop is requested
+                await self._wait_for_link_drop()
+
+                if not self._running:
+                    break
+
+                log.warning("ble_bridge_link_dropped_reconnecting",
+                            wait_sec=RECONNECT_WAIT_SEC)
+                if self._adapter.is_connected:
+                    await self._adapter.disconnect()
+                await asyncio.sleep(RECONNECT_WAIT_SEC)
+
             except Exception as exc:
-                log.warning("ble_supervisor_error", error=str(exc))
+                log.error("ble_bridge_error", error=str(exc))
+                await asyncio.sleep(RECONNECT_WAIT_SEC)
 
-            if not self._running:
+    async def _wait_for_link_drop(self) -> None:
+        """Block until link_dropped event is set or adapter disconnects."""
+        while self._running:
+            if self.link_dropped.is_set():
                 return
-
-            log.info("ble_supervisor_reconnect_wait", wait_sec=RECONNECT_WAIT)
-            try:
-                await asyncio.sleep(RECONNECT_WAIT)
-            except asyncio.CancelledError:
+            if not self._adapter.is_connected:
                 return
+            await asyncio.sleep(1.0)

@@ -1,54 +1,59 @@
-"""Fatigue detector using rolling theta/alpha ratio.
+"""Fatigue detector: rolling 30-sample theta/alpha ratio.
 
 Ported from Rigpa-v3 fatigue.py.
+Thread-safe via internal deque (no additional locking needed for single writer).
 """
 from __future__ import annotations
 
 from collections import deque
 
-_WINDOW_SIZE: int = 30  # rolling window in frames
-_EPS: float = 1e-6     # prevent division by zero
+_WINDOW_SIZE: int = 30
+_THETA_DOMINANCE_THRESHOLD: float = 1.5  # theta/alpha ratio above which fatigue is high
 
 
 class FatigueDetector:
-    """Computes a rolling fatigue score as theta/alpha ratio.
+    """Rolling window theta/alpha ratio fatigue tracker.
 
-    Score approaches 1.0 as theta dominates; approaches 0 as alpha dominates.
-    Normalised by sigmoid to [0, 1] range.
+    A rising theta/alpha ratio is associated with fatigue and drowsiness.
     """
 
     def __init__(self, window: int = _WINDOW_SIZE) -> None:
         self._window = window
-        self._theta_buf: deque[float] = deque(maxlen=window)
-        self._alpha_buf: deque[float] = deque(maxlen=window)
+        self._ratios: deque[float] = deque(maxlen=window)
 
     def update(self, theta: float, alpha: float) -> float:
-        """Update rolling window and return current fatigue score.
+        """Update the rolling window with a new theta/alpha ratio.
 
         Args:
-            theta: current theta band power fraction
-            alpha: current alpha band power fraction
+            theta: Theta band power fraction
+            alpha: Alpha band power fraction
 
         Returns:
-            Fatigue score in [0, 1]. 0 = not fatigued; 1 = highly fatigued.
+            Current normalised fatigue score in [0, 1].
+            0.0 if fewer than 2 samples have been recorded.
         """
-        self._theta_buf.append(theta)
-        self._alpha_buf.append(alpha)
-        return self.score()
+        ratio = theta / (alpha + 1e-6)
+        self._ratios.append(ratio)
+        return self._compute_score()
 
-    def score(self) -> float:
-        """Return current fatigue score without updating buffers."""
-        if not self._theta_buf:
+    def _compute_score(self) -> float:
+        """Compute normalised fatigue score from current rolling window."""
+        if len(self._ratios) < 2:
             return 0.0
-        import numpy as np
-        mean_theta = float(np.mean(list(self._theta_buf)))
-        mean_alpha = float(np.mean(list(self._alpha_buf)))
-        ratio = mean_theta / (mean_alpha + _EPS)
-        # Normalise: ratio of ~1 -> fatigued; ratio ~0 -> not fatigued
-        # Use sigmoid-like normalisation: score = ratio / (1 + ratio)
-        return float(ratio / (1.0 + ratio))
+        mean_ratio = sum(self._ratios) / len(self._ratios)
+        # Normalise: 0 = no fatigue (ratio=0), 1 = high fatigue (ratio >= threshold)
+        return float(min(1.0, mean_ratio / _THETA_DOMINANCE_THRESHOLD))
 
     def reset(self) -> None:
-        """Clear rolling buffers."""
-        self._theta_buf.clear()
-        self._alpha_buf.clear()
+        """Clear the rolling window."""
+        self._ratios.clear()
+
+    @property
+    def score(self) -> float:
+        """Return current fatigue score without updating."""
+        return self._compute_score()
+
+    @property
+    def sample_count(self) -> int:
+        """Return number of samples in current window."""
+        return len(self._ratios)

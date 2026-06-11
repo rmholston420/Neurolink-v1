@@ -1,85 +1,86 @@
-"""Calibration session: 30-second baseline alpha capture.
+"""Calibration session — 30-second baseline alpha capture.
 
 Ported from Rigpa-v2 calibration_router.py + Rigpa-v3 calibration.py.
 """
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator
+import time
 
 import numpy as np
 import structlog
 
-from neurolink.exceptions import CalibrationBusyError
+from neurolink.hardware.base import HardwareAdapter
 
 log = structlog.get_logger(__name__)
 
-_CALIBRATION_SEC: float = 30.0
+_CALIBRATION_DURATION_SEC: float = 30.0
 _MIN_FRAMES: int = 10
 
 
 class CalibrationSession:
-    """Collects alpha power samples over 30 seconds and sets hub.baseline_alpha."""
+    """Runs a 30-second baseline alpha capture using the active adapter.
 
-    def __init__(self, hub) -> None:  # type: ignore[type-arg]
+    Sets hub.baseline_alpha on completion.
+    """
+
+    def __init__(self, adapter: HardwareAdapter, hub) -> None:  # type: ignore[type-arg]
+        self._adapter = adapter
         self._hub = hub
-        self._running = False
-        self._task: asyncio.Task | None = None  # type: ignore[type-arg]
+        self._running: bool = False
+        self._baseline_alpha: float | None = None
+
+    async def run(self) -> float | None:
+        """Run the calibration session and return the baseline alpha value.
+
+        Returns:
+            Mean alpha band power fraction, or None if insufficient data.
+        """
+        if self._running:
+            log.warning("calibration_already_running")
+            return None
+
+        self._running = True
+        alpha_samples: list[float] = []
+        start = time.monotonic()
+
+        log.info("calibration_started", duration_sec=_CALIBRATION_DURATION_SEC)
+
+        try:
+            from neurolink.dsp.bandpower import compute_band_powers_from_buffer
+
+            while time.monotonic() - start < _CALIBRATION_DURATION_SEC:
+                sample = await self._adapter.read_sample()
+                if sample is None:
+                    await asyncio.sleep(0.1)
+                    continue
+
+                if sample.eeg_buffer:
+                    eeg = np.array(sample.eeg_buffer, dtype=np.float32)
+                    bands = compute_band_powers_from_buffer(eeg)
+                    alpha = bands.get("alpha", 0.0)
+                    if alpha > 0:
+                        alpha_samples.append(alpha)
+
+        except asyncio.CancelledError:
+            log.warning("calibration_cancelled")
+        finally:
+            self._running = False
+
+        if len(alpha_samples) < _MIN_FRAMES:
+            log.warning("calibration_insufficient_data", n=len(alpha_samples))
+            return None
+
+        baseline = float(np.mean(alpha_samples))
+        self._baseline_alpha = baseline
+        self._hub.baseline_alpha = baseline
+        log.info("calibration_complete", baseline_alpha=baseline, n=len(alpha_samples))
+        return baseline
 
     @property
     def is_running(self) -> bool:
         return self._running
 
-    async def start(self) -> None:
-        """Start the 30-second calibration session.
-
-        Raises CalibrationBusyError if already running.
-        """
-        if self._running:
-            raise CalibrationBusyError("Calibration already running")
-        self._running = True
-        self._task = asyncio.create_task(self._run())
-        log.info("calibration_started", duration_sec=_CALIBRATION_SEC)
-
-    async def _run(self) -> None:
-        """Collect alpha samples for 30 seconds, then set baseline."""
-        alpha_samples: list[float] = []
-        elapsed = 0.0
-        interval = 0.25  # sample at 4 Hz
-
-        try:
-            while elapsed < _CALIBRATION_SEC:
-                await asyncio.sleep(interval)
-                elapsed += interval
-                state = self._hub.get_state()
-                if state.frame_count > 0:
-                    alpha_samples.append(state.bands.alpha)
-
-            if len(alpha_samples) >= _MIN_FRAMES:
-                baseline = float(np.mean(alpha_samples))
-                self._hub.baseline_alpha = baseline
-                log.info(
-                    "calibration_complete",
-                    baseline_alpha=baseline,
-                    n_samples=len(alpha_samples),
-                )
-            else:
-                log.warning(
-                    "calibration_insufficient_data",
-                    n_samples=len(alpha_samples),
-                )
-        except asyncio.CancelledError:
-            log.info("calibration_cancelled")
-        finally:
-            self._running = False
-
-    async def wait_for_completion(self) -> float | None:
-        """Wait for calibration to finish and return baseline_alpha."""
-        if self._task is not None:
-            await self._task
-        return self._hub.baseline_alpha
-
-    def cancel(self) -> None:
-        """Cancel an in-progress calibration."""
-        if self._task is not None:
-            self._task.cancel()
+    @property
+    def baseline_alpha(self) -> float | None:
+        return self._baseline_alpha
