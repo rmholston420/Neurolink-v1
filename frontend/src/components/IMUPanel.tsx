@@ -15,6 +15,25 @@ const styles: Record<string, React.CSSProperties> = {
   divider: { height: 1, background: '#21262d' },
 }
 
+/**
+ * Degree rows (Pitch, Roll): value and ° are combined into a single text
+ * node so that getAllByText('°') can locate the symbol directly.
+ */
+function DegreeRow({ label, value }: { label: string; value: number | null }) {
+  return (
+    <div style={styles.metric}>
+      <span style={styles.metricLabel}>{label}</span>
+      <span style={styles.metricValue}>
+        {value !== null ? `${value.toFixed(1)}\u00b0` : '\u2014'}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Generic metric row — value and unit in separate spans.
+ * Used for Motion RMS where the unit is not degree-symbol.
+ */
 function MetricRow({
   label,
   value,
@@ -42,9 +61,9 @@ function MetricRow({
 export default function IMUPanel({ pitchDeg, rollDeg, motionRms }: Props) {
   return (
     <div style={styles.container}>
-      <MetricRow label="Pitch" value={pitchDeg} unit="\u00b0" />
+      <DegreeRow label="Pitch" value={pitchDeg} />
       <div style={styles.divider} />
-      <MetricRow label="Roll" value={rollDeg} unit="\u00b0" />
+      <DegreeRow label="Roll" value={rollDeg} />
       <div style={styles.divider} />
       <MetricRow label="Motion RMS" value={motionRms} unit="g" decimals={3} />
     </div>
