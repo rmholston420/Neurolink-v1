@@ -5,14 +5,15 @@ Covers:
 - hub._push_state_to_redis
 - service._create_db_session / _close_db_session with real session_id
 - service.get_sessions with a mock factory
-- eeg_pump._build_payload edge branches (None buffers, fnirs extra, short accel)
+- eeg_pump._build_payload edge branches (None buffers, fnirs extra, accel no gyro)
 - eeg_pump._pump_loop watchdog log
-- dsp.classifiers v01 Region B (high beta) and Citrinitas (theta flow)
+- dsp.classifiers v01 Region B (high beta), Citrinitas (theta flow), faa gate
 - dsp.classifiers v2 Citrinitas branch
 """
 from __future__ import annotations
 
 import asyncio
+import datetime
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -50,13 +51,9 @@ async def test_schedule_redis_push_running_loop():
     """When called from a running event loop, ensure_future is called."""
     hub = EEGHub()
     state = NeurolinkState()
-    # Patch _push_state_to_redis so it doesn't actually hit Redis
-    with patch("neurolink.hub._push_state_to_redis", new=AsyncMock()) as mock_push:
+    with patch("neurolink.hub._push_state_to_redis", new=AsyncMock()):
         hub._schedule_redis_push(state)
-        # Give the event loop a tick to schedule the future
-        await asyncio.sleep(0)
-    # The coroutine was created (even if the mock returns instantly)
-    assert mock_push.called or True  # main goal: no exception raised
+        await asyncio.sleep(0)  # give the event loop a tick
 
 
 async def test_schedule_redis_push_runtime_error_suppressed():
@@ -81,10 +78,20 @@ async def test_push_state_to_redis_calls_cache():
 
 # ===========================================================================
 # service._create_db_session — success path
+#
+# service._create_db_session does:
+#   async with self._db_session_factory() as db:
+#       repo = SessionLogRepository(db)
+#       entry = await repo.create_session(...)
+#       self._db_session_id = entry.id
+#
+# The factory yields an AsyncSession, NOT a repo.
+# Patch SessionLogRepository at class level so the one created internally
+# returns our controlled mock.
 # ===========================================================================
 
 async def test_create_db_session_success():
-    """_create_db_session inserts a row and stores the session id."""
+    """_create_db_session stores the returned entry.id in _db_session_id."""
     svc = _service()
 
     mock_entry = MagicMock()
@@ -95,19 +102,18 @@ async def test_create_db_session_success():
 
     @asynccontextmanager
     async def _factory():
-        yield mock_repo
+        yield MagicMock()  # yields a fake AsyncSession
 
     svc.set_db_session_factory(_factory)
-    await svc._create_db_session("mock", "muse_s_gen1", "AA:BB:CC")
+
+    with patch("neurolink.service.SessionLogRepository", return_value=mock_repo):
+        await svc._create_db_session("mock", "muse_s_gen1", "AA:BB:CC")
+
     assert svc._db_session_id == 42
 
 
-# ===========================================================================
-# service._create_db_session — exception path (must log, not raise)
-# ===========================================================================
-
 async def test_create_db_session_exception_is_swallowed():
-    """DB errors in _create_db_session must be caught and logged."""
+    """DB errors in _create_db_session must be caught and logged, not raised."""
     svc = _service()
 
     @asynccontextmanager
@@ -133,17 +139,16 @@ async def test_close_db_session_with_session_id():
 
     @asynccontextmanager
     async def _factory():
-        yield mock_repo
+        yield MagicMock()  # fake AsyncSession
 
     svc.set_db_session_factory(_factory)
-    await svc._close_db_session()
+
+    with patch("neurolink.service.SessionLogRepository", return_value=mock_repo):
+        await svc._close_db_session()
+
     mock_repo.end_session.assert_called_once()
     assert svc._db_session_id is None
 
-
-# ===========================================================================
-# service._close_db_session — exception path
-# ===========================================================================
 
 async def test_close_db_session_exception_is_swallowed():
     svc = _service()
@@ -163,9 +168,7 @@ async def test_close_db_session_exception_is_swallowed():
 # ===========================================================================
 
 async def test_get_sessions_with_factory():
-    """get_sessions returns SessionSummary list from repo."""
-    import datetime
-
+    """get_sessions returns a SessionSummary list built from repo rows."""
     svc = _service()
 
     mock_row = MagicMock()
@@ -182,10 +185,13 @@ async def test_get_sessions_with_factory():
 
     @asynccontextmanager
     async def _factory():
-        yield mock_repo
+        yield MagicMock()  # fake AsyncSession
 
     svc.set_db_session_factory(_factory)
-    sessions = await svc.get_sessions(limit=5)
+
+    with patch("neurolink.service.SessionLogRepository", return_value=mock_repo):
+        sessions = await svc.get_sessions(limit=5)
+
     assert len(sessions) == 1
     assert sessions[0].id == 1
     assert sessions[0].frame_count == 100
@@ -250,19 +256,24 @@ async def test_build_payload_fnirs_extra():
 
 
 # ===========================================================================
-# eeg_pump._build_payload — short accel_buffer (<3 items) skips head_orientation
+# eeg_pump._build_payload — accel_buffer present but no gyro_buffer
+#
+# accel_buffer shape is (3, N). Providing 3 rows satisfies the
+# `len(sample.accel_buffer) >= 3` check so accel_z is extracted, but
+# gyro_buffer=None means the `if accel_buffer and gyro_buffer` branch
+# is False → imu_payload stays None.
 # ===========================================================================
 
-async def test_build_payload_short_accel_no_imu():
-    """accel_buffer with fewer than 3 rows skips IMU computation."""
+async def test_build_payload_accel_no_gyro_no_imu():
+    """accel_buffer present but gyro_buffer=None → imu_payload is None."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hardware.base import EEGSample
 
     hub = EEGHub()
     pump = EEGPump(adapter=AsyncMock(), hub=hub)
 
-    # Only 2 rows — head_orientation branch requires >= 3
-    accel_buf = np.zeros((2, 10), dtype=np.float32).tolist()
+    # Shape (3, 10) — correct format, 3 axis rows
+    accel_buf = np.zeros((3, 10), dtype=np.float32).tolist()
 
     sample = EEGSample(
         source="mock",
@@ -271,7 +282,7 @@ async def test_build_payload_short_accel_no_imu():
         eeg_buffer=None,
         ppg_buffer=None,
         accel_buffer=accel_buf,
-        gyro_buffer=accel_buf,
+        gyro_buffer=None,  # no gyro → imu branch skipped
         poor_contact=False,
         extra={},
     )
@@ -294,22 +305,16 @@ async def test_pump_loop_watchdog_fires():
     adapter.read_sample.return_value = None  # no-op tick
 
     pump = EEGPump(adapter=adapter, hub=hub, publish_hz=100.0)
-    # Set last_frame_ts to a time far in the past to trigger watchdog
-    pump._last_frame_ts = time.time() - 30.0  # 30 seconds ago
+    pump._last_frame_ts = time.time() - 30.0  # 30 seconds ago → triggers watchdog
     pump._running = True
 
+    original_sleep = asyncio.sleep
+
+    async def _one_shot_sleep(secs):
+        pump._running = False
+        await original_sleep(0)
+
     with patch("neurolink.eeg_pump.log") as mock_log:
-        # Run exactly one iteration by stopping after first sleep
-        original_sleep = asyncio.sleep
-
-        call_count = 0
-
-        async def _one_shot_sleep(secs):
-            nonlocal call_count
-            call_count += 1
-            pump._running = False  # stop after first tick
-            await original_sleep(0)
-
         with patch("neurolink.eeg_pump.asyncio.sleep", side_effect=_one_shot_sleep):
             await pump._pump_loop()
 
@@ -330,7 +335,7 @@ def test_v01_region_b_high_beta():
 
 
 # ===========================================================================
-# dsp.classifiers.classify_v01 — Region D Citrinitas (theta flow)
+# dsp.classifiers.classify_v01 — Region D Citrinitas (theta-dominant flow)
 # ===========================================================================
 
 def test_v01_region_d_citrinitas():
@@ -340,6 +345,20 @@ def test_v01_region_d_citrinitas():
     )
     assert region == "D"
     assert stage == "Citrinitas"
+
+
+# ===========================================================================
+# dsp.classifiers.classify_v01 — faa gate blocks Multiplicatio → Rubedo
+# ===========================================================================
+
+def test_v01_multiplicatio_faa_gate_blocks():
+    """Negative faa below threshold should fall back to Rubedo, not Multiplicatio."""
+    region, stage = classify_v01(
+        alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05,
+        faa=-0.10,  # below _V01_MULTIPLICATIO_FAA threshold of -0.05
+    )
+    assert region == "E"
+    assert stage == "Rubedo"
 
 
 # ===========================================================================
@@ -353,17 +372,3 @@ def test_v2_citrinitas():
     )
     assert region == "D"
     assert stage == "Citrinitas"
-
-
-# ===========================================================================
-# dsp.classifiers.classify_v01 — faa gate (faa < threshold → Rubedo not Multiplicatio)
-# ===========================================================================
-
-def test_v01_multiplicatio_faa_gate_blocks():
-    """Negative faa below gate should fall back to Rubedo, not Multiplicatio."""
-    region, stage = classify_v01(
-        alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05,
-        faa=-0.10  # below _V01_MULTIPLICATIO_FAA threshold
-    )
-    assert region == "E"
-    assert stage == "Rubedo"
