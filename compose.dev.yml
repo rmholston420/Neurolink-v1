@@ -4,10 +4,10 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6380:6379"  # host 6380 avoids conflict with any local Redis on 6379
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -28,8 +28,7 @@ services:
     volumes:
       - neurolink_data:/app/data
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
