@@ -64,8 +64,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     yield
 
-    # Shutdown
+    # Shutdown — also stop any running BLE bridge (Path B)
     log.info("neurolink_shutting_down")
+    try:
+        from neurolink.routers.ble import bridge_state
+        if bridge_state.bridge is not None:
+            await bridge_state.bridge.stop()
+            log.info("neurolink_ble_bridge_stopped_on_shutdown")
+    except Exception:
+        pass
     try:
         await service.disconnect()
     except Exception:
@@ -116,6 +123,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     # Include routers
+    from neurolink.routers.ble import router as ble_router
     from neurolink.routers.calibration import router as calibration_router
     from neurolink.routers.eeg_gate import router as eeg_gate_router
     from neurolink.routers.health import router as health_router
@@ -125,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(neurolink_router, prefix="/api/v1")
     app.include_router(calibration_router, prefix="/api/v1")
     app.include_router(eeg_gate_router, prefix="/api/v1")
+    app.include_router(ble_router, prefix="/api/v1/neurolink")
 
     log.info("neurolink_app_created")
     return app
