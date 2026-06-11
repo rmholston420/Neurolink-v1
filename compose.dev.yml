@@ -17,14 +17,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8003:8000"  # host 8003 → container 8000
     environment:
       - NEUROLINK_ADAPTER_TYPE=mock
       - NEUROLINK_DB_PATH=/app/data/neurolink.db
       - NEUROLINK_REDIS_URL=redis://redis:6379/0
       - NEUROLINK_REDIS_ENABLED=false
       - NEUROLINK_LOG_JSON=true
-      - NEUROLINK_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+      - NEUROLINK_CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:8003
     volumes:
       - neurolink_data:/app/data
     depends_on:
@@ -44,7 +44,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:8003
     depends_on:
       - backend
     restart: unless-stopped
