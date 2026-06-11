@@ -16,7 +16,7 @@ import structlog
 from neurolink.hardware.base import EEGSample, HardwareAdapter
 
 if TYPE_CHECKING:
-    from bleak import BleakClient
+    from bleak import BleakClient, BleakGATTCharacteristic
 
 log = structlog.get_logger(__name__)
 
@@ -72,7 +72,7 @@ class MuseSBleAdapter(HardwareAdapter):
 
     async def connect(self) -> None:
         """Connect to the Muse S BLE device and start EEG streaming."""
-        from bleak import BleakClient  # noqa: PLC0415
+        from bleak import BleakClient, BleakGATTCharacteristic  # noqa: PLC0415
         from neurolink.dsp.decoders import decode_eeg
 
         self._client = BleakClient(self._address, timeout=15.0)
@@ -84,35 +84,35 @@ class MuseSBleAdapter(HardwareAdapter):
             ch_idx = i
 
             def make_eeg_handler(idx: int):
-                def handler(_sender, data: bytes) -> None:
-                    samples = decode_eeg(data)
+                def handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
+                    samples = decode_eeg(bytes(data))
                     self._eeg_rings[idx].extend(samples)
                 return handler
 
             await self._client.start_notify(char_uuid, make_eeg_handler(ch_idx))
 
-        def ppg_handler(_sender, data: bytes) -> None:
+        def ppg_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_ppg
 
-            samples = decode_ppg(data)
+            samples = decode_ppg(bytes(data))
             self._ppg_ring.extend(samples)
 
         await self._client.start_notify(CHAR_PPG_IR, ppg_handler)
 
-        def accel_handler(_sender, data: bytes) -> None:
+        def accel_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_imu
 
-            accel_flat, _ = decode_imu(data)
+            accel_flat, _ = decode_imu(bytes(data))
             for j in range(0, len(accel_flat), 3):
                 if j + 2 < len(accel_flat):
                     self._accel_ring[0].append(accel_flat[j])
                     self._accel_ring[1].append(accel_flat[j + 1])
                     self._accel_ring[2].append(accel_flat[j + 2])
 
-        def gyro_handler(_sender, data: bytes) -> None:
+        def gyro_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_imu
 
-            _, gyro_flat = decode_imu(data)
+            _, gyro_flat = decode_imu(bytes(data))
             for j in range(0, len(gyro_flat), 3):
                 if j + 2 < len(gyro_flat):
                     self._gyro_ring[0].append(gyro_flat[j])

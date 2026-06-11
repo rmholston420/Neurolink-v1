@@ -6,15 +6,15 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any, MutableMapping, Union
+from typing import Any, MutableMapping
 
 import structlog
 
 # Type alias that satisfies structlog's Processor signature for mypy
-_Renderer = Union[
-    structlog.processors.JSONRenderer,
-    structlog.dev.ConsoleRenderer,
-]
+_Renderer = (
+    structlog.processors.JSONRenderer
+    | structlog.dev.ConsoleRenderer
+)
 
 
 def configure_logging(log_json: bool = False, log_level: str = "INFO") -> None:

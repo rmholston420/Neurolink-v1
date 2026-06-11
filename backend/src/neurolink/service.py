@@ -40,7 +40,7 @@ class NeuroLinkService:
         self._adapter_type: str = "mock"
         self._device_model: str = "mock"
 
-    def set_db_session_factory(self, factory) -> None:  # type: ignore[type-arg]
+    def set_db_session_factory(self, factory) -> None:  # type: ignore[no-untyped-def]
         """Inject DB session factory (called from lifespan)."""
         self._db_session_factory = factory
 

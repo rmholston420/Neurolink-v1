@@ -9,19 +9,19 @@ from neurolink.models.eeg import BandPowers
 
 # ── classify_v01 tests ───────────────────────────────────────────────────────
 
-def test_classify_v01_region_A_default():
+def test_classify_v01_region_a_default():
     region, stage = classify_v01(alpha=0.1, theta=0.05, beta=0.1, delta=0.1, gamma=0.05)
     assert region == "A"
     assert stage == "Nigredo"
 
 
-def test_classify_v01_region_B_high_beta():
+def test_classify_v01_region_b_high_beta():
     region, stage = classify_v01(alpha=0.1, theta=0.05, beta=0.35, delta=0.1, gamma=0.05)
     assert region == "B"
     assert stage == "Albedo"
 
 
-def test_classify_v01_region_E_for_high_alpha_theta():
+def test_classify_v01_region_e_for_high_alpha_theta():
     region, stage = classify_v01(alpha=0.32, theta=0.18, beta=0.10, delta=0.1, gamma=0.05)
     assert region == "E"
     assert stage in ("Rubedo", "Multiplicatio")
@@ -36,19 +36,19 @@ def test_classify_v01_multiplicatio_escalation():
     assert stage == "Multiplicatio"
 
 
-def test_classify_v01_region_D_flow():
+def test_classify_v01_region_d_flow():
     region, stage = classify_v01(alpha=0.29, theta=0.21, beta=0.10, delta=0.1, gamma=0.05)
     assert region == "D"
     assert stage == "Citrinitas"
 
 
-def test_classify_v01_region_C_alpha_settling():
+def test_classify_v01_region_c_alpha_settling():
     region, stage = classify_v01(alpha=0.26, theta=0.10, beta=0.10, delta=0.1, gamma=0.05)
     assert region == "C"
     assert stage == "Albedo"
 
 
-def test_classify_v01_region_F_for_delta_gt_50_pct():
+def test_classify_v01_region_f_for_delta_gt_50_pct():
     region, stage = classify_v01(alpha=0.05, theta=0.05, beta=0.05, delta=0.55, gamma=0.02)
     assert region == "F"
     assert stage == "Coagulatio"

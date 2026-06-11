@@ -18,10 +18,12 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Add models metadata for autogenerate
-import sys
+import sys  # noqa: E402
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from neurolink.models.session import Base
+from neurolink.models.session import Base  # noqa: E402
+
 target_metadata = Base.metadata
 
 

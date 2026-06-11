@@ -24,7 +24,7 @@ class CalibrationSession:
     Sets hub.baseline_alpha on completion.
     """
 
-    def __init__(self, adapter: HardwareAdapter, hub) -> None:  # type: ignore[type-arg]
+    def __init__(self, adapter: HardwareAdapter, hub) -> None:  # type: ignore[no-untyped-def]
         self._adapter = adapter
         self._hub = hub
         self._running: bool = False

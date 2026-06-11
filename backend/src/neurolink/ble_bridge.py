@@ -23,7 +23,7 @@ class BLEBridge:
     Reconnects automatically after link drop (up to RECONNECT_WAIT_SEC wait).
     """
 
-    def __init__(self, adapter) -> None:  # type: ignore[type-arg]
+    def __init__(self, adapter) -> None:  # type: ignore[no-untyped-def]
         self._adapter = adapter
         self._task: asyncio.Task | None = None
         self._running: bool = False
