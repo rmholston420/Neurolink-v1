@@ -44,7 +44,10 @@ jobs:
           NEUROLINK_REDIS_URL: ""
           NEUROLINK_REDIS_ENABLED: "false"
         run: |
-          pytest -v --tb=short --cov=neurolink --cov-report=term-missing --cov-fail-under=80
+          pytest -v --tb=short \
+            --cov=neurolink \
+            --cov-config=pyproject.toml \
+            --cov-report=term-missing
 
       - name: Lint with ruff
         working-directory: backend
@@ -70,7 +73,6 @@ jobs:
 
       - name: Run frontend tests
         working-directory: frontend
-        # --run exits after one pass (no watch mode) so CI doesn't hang
         run: npm run test -- --run
 
       - name: Build frontend
