@@ -42,10 +42,10 @@ CMD_DATA      = b"\x02\x64\x0a"
 CMD_STOP      = b"\x02\x68\x0a"
 CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
-CMD_DATA_DELAY_SEC: float  = 0.250
-KEEPALIVE_SEC: float       = 30.0
-RECONNECT_WAIT_SEC: float  = 20.0  # spec-mandated wait before BLE reconnect attempt
-MAX_RECONNECT_ATTEMPTS: int = 10   # give up after this many consecutive failures
+CMD_DATA_DELAY_SEC: float   = 0.250
+KEEPALIVE_SEC: float        = 30.0
+RECONNECT_WAIT_SEC: float   = 20.0   # spec-mandated wait before BLE reconnect attempt
+MAX_RECONNECT_ATTEMPTS: int = 10     # give up after this many consecutive failures
 
 # Raised from 30 s — GATT discovery at weak RSSI (-92 to -94 dBm) needs extra
 # headroom before BlueZ gives up on the ATT Bearer negotiation.
@@ -61,10 +61,11 @@ POST_CONNECT_SETTLE_SEC: float = 0.5
 _WRITE_RETRIES: int = 3
 _WRITE_RETRY_DELAY_SEC: float = 0.3
 
-# Pre-scan duration before connecting so BlueZ has seen the device recently.
-# Raised from 5 s — gives BlueZ time to receive multiple ADV_IND packets from
-# the Muse at weak signal before we attempt the connection.
-PRE_SCAN_SEC: float = 8.0
+# Maximum time to wait for the Muse to appear during the pre-scan phase.
+# The live detection_callback scanner typically fires within 100–300 ms of
+# the first ADV_IND; this timeout is only reached if the headband is off or
+# out of range.
+PRE_SCAN_SEC: float = 10.0
 
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
 
@@ -109,39 +110,37 @@ class MuseSBleAdapter(HardwareAdapter):
         Idempotent: if already connected, returns immediately.
         Called both from service.connect() and from the reconnect supervisor.
 
-        Pre-scans for PRE_SCAN_SEC before connecting so BlueZ has a warm
-        cache entry for the device, avoiding GATT-discovery timeouts that
-        occur when the device was not recently seen by the host daemon.
+        Uses a live detection_callback scanner filtered on MUSE_SERVICE_UUID
+        to mirror the official Muse app behaviour: connect fires on the first
+        matching ADV_IND packet (~100–300 ms) rather than waiting a fixed
+        pre-scan window.
         """
         if self._connected:
             return
 
-        from bleak import BleakClient, BleakScanner
+        from bleak import BleakClient
 
         from neurolink.dsp.decoders import decode_eeg
 
-        # ── Pre-scan: warm the BlueZ cache so GATT discovery succeeds ──────────
-        log.info("muse_ble_prescanning", address=self._address, duration=PRE_SCAN_SEC)
-        found = await BleakScanner.find_device_by_address(
-            self._address,
-            timeout=PRE_SCAN_SEC,
+        # ── Pre-scan: live UUID-filtered scanner, connect on first ADV_IND ─────
+        found, rssi = await self._prescan_until_seen()
+        log.info(
+            "muse_ble_device_found",
+            address=self._address,
+            name=found.name,
+            rssi=rssi,
         )
-        if found is None:
-            raise ConnectionError(
-                f"Muse S not found during pre-scan ({self._address}). "
-                "Power-cycle the headset and try again."
-            )
-        log.info("muse_ble_device_found", address=self._address, name=found.name)
 
         # ── Connect ────────────────────────────────────────────────────────────
         self._client = BleakClient(
-            self._address,
+            found,  # pass the BLEDevice object directly — avoids a second
+                    # address-lookup inside bleak and reuses the warm cache entry
             timeout=BLE_CONNECT_TIMEOUT,
             disconnected_callback=self._on_ble_disconnect,
         )
         await self._client.connect()
         self._connected = True
-        log.info("muse_ble_connected", address=self._address)
+        log.info("muse_ble_connected", address=self._address, rssi=rssi)
 
         # ── Settle: wait for LE feature exchange + ATT MTU negotiation ─────────
         # The Muse S drops connections (0x3e / 0x08) if GATT writes arrive
@@ -259,8 +258,8 @@ class MuseSBleAdapter(HardwareAdapter):
         if not self._connected:
             return None
 
-        eeg_buf  = [list(ring) for ring in self._eeg_rings]
-        ppg_buf  = list(self._ppg_ring)
+        eeg_buf   = [list(ring) for ring in self._eeg_rings]
+        ppg_buf   = list(self._ppg_ring)
         accel_buf = [list(ring) for ring in self._accel_ring]
         gyro_buf  = [list(ring) for ring in self._gyro_ring]
 
@@ -281,6 +280,59 @@ class MuseSBleAdapter(HardwareAdapter):
     # ───────────────────────────────────────────────────────────────────────────
     # Internal helpers
     # ───────────────────────────────────────────────────────────────────────────
+
+    async def _prescan_until_seen(self):
+        """Run a live BLE scan filtered on MUSE_SERVICE_UUID and wait for
+        the target address to appear in an advertisement.
+
+        Mirrors the official Muse app behaviour: instead of polling
+        find_device_by_address() for a fixed duration, we start a
+        BleakScanner with a detection_callback so we connect the instant
+        the first matching ADV_IND / SCAN_RSP arrives (typically 100–300 ms).
+
+        Returns (BLEDevice, rssi: int | None) so the caller can pass the
+        BLEDevice object directly to BleakClient, reusing the warm cache
+        entry rather than triggering a second address lookup inside bleak.
+
+        Raises ConnectionError if the device is not seen within PRE_SCAN_SEC.
+        """
+        from bleak import BleakScanner
+
+        seen_event: asyncio.Event = asyncio.Event()
+        found_device = None
+        found_rssi: int | None = None
+
+        target_addr = self._address.upper()
+
+        def _on_detection(device, advertisement_data) -> None:
+            nonlocal found_device, found_rssi
+            if device.address.upper() == target_addr:
+                found_device = device
+                found_rssi = advertisement_data.rssi
+                seen_event.set()
+
+        log.info(
+            "muse_ble_prescanning",
+            address=self._address,
+            timeout=PRE_SCAN_SEC,
+            method="detection_callback",
+        )
+
+        scanner = BleakScanner(
+            detection_callback=_on_detection,
+            service_uuids=[MUSE_SERVICE_UUID],
+        )
+
+        async with scanner:
+            try:
+                await asyncio.wait_for(seen_event.wait(), timeout=PRE_SCAN_SEC)
+            except asyncio.TimeoutError:
+                raise ConnectionError(
+                    f"Muse S not seen after {PRE_SCAN_SEC:.0f} s scan "
+                    f"({self._address}). Is the headband powered on and in range?"
+                )
+
+        return found_device, found_rssi
 
     async def _write_control(self, cmd: bytes) -> None:
         """Write a command to CHAR_CONTROL with automatic retry.
