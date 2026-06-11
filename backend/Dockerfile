@@ -1,11 +1,17 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# System deps for BLE (BlueZ) and build
+# System deps for BLE (BlueZ + D-Bus) and build
+# bleak drives BlueZ via D-Bus; without dbus / libdbus-1-dev the
+# BleakScanner backend raises a D-Bus connection-refused error at
+# runtime even though `import bleak` succeeds.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bluez \
     libglib2.0-dev \
+    dbus \
+    libdbus-1-dev \
+    libdbus-glib-1-dev \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
