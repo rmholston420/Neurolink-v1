@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    volumes:
+      - redis-data:/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - NEUROLINK_ADAPTER_TYPE=${NEUROLINK_ADAPTER_TYPE:-mock}
+      - NEUROLINK_DEVICE_MODEL=${NEUROLINK_DEVICE_MODEL:-muse_s_gen1}
+      - NEUROLINK_MUSE_BLE_ADDRESS=${NEUROLINK_MUSE_BLE_ADDRESS:-}
+      - NEUROLINK_REDIS_URL=redis://redis:6379/0
+      - NEUROLINK_DB_PATH=/app/data/neurolink.db
+      - NEUROLINK_LOG_JSON=true
+      - NEUROLINK_CORS_ORIGINS=${NEUROLINK_CORS_ORIGINS:-http://localhost:5173}
+    volumes:
+      - neurolink-data:/app/data
+    depends_on:
+      - redis
+    restart: always
+
+volumes:
+  redis-data:
+  neurolink-data:
