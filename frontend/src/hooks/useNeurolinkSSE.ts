@@ -1,58 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-
-export interface BandPowers {
-  alpha: number
-  theta: number
-  beta: number
-  delta: number
-  gamma: number
-}
-
-export interface SSpace {
-  x: number
-  y: number
-  region: string
-}
-
-export interface EA1Result {
-  eligible: boolean
-  score: number
-  criteria_met: number
-  criteria_total: number
-  label: string
-  overlay_mode: string
-}
-
-export interface NeurolinkState {
-  connected: boolean
-  source: string
-  region: string
-  alchemical_stage: string
-  region_v01: string
-  alchemical_stage_v01: string
-  integration_coverage: number
-  engagement_index: number
-  bands: BandPowers
-  s_space: SSpace | null
-  ea1: EA1Result
-  frame_count: number
-  poor_contact: boolean
-  contact_quality: number | null
-  hr_bpm: number | null
-  hrv_rmssd: number | null
-  rr_bpm: number | null
-  pitch_deg: number | null
-  roll_deg: number | null
-  motion_rms: number | null
-  focus_state: string
-  focus_score: number
-  fatigue_score: number
-  faa: number | null
-  fmt: number | null
-  fnirs_oxy: number | null
-  fnirs_deoxy: number | null
-  last_ts: number | null
-}
+import type { NeurolinkState } from '../types'
 
 /**
  * SSE consumer hook for Neurolink stream.

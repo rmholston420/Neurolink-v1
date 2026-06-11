@@ -70,7 +70,8 @@ jobs:
 
       - name: Run frontend tests
         working-directory: frontend
-        run: npm run test
+        # --run exits after one pass (no watch mode) so CI doesn't hang
+        run: npm run test -- --run
 
       - name: Build frontend
         working-directory: frontend
