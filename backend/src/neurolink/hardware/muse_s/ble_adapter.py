@@ -47,11 +47,24 @@ KEEPALIVE_SEC: float       = 30.0
 RECONNECT_WAIT_SEC: float  = 20.0  # spec-mandated wait before BLE reconnect attempt
 MAX_RECONNECT_ATTEMPTS: int = 10   # give up after this many consecutive failures
 
-# Increased from 15 s — GATT discovery through D-Bus/Docker needs extra headroom
-BLE_CONNECT_TIMEOUT: float = 30.0
+# Raised from 30 s — GATT discovery at weak RSSI (-92 to -94 dBm) needs extra
+# headroom before BlueZ gives up on the ATT Bearer negotiation.
+BLE_CONNECT_TIMEOUT: float = 45.0
 
-# Pre-scan duration before connecting so BlueZ has seen the device recently
-PRE_SCAN_SEC: float = 5.0
+# Settle delay after connect() before issuing any GATT writes.  The Muse S
+# link layer needs ~400–500 ms to finish the LE feature exchange (seen in
+# btmon: LE Read Remote Used Features completes at t+~150 ms, ATT MTU exchange
+# at t+~270 ms).  Writing before this window closes causes 0x3e / 0x08 drops.
+POST_CONNECT_SETTLE_SEC: float = 0.5
+
+# How many times to retry a control-char write before giving up.
+_WRITE_RETRIES: int = 3
+_WRITE_RETRY_DELAY_SEC: float = 0.3
+
+# Pre-scan duration before connecting so BlueZ has seen the device recently.
+# Raised from 5 s — gives BlueZ time to receive multiple ADV_IND packets from
+# the Muse at weak signal before we attempt the connection.
+PRE_SCAN_SEC: float = 8.0
 
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
 
@@ -130,6 +143,12 @@ class MuseSBleAdapter(HardwareAdapter):
         self._connected = True
         log.info("muse_ble_connected", address=self._address)
 
+        # ── Settle: wait for LE feature exchange + ATT MTU negotiation ─────────
+        # The Muse S drops connections (0x3e / 0x08) if GATT writes arrive
+        # before the link-layer handshake completes.  POST_CONNECT_SETTLE_SEC
+        # gives it the required window.
+        await asyncio.sleep(POST_CONNECT_SETTLE_SEC)
+
         # Subscribe EEG channels
         for i, char_uuid in enumerate(_EEG_CHARS):
             ch_idx = i
@@ -177,12 +196,12 @@ class MuseSBleAdapter(HardwareAdapter):
         await self._client.start_notify(CHAR_ACCEL, accel_handler)
         await self._client.start_notify(CHAR_GYRO, gyro_handler)
 
-        # Send firmware preset + start-streaming commands
-        await self._client.write_gatt_char(CHAR_CONTROL, CMD_PRESET_20, response=True)
+        # Send firmware preset + start-streaming commands (with retry)
+        await self._write_control(CMD_PRESET_20)
         await asyncio.sleep(0.1)
-        await self._client.write_gatt_char(CHAR_CONTROL, CMD_DATA, response=True)
+        await self._write_control(CMD_DATA)
         await asyncio.sleep(CMD_DATA_DELAY_SEC)
-        await self._client.write_gatt_char(CHAR_CONTROL, CMD_DATA, response=True)
+        await self._write_control(CMD_DATA)
 
         # Start keepalive loop
         self._keepalive_task = asyncio.create_task(
@@ -219,7 +238,7 @@ class MuseSBleAdapter(HardwareAdapter):
 
         if self._client and self._connected:
             try:
-                await self._client.write_gatt_char(CHAR_CONTROL, CMD_STOP, response=True)
+                await self._write_control(CMD_STOP)
                 await self._client.disconnect()
             except Exception as exc:
                 log.warning("muse_ble_disconnect_error", error=str(exc))
@@ -260,6 +279,42 @@ class MuseSBleAdapter(HardwareAdapter):
         )
 
     # ───────────────────────────────────────────────────────────────────────────
+    # Internal helpers
+    # ───────────────────────────────────────────────────────────────────────────
+
+    async def _write_control(self, cmd: bytes) -> None:
+        """Write a command to CHAR_CONTROL with automatic retry.
+
+        The Muse S occasionally drops ATT write responses during the initial
+        link-layer handshake (observed as 0x3e / 0x08 disconnects in btmon).
+        Retrying with a short back-off recovers in the vast majority of cases.
+        """
+        if self._client is None:
+            return
+        last_exc: Exception | None = None
+        for attempt in range(1, _WRITE_RETRIES + 1):
+            try:
+                await self._client.write_gatt_char(CHAR_CONTROL, cmd, response=True)
+                return
+            except Exception as exc:
+                last_exc = exc
+                log.warning(
+                    "muse_ble_write_control_retry",
+                    attempt=attempt,
+                    max=_WRITE_RETRIES,
+                    cmd=cmd.hex(),
+                    error=str(exc),
+                )
+                if attempt < _WRITE_RETRIES:
+                    await asyncio.sleep(_WRITE_RETRY_DELAY_SEC)
+        log.error(
+            "muse_ble_write_control_failed",
+            cmd=cmd.hex(),
+            error=str(last_exc),
+        )
+        raise last_exc  # type: ignore[misc]
+
+    # ───────────────────────────────────────────────────────────────────────────
     # Internal tasks
     # ───────────────────────────────────────────────────────────────────────────
 
@@ -267,11 +322,17 @@ class MuseSBleAdapter(HardwareAdapter):
         """Bleak disconnected callback — fires on unexpected BLE drop.
 
         Sets _connected = False so the supervisor loop detects the drop
-        and schedules a reconnect after RECONNECT_WAIT_SEC.
+        and schedules a reconnect after RECONNECT_WAIT_SEC.  Also cancels
+        the keepalive task immediately so it does not attempt writes on a
+        dead handle while the supervisor waits.
         """
         if not self._give_up:
             log.warning("muse_ble_unexpected_disconnect", address=self._address)
             self._connected = False
+            # Cancel keepalive immediately — writing on a dead handle causes
+            # bleak to raise and can mask the real disconnect in logs.
+            if self._keepalive_task and not self._keepalive_task.done():
+                self._keepalive_task.cancel()
 
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive commands to prevent firmware timeout."""
@@ -280,9 +341,7 @@ class MuseSBleAdapter(HardwareAdapter):
                 await asyncio.sleep(KEEPALIVE_SEC)
                 if self._connected and self._client:
                     try:
-                        await self._client.write_gatt_char(
-                            CHAR_CONTROL, CMD_KEEPALIVE, response=True
-                        )
+                        await self._write_control(CMD_KEEPALIVE)
                         log.debug("muse_ble_keepalive_sent", address=self._address)
                     except Exception as exc:
                         log.warning("muse_ble_keepalive_error", error=str(exc))
