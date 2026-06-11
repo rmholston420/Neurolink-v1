@@ -43,7 +43,12 @@ CMD_STOP      = b"\x02\x68\x0a"
 CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
 CMD_DATA_DELAY_SEC: float   = 0.250
-KEEPALIVE_SEC: float        = 30.0
+# Reduced from 30.0 s — the Muse S BLE supervision window is 2000 ms (0x00c8).
+# A 30 s interval left the link silent long enough for the Muse to time out
+# (~28 s, confirmed via btmon: Disconnect Complete reason 0x08).
+# 5 s is safely within the supervision window while avoiding unnecessary
+# GATT traffic on the 15 ms connection interval.
+KEEPALIVE_SEC: float        = 5.0
 RECONNECT_WAIT_SEC: float   = 20.0   # spec-mandated wait before BLE reconnect attempt
 MAX_RECONNECT_ATTEMPTS: int = 10     # give up after this many consecutive failures
 
