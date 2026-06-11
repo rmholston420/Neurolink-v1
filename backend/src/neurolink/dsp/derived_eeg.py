@@ -1,54 +1,65 @@
-"""Derived EEG metrics: Frontal Alpha Asymmetry (FAA) and Frontal Midline Theta (FMt)."""
+"""Derived EEG metrics: FAA (Frontal Alpha Asymmetry) and FMt (Frontal Midline Theta).
+
+Ported from Rigpa-v2 muse_compute.py.
+All functions are pure.
+"""
 from __future__ import annotations
 
 import math
 
 import numpy as np
 
-from neurolink.dsp.bandpower import bandpower, EEG_FS
+from neurolink.dsp.bandpower import bandpower
 
-# Channel indices in 5-channel EEG buffer: TP9=0, AF7=1, AF8=2, TP10=3, AUX=4
-_CH_AF7 = 1
-_CH_AF8 = 2
-_CH_AUX = 4  # FPz proxy
+_DEFAULT_FS: float = 256.0
+_MIN_SAMPLES: int = 64  # at least 0.25s @ 256 Hz
+
+# Channel indices in standard Muse 5-channel layout
+_TP9 = 0
+_AF7 = 1
+_AF8 = 2
+_TP10 = 3
+_AUX = 4
+
+# Alpha band
+_ALPHA_LO: float = 8.0
+_ALPHA_HI: float = 13.0
+# Theta band
+_THETA_LO: float = 4.0
+_THETA_HI: float = 8.0
 
 
 def derived_eeg(
-    eeg_bufs: np.ndarray,
-    fs: float = EEG_FS,
+    eeg: np.ndarray,
+    fs: float = _DEFAULT_FS,
 ) -> dict[str, float | None]:
     """Compute FAA and FMt from a 5-channel EEG buffer.
 
     Args:
-        eeg_bufs: shape (5, N) array — channels: TP9, AF7, AF8, TP10, AUX
-        fs: sampling frequency in Hz
+        eeg: 2-D array of shape (5, n_samples)
+        fs: sampling frequency (Hz)
 
     Returns:
-        dict with keys 'faa' (float) and 'fmt' (float | None)
+        Dict with keys:
+        - "faa": Frontal Alpha Asymmetry (log(AF8_alpha) - log(AF7_alpha))
+                 Positive = right alpha > left alpha (approach motivation)
+        - "fmt": Frontal Midline Theta (AUX channel theta power)
+        Both may be None if buffer is too short.
     """
     result: dict[str, float | None] = {"faa": None, "fmt": None}
 
-    if eeg_bufs.ndim != 2 or eeg_bufs.shape[0] < 3:
+    if eeg.shape[1] < _MIN_SAMPLES or eeg.shape[0] < 5:
         return result
 
-    n = eeg_bufs.shape[1]
-    if n < 2:
-        return result
+    # FAA: ln(AF8 alpha) - ln(AF7 alpha)
+    af7_alpha = bandpower(eeg[_AF7], _ALPHA_LO, _ALPHA_HI, fs)
+    af8_alpha = bandpower(eeg[_AF8], _ALPHA_LO, _ALPHA_HI, fs)
+    if af7_alpha > 0 and af8_alpha > 0:
+        result["faa"] = math.log(af8_alpha) - math.log(af7_alpha)
 
-    # FAA = ln(alpha_AF8) - ln(alpha_AF7)
-    # Positive FAA = approach motivation; negative = withdrawal
-    alpha_af7 = bandpower(eeg_bufs[_CH_AF7], 8.0, 13.0, fs)
-    alpha_af8 = bandpower(eeg_bufs[_CH_AF8], 8.0, 13.0, fs)
-
-    if alpha_af7 > 0.0 and alpha_af8 > 0.0:
-        result["faa"] = math.log(alpha_af8) - math.log(alpha_af7)
-    else:
-        result["faa"] = 0.0
-
-    # FMt = frontal midline theta from AUX (FPz proxy)
-    if eeg_bufs.shape[0] > _CH_AUX:
-        result["fmt"] = bandpower(eeg_bufs[_CH_AUX], 4.0, 8.0, fs)
-    else:
-        result["fmt"] = None
+    # FMt: AUX channel theta
+    aux_theta = bandpower(eeg[_AUX], _THETA_LO, _THETA_HI, fs)
+    if aux_theta > 0:
+        result["fmt"] = aux_theta
 
     return result

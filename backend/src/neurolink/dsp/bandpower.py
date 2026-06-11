@@ -1,79 +1,101 @@
-"""Band power computation and ring buffer management."""
+"""Band power computation utilities.
+
+Ported from Rigpa-v2 muse_compute.py + Rigpa-v3 hardware/muse_s/compute.py.
+All functions are pure (no I/O, no globals, no side effects).
+"""
 from __future__ import annotations
 
 import numpy as np
 
-# Sampling rates
-EEG_FS: float = 256.0
-PPG_FS: float = 64.0
-IMU_FS: float = 52.0
+# EEG band boundaries (Hz)
+_BANDS: dict[str, tuple[float, float]] = {
+    "delta": (0.5, 4.0),
+    "theta": (4.0, 8.0),
+    "alpha": (8.0, 13.0),
+    "beta": (13.0, 30.0),
+    "gamma": (30.0, 45.0),
+}
 
-# Buffer durations (seconds)
-EEG_BUF_SEC: float = 4.0
-PPG_BUF_SEC: float = 30.0
-IMU_BUF_SEC: float = 4.0
+_DEFAULT_FS: float = 256.0
+_EEG_CHANNELS: int = 5
+_RING_SECONDS: float = 4.0
+_PPG_FS: float = 64.0
+_PPG_SECONDS: float = 30.0
+_IMU_FS: float = 52.0
+_IMU_SECONDS: float = 4.0
 
-# Number of EEG channels: TP9, AF7, AF8, TP10, AUX
-EEG_CHANNELS: int = 5
 
+def bandpower(sig: np.ndarray, lo: float, hi: float, fs: float = _DEFAULT_FS) -> float:
+    """Compute mean power in [lo, hi] Hz band using numpy rfft.
 
-def bandpower(sig: np.ndarray, lo: float, hi: float, fs: float) -> float:
-    """Compute mean power in [lo, hi] Hz band via rfft.
+    Args:
+        sig: 1-D signal array
+        lo: lower frequency bound (Hz)
+        hi: upper frequency bound (Hz)
+        fs: sampling frequency (Hz)
 
-    Returns 0.0 for signals shorter than 2 samples.
+    Returns:
+        Mean power in band as float (0.0 for empty/short signals).
     """
     n = len(sig)
     if n < 2:
         return 0.0
-    fft_vals = np.abs(np.fft.rfft(sig)) ** 2
     freqs = np.fft.rfftfreq(n, d=1.0 / fs)
-    mask = (freqs >= lo) & (freqs <= hi)
-    if not mask.any():
+    fft_vals = np.fft.rfft(sig)
+    power = (np.abs(fft_vals) ** 2) / n
+    mask = (freqs >= lo) & (freqs < hi)
+    if not np.any(mask):
         return 0.0
-    return float(np.mean(fft_vals[mask]))
-
-
-def make_buffers() -> dict[str, np.ndarray]:
-    """Create zero-filled ring buffers for EEG, PPG, and IMU streams.
-
-    Returns a dict with keys: eeg (5ch x N), ppg (N,), accel (3 x M), gyro (3 x M).
-    """
-    eeg_samples = int(EEG_BUF_SEC * EEG_FS)
-    ppg_samples = int(PPG_BUF_SEC * PPG_FS)
-    imu_samples = int(IMU_BUF_SEC * IMU_FS)
-    return {
-        "eeg": np.zeros((EEG_CHANNELS, eeg_samples), dtype=np.float32),
-        "ppg": np.zeros(ppg_samples, dtype=np.float32),
-        "accel": np.zeros((3, imu_samples), dtype=np.float32),
-        "gyro": np.zeros((3, imu_samples), dtype=np.float32),
-    }
+    return float(np.mean(power[mask]))
 
 
 def compute_band_powers_from_buffer(
-    eeg_buf: np.ndarray,
-    fs: float = EEG_FS,
+    eeg: np.ndarray,
+    fs: float = _DEFAULT_FS,
 ) -> dict[str, float]:
-    """Compute average band powers across all EEG channels.
+    """Compute normalised band powers from a multi-channel EEG buffer.
 
-    Returns dict with delta, theta, alpha, beta, gamma keys.
-    Uses mean across channels then normalises to sum=1.
+    Args:
+        eeg: 2-D array of shape (n_channels, n_samples)
+        fs: sampling frequency (Hz)
+
+    Returns:
+        Dict mapping band name -> normalised fraction [0, 1].
+        All zeros if buffer is too short.
     """
-    bands_raw: dict[str, float] = {}
-    band_ranges = {
-        "delta": (1.0, 4.0),
-        "theta": (4.0, 8.0),
-        "alpha": (8.0, 13.0),
-        "beta": (13.0, 30.0),
-        "gamma": (30.0, 50.0),
-    }
-    n_ch = eeg_buf.shape[0] if eeg_buf.ndim == 2 else 1
-    sig_list = [eeg_buf[i] for i in range(n_ch)] if eeg_buf.ndim == 2 else [eeg_buf]
+    if eeg.shape[1] < 2:
+        return {k: 0.0 for k in _BANDS}
 
-    for band, (lo, hi) in band_ranges.items():
-        powers = [bandpower(sig, lo, hi, fs) for sig in sig_list]
-        bands_raw[band] = float(np.mean(powers))
+    # Average power across channels
+    band_powers: dict[str, float] = {}
+    for band, (lo, hi) in _BANDS.items():
+        ch_powers = [bandpower(eeg[ch], lo, hi, fs) for ch in range(eeg.shape[0])]
+        band_powers[band] = float(np.mean(ch_powers))
 
-    total = sum(bands_raw.values())
+    total = sum(band_powers.values())
     if total <= 0:
-        return {b: 0.0 for b in band_ranges}
-    return {b: v / total for b, v in bands_raw.items()}
+        return {k: 0.0 for k in _BANDS}
+
+    # Normalise to fractions that sum to 1.0
+    return {k: v / total for k, v in band_powers.items()}
+
+
+def make_buffers() -> dict[str, np.ndarray]:
+    """Create empty ring buffers for EEG, PPG, and IMU.
+
+    Returns:
+        Dict with zero-filled numpy arrays for each modality:
+        - eeg: (5, 1024)  — 5 channels x 4s @ 256 Hz
+        - ppg: (1920,)    — 30s @ 64 Hz
+        - accel: (624,)   — 4s @ 52 Hz x 3 axes
+        - gyro: (624,)    — 4s @ 52 Hz x 3 axes
+    """
+    eeg_n = int(_DEFAULT_FS * _RING_SECONDS)
+    ppg_n = int(_PPG_FS * _PPG_SECONDS)
+    imu_n = int(_IMU_FS * _IMU_SECONDS) * 3  # 3 axes flat
+    return {
+        "eeg": np.zeros((_EEG_CHANNELS, eeg_n), dtype=np.float32),
+        "ppg": np.zeros(ppg_n, dtype=np.float32),
+        "accel": np.zeros(imu_n, dtype=np.float32),
+        "gyro": np.zeros(imu_n, dtype=np.float32),
+    }

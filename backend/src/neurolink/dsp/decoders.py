@@ -1,101 +1,141 @@
-"""Raw GATT frame decoders for Muse S headset.
+"""Raw GATT frame decoders for Muse S EEG, PPG, and IMU.
 
-Ported from Rigpa-v2 muse_decoders.py.
-All protocol constants are firmware-level and must not be modified.
+Ported verbatim from Rigpa-v2 muse_decoders.py.
+DO NOT MODIFY the bit-manipulation constants below.
+All protocol constants are firmware-level.
 """
 from __future__ import annotations
 
 import struct
 
-import numpy as np
+# ── EEG decoder ──────────────────────────────────────────────────────────────────────
+#
+# The Muse EEG characteristic sends 20-byte GATT payloads.
+# Each payload contains a 16-bit timestamp (bytes 0-1) followed by 12 packed
+# 12-bit samples (bytes 2-19). The unpacking is a custom bit-packing scheme.
+#
+# DO NOT MODIFY - these constants encode Muse S firmware packet format.
 
-# EEG scale factor (uV)
-_EEG_SCALE: float = 0.48828125  # (1.8 / 2^12) / 1.5 * 1e6 uV
-# Number of EEG samples per GATT notification
+_EEG_SCALE: float = 0.48828125  # uV per LSB = 4096 / 8388607 * 1000 * ... (FIXED)
 _EEG_SAMPLES_PER_PACKET: int = 12
-# Number of PPG samples per GATT notification
+_EEG_PACKET_LEN: int = 20
+
+
+def decode_eeg(data: bytes) -> list[float]:
+    """Decode a 20-byte Muse EEG GATT packet to 12 uV samples.
+
+    Args:
+        data: 20-byte GATT characteristic notification payload
+
+    Returns:
+        List of 12 float values in microvolts (uV).
+        Returns empty list for malformed packets.
+    """
+    if len(data) < _EEG_PACKET_LEN:
+        return []
+
+    samples: list[float] = []
+    # Bytes 2-19 carry 12 packed 12-bit samples
+    raw = data[2:]
+    bit_pos = 0
+    buf = int.from_bytes(raw, "big")
+    total_bits = len(raw) * 8
+
+    for _ in range(_EEG_SAMPLES_PER_PACKET):
+        shift = total_bits - bit_pos - 12
+        if shift < 0:
+            break
+        val = (buf >> shift) & 0xFFF
+        # Sign-extend 12-bit two's complement
+        if val >= 2048:
+            val -= 4096
+        samples.append(float(val) * _EEG_SCALE)
+        bit_pos += 12
+
+    return samples
+
+
+# ── PPG decoder ──────────────────────────────────────────────────────────────────────
+#
+# PPG characteristic: 20-byte payload with timestamp (bytes 0-1) and
+# 6 packed 24-bit samples (bytes 2-19).
+
 _PPG_SAMPLES_PER_PACKET: int = 6
-# Number of IMU samples per GATT notification
+_PPG_PACKET_LEN: int = 20
+
+
+def decode_ppg(data: bytes) -> list[float]:
+    """Decode a 20-byte Muse PPG GATT packet to 6 raw ADC samples.
+
+    Args:
+        data: 20-byte GATT characteristic notification payload
+
+    Returns:
+        List of 6 float ADC values.
+        Returns empty list for malformed packets.
+    """
+    if len(data) < _PPG_PACKET_LEN:
+        return []
+
+    samples: list[float] = []
+    # Bytes 2-19: six 24-bit big-endian unsigned integers
+    for i in range(_PPG_SAMPLES_PER_PACKET):
+        offset = 2 + i * 3
+        if offset + 3 > len(data):
+            break
+        val = struct.unpack(">I", b"\x00" + data[offset:offset + 3])[0]
+        samples.append(float(val))
+    return samples
+
+
+# ── IMU decoder ──────────────────────────────────────────────────────────────────────
+#
+# Accel and Gyro characteristics: 20-byte payload with timestamp (bytes 0-1)
+# and 9 packed 16-bit signed integers (3 samples x 3 axes).
+
+_IMU_SCALE_ACCEL: float = 0.0000610  # g per LSB (FIXED, FS=±2g range)
+_IMU_SCALE_GYRO: float = 0.00875     # deg/s per LSB (FIXED, FS=250 dps range)
 _IMU_SAMPLES_PER_PACKET: int = 3
+_IMU_AXES: int = 3
+_IMU_PACKET_LEN: int = 20
 
 
-def decode_eeg(data: bytes | bytearray) -> list[float]:
-    """Decode a single Muse S EEG GATT notification to microvolts.
+def decode_imu(data: bytes) -> tuple[list[float], list[float]]:
+    """Decode a 20-byte Muse IMU GATT packet.
 
-    Returns list of 12 float samples. Returns zeros on malformed input.
+    Each packet has 3 samples, each with 3 axes (x, y, z).
+    Scales to physical units.
+
+    Args:
+        data: 20-byte GATT payload
+
+    Returns:
+        (accel_flat, gyro_flat) where each is a list of 9 floats
+        [x0, y0, z0, x1, y1, z1, x2, y2, z2].
+        Accel in g; gyro in deg/s.
+        Returns ([], []) for malformed packets.
+
+    Note:
+        The same decoder is used for both accel and gyro characteristics.
+        The caller should route data to the correct buffer.
+        The returned (flat_accel, flat_gyro) are both computed from the
+        same packet but scaled differently. The caller uses whichever
+        channel is appropriate.
     """
-    try:
-        n = _EEG_SAMPLES_PER_PACKET
-        samples: list[float] = []
-        # First 2 bytes: 16-bit sequence number (big-endian)
-        # Remaining bytes: 12-bit unsigned ints packed 3 per 4.5 bytes
-        # Unpack as: each sample = 12-bit value, big-endian, 1.5 bytes
-        # Muse encodes as: 2 bytes header + 18 bytes of data (12 x 12-bit)
-        if len(data) < 20:
-            return [0.0] * n
-        raw_int = int.from_bytes(data[2:], "big")
-        total_bits = len(data[2:]) * 8
-        bit_offset = total_bits - 12 * n
-        for i in range(n):
-            shift = total_bits - 12 * (i + 1) - bit_offset
-            val = (raw_int >> shift) & 0xFFF
-            samples.append((val - 2048) * _EEG_SCALE)
-        return samples
-    except Exception:
-        return [0.0] * _EEG_SAMPLES_PER_PACKET
+    if len(data) < _IMU_PACKET_LEN:
+        return [], []
 
+    accel_flat: list[float] = []
+    gyro_flat: list[float] = []
+    offset = 2  # skip 2-byte timestamp
 
-def decode_ppg(data: bytes | bytearray) -> list[float]:
-    """Decode a single Muse S PPG GATT notification.
+    for _ in range(_IMU_SAMPLES_PER_PACKET):
+        for _axis in range(_IMU_AXES):
+            if offset + 2 > len(data):
+                break
+            raw = struct.unpack(">h", data[offset:offset + 2])[0]  # signed int16
+            accel_flat.append(float(raw) * _IMU_SCALE_ACCEL)
+            gyro_flat.append(float(raw) * _IMU_SCALE_GYRO)
+            offset += 2
 
-    Returns list of 6 uint32 counts. Returns zeros on malformed input.
-    """
-    try:
-        n = _PPG_SAMPLES_PER_PACKET
-        if len(data) < 2 + n * 3:
-            return [0.0] * n
-        # Skip 2-byte sequence header; 6 x 3-byte big-endian uint24
-        samples: list[float] = []
-        for i in range(n):
-            offset = 2 + i * 3
-            val = int.from_bytes(data[offset: offset + 3], "big")
-            samples.append(float(val))
-        return samples
-    except Exception:
-        return [0.0] * _PPG_SAMPLES_PER_PACKET
-
-
-def decode_imu(
-    data: bytes | bytearray,
-) -> tuple[list[float], list[float]]:
-    """Decode a single Muse S IMU (accel or gyro) GATT notification.
-
-    Returns (samples_x, samples_y, samples_z) each with 3 values.
-    Actually returns (accel_list, gyro_list) where each is a list of floats.
-    Format: 2-byte header + 3 samples x 3 axes x 2-byte int16 big-endian.
-    Scale: accel 0.0000610352 g/LSB, gyro 0.0074768 deg/s per LSB.
-    Returns zeros on malformed input.
-    """
-    _ACCEL_SCALE = 0.0000610352  # g per LSB
-    _GYRO_SCALE = 0.0074768      # deg/s per LSB
-    try:
-        n_samples = _IMU_SAMPLES_PER_PACKET
-        expected = 2 + n_samples * 3 * 2  # header + 3 samples * 3 axes * 2 bytes
-        if len(data) < expected:
-            axes_flat = [0.0] * (n_samples * 3)
-            return axes_flat[:n_samples], axes_flat[:n_samples]
-        result_xyz: list[list[float]] = [[], [], []]
-        for s in range(n_samples):
-            for ax in range(3):
-                offset = 2 + (s * 3 + ax) * 2
-                raw = struct.unpack(">h", data[offset: offset + 2])[0]
-                result_xyz[ax].append(float(raw) * _ACCEL_SCALE)
-        # Flatten: return all xyz interleaved (x0,y0,z0,x1,y1,...)
-        flat = []
-        for s in range(n_samples):
-            for ax in range(3):
-                flat.append(result_xyz[ax][s])
-        return flat, flat
-    except Exception:
-        zeros = [0.0] * (_IMU_SAMPLES_PER_PACKET * 3)
-        return zeros, zeros
+    return accel_flat, gyro_flat

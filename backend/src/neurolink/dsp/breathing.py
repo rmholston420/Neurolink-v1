@@ -1,87 +1,90 @@
-"""Fused respiratory rate from PPG and IMU."""
+"""Respiratory rate computation: PPG-FM + IMU accel-z fused estimate.
+
+Ported from Rigpa-v3 dsp/breathing.py.
+Requires scipy. Degrades gracefully if not installed.
+All functions are pure.
+"""
 from __future__ import annotations
 
 import numpy as np
 
 from neurolink.models.eeg import BreathingPayload
 
-_MIN_IBI_FOR_FM: int = 6  # minimum IBI samples for PPG-FM method
-_MIN_ACCEL_SAMPLES: int = 52  # minimum accel samples (1 second at 52 Hz)
-
-
-def _ppg_fm_rr(ibi_ms: list[float]) -> float | None:
-    """Estimate respiratory rate from IBI via frequency modulation (PPG-FM).
-
-    Looks for dominant frequency in 0.1-0.5 Hz range (6-30 bpm) in the
-    IBI time series.
-    """
-    if len(ibi_ms) < _MIN_IBI_FOR_FM:
-        return None
-    try:
-        import scipy.signal as signal  # lazy import
-
-        ibi = np.array(ibi_ms, dtype=float)
-        # Resample at 4 Hz (IBI is unevenly spaced, approximate as evenly spaced)
-        fs_ibi = 4.0
-        freqs, pxx = signal.welch(ibi, fs=fs_ibi, nperseg=min(len(ibi), 32))
-        mask = (freqs >= 0.1) & (freqs <= 0.5)
-        if not mask.any():
-            return None
-        peak_freq = freqs[mask][np.argmax(pxx[mask])]
-        rr_bpm = float(peak_freq * 60.0)
-        return rr_bpm if 4.0 < rr_bpm < 35.0 else None
-    except Exception:
-        return None
-
-
-def _accel_rr(accel_z: np.ndarray, fs: float = 52.0) -> float | None:
-    """Estimate respiratory rate from accelerometer Z-axis."""
-    if len(accel_z) < _MIN_ACCEL_SAMPLES:
-        return None
-    try:
-        import scipy.signal as signal  # lazy import
-
-        freqs, pxx = signal.welch(accel_z, fs=fs, nperseg=min(len(accel_z), 128))
-        mask = (freqs >= 0.1) & (freqs <= 0.5)
-        if not mask.any():
-            return None
-        peak_freq = freqs[mask][np.argmax(pxx[mask])]
-        rr_bpm = float(peak_freq * 60.0)
-        return rr_bpm if 4.0 < rr_bpm < 35.0 else None
-    except Exception:
-        return None
+_MIN_IBIS: int = 10      # minimum IBIs for PPG-FM
+_MIN_ACCEL: int = 52 * 5  # minimum accel samples for FFT (5s @ 52 Hz)
+_ACCEL_FS: float = 52.0
+_IBI_FS_INTERP: float = 4.0  # resample IBI to 4 Hz for spectral analysis
+_RR_BAND: tuple[float, float] = (0.1, 0.5)  # 6-30 bpm respiratory band
 
 
 def compute_breathing(
     ibis_ms: list[float],
     accel_z: np.ndarray | None = None,
 ) -> BreathingPayload:
-    """Compute fused respiratory rate from PPG-FM and IMU accel-z.
-
-    Fuses the two estimates by averaging when both are available.
-    Falls back to whichever is available. Returns empty payload if neither.
+    """Compute fused respiratory rate from PPG IBIs and/or IMU accel-z.
 
     Args:
-        ibis_ms: IBI sequence in milliseconds
-        accel_z: 1D accelerometer Z-axis signal at IMU_FS Hz
+        ibis_ms: list of IBI values in milliseconds
+        accel_z: 1-D accel Z-axis array at _ACCEL_FS Hz (optional)
 
     Returns:
-        BreathingPayload with rr_bpm, rr_ppg, rr_accel.
+        BreathingPayload with rr_bpm (fused), rr_ppg, rr_accel.
+        Fields are None if insufficient data or scipy unavailable.
     """
-    rr_ppg = _ppg_fm_rr(ibis_ms)
-    rr_accel = _accel_rr(accel_z) if accel_z is not None else None
+    rr_ppg: float | None = None
+    rr_accel: float | None = None
 
-    if rr_ppg is not None and rr_accel is not None:
-        rr_fused = (rr_ppg + rr_accel) / 2.0
-    elif rr_ppg is not None:
-        rr_fused = rr_ppg
-    elif rr_accel is not None:
-        rr_fused = rr_accel
-    else:
-        rr_fused = None
+    # PPG-FM estimate
+    if len(ibis_ms) >= _MIN_IBIS:
+        rr_ppg = _rr_from_ibis(ibis_ms)
 
-    return BreathingPayload(
-        rr_bpm=rr_fused,
-        rr_ppg=rr_ppg,
-        rr_accel=rr_accel,
-    )
+    # Accel-z estimate
+    if accel_z is not None and len(accel_z) >= _MIN_ACCEL:
+        rr_accel = _rr_from_accel(accel_z)
+
+    # Fusion: average available estimates
+    estimates = [e for e in (rr_ppg, rr_accel) if e is not None]
+    rr_bpm = float(np.mean(estimates)) if estimates else None
+
+    return BreathingPayload(rr_bpm=rr_bpm, rr_ppg=rr_ppg, rr_accel=rr_accel)
+
+
+def _rr_from_ibis(ibis_ms: list[float]) -> float | None:
+    """Estimate RR from IBIs via FFT peak detection."""
+    try:
+        from scipy.signal import welch
+        from scipy.interpolate import interp1d
+
+        ibi = np.array(ibis_ms) / 1000.0  # to seconds
+        cumulative = np.cumsum(ibi)
+        # Resample to uniform grid
+        t_end = cumulative[-1]
+        t_uniform = np.arange(0, t_end, 1.0 / _IBI_FS_INTERP)
+        if len(t_uniform) < 8:
+            return None
+        interp_fn = interp1d(cumulative, ibi, kind="linear", fill_value="extrapolate")
+        ibi_interp = interp_fn(t_uniform)
+        # Welch PSD
+        freqs, psd = welch(ibi_interp, fs=_IBI_FS_INTERP, nperseg=min(len(ibi_interp), 64))
+        mask = (freqs >= _RR_BAND[0]) & (freqs <= _RR_BAND[1])
+        if not np.any(mask):
+            return None
+        peak_freq = freqs[mask][np.argmax(psd[mask])]
+        return float(peak_freq * 60.0)
+    except Exception:
+        return None
+
+
+def _rr_from_accel(accel_z: np.ndarray) -> float | None:
+    """Estimate RR from accel-z via Welch PSD."""
+    try:
+        from scipy.signal import welch
+
+        freqs, psd = welch(accel_z, fs=_ACCEL_FS, nperseg=min(len(accel_z), 256))
+        mask = (freqs >= _RR_BAND[0]) & (freqs <= _RR_BAND[1])
+        if not np.any(mask):
+            return None
+        peak_freq = freqs[mask][np.argmax(psd[mask])]
+        return float(peak_freq * 60.0)
+    except Exception:
+        return None
