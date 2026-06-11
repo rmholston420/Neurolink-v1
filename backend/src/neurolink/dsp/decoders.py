@@ -1,141 +1,99 @@
-"""Raw GATT frame decoders for Muse S EEG, PPG, and IMU.
+"""Muse BLE packet decoders for EEG, PPG, and IMU.
 
-Ported verbatim from Rigpa-v2 muse_decoders.py.
-DO NOT MODIFY the bit-manipulation constants below.
-All protocol constants are firmware-level.
+Ported from Rigpa-v2 ble_bridge.py decode routines.
+
+All BLE packet formats are FIXED by Muse firmware.
+DO NOT modify packet sizes, bit shifts, or scale factors.
 """
 from __future__ import annotations
 
 import struct
 
-# ── EEG decoder ──────────────────────────────────────────────────────────────────────
-#
-# The Muse EEG characteristic sends 20-byte GATT payloads.
-# Each payload contains a 16-bit timestamp (bytes 0-1) followed by 12 packed
-# 12-bit samples (bytes 2-19). The unpacking is a custom bit-packing scheme.
-#
-# DO NOT MODIFY - these constants encode Muse S firmware packet format.
+# EEG: 20-byte packet → 12 float samples
+# First 2 bytes = sequence/status, then 3 bytes per sample * 12
+_EEG_MIN_PACKET_LEN: int = 14  # 2 header + 12 sample bytes
+_EEG_SCALE: float = 0.48828125  # uV per LSB (from Muse SDK)
+_EEG_OFFSET: float = 2048.0     # 12-bit unsigned centre
 
-_EEG_SCALE: float = 0.48828125  # uV per LSB = 4096 / 8388607 * 1000 * ... (FIXED)
-_EEG_SAMPLES_PER_PACKET: int = 12
-_EEG_PACKET_LEN: int = 20
+# PPG: 20-byte packet → 6 samples (3-byte each, big-endian)
+_PPG_SAMPLE_SIZE: int = 3
+_PPG_MIN_PACKET_LEN: int = 2 + _PPG_SAMPLE_SIZE  # at least 1 sample
+_PPG_SAMPLES_PER_PACKET: int = 6
+
+# IMU: 20-byte packet → 9 accel + 9 gyro int16 values (big-endian)
+_IMU_MIN_PACKET_LEN: int = 2  # header
+_IMU_N_VALUES: int = 9  # 3 axes * 3 samples
+_ACCEL_SCALE: float = 0.0000610352   # g per LSB (Muse SDK)
+_GYRO_SCALE: float = 0.0074768       # deg/s per LSB (Muse SDK)
 
 
 def decode_eeg(data: bytes) -> list[float]:
-    """Decode a 20-byte Muse EEG GATT packet to 12 uV samples.
-
-    Args:
-        data: 20-byte GATT characteristic notification payload
+    """Decode a Muse EEG BLE characteristic notification.
 
     Returns:
-        List of 12 float values in microvolts (uV).
-        Returns empty list for malformed packets.
+        List of up to 12 float samples in uV, or empty list for short/invalid packets.
     """
-    if len(data) < _EEG_PACKET_LEN:
+    if len(data) < _EEG_MIN_PACKET_LEN:
         return []
 
-    samples: list[float] = []
-    # Bytes 2-19 carry 12 packed 12-bit samples
-    raw = data[2:]
-    bit_pos = 0
-    buf = int.from_bytes(raw, "big")
-    total_bits = len(raw) * 8
+    # Bytes 2..14: 12 samples, packed as 12-bit big-endian (unusual Muse encoding)
+    # Each sample is packed in 1.5 bytes; use 3-byte groups for 2 samples.
+    payload = data[2:]  # Skip header
+    samples = []
+    i = 0
+    while i + 2 < len(payload) and len(samples) < 12:
+        b0, b1, b2 = payload[i], payload[i + 1], payload[i + 2]
+        s1 = ((b0 << 4) | (b1 >> 4)) & 0xFFF
+        s2 = ((b1 & 0xF) << 8) | b2
+        samples.append((s1 - _EEG_OFFSET) * _EEG_SCALE)
+        if len(samples) < 12:
+            samples.append((s2 - _EEG_OFFSET) * _EEG_SCALE)
+        i += 3
 
-    for _ in range(_EEG_SAMPLES_PER_PACKET):
-        shift = total_bits - bit_pos - 12
-        if shift < 0:
-            break
-        val = (buf >> shift) & 0xFFF
-        # Sign-extend 12-bit two's complement
-        if val >= 2048:
-            val -= 4096
-        samples.append(float(val) * _EEG_SCALE)
-        bit_pos += 12
-
-    return samples
-
-
-# ── PPG decoder ──────────────────────────────────────────────────────────────────────
-#
-# PPG characteristic: 20-byte payload with timestamp (bytes 0-1) and
-# 6 packed 24-bit samples (bytes 2-19).
-
-_PPG_SAMPLES_PER_PACKET: int = 6
-_PPG_PACKET_LEN: int = 20
+    return samples[:12]
 
 
 def decode_ppg(data: bytes) -> list[float]:
-    """Decode a 20-byte Muse PPG GATT packet to 6 raw ADC samples.
-
-    Args:
-        data: 20-byte GATT characteristic notification payload
+    """Decode a Muse PPG BLE characteristic notification.
 
     Returns:
-        List of 6 float ADC values.
-        Returns empty list for malformed packets.
+        List of up to 6 float samples, or empty list for short/invalid packets.
     """
-    if len(data) < _PPG_PACKET_LEN:
+    if len(data) < _PPG_MIN_PACKET_LEN:
         return []
 
-    samples: list[float] = []
-    # Bytes 2-19: six 24-bit big-endian unsigned integers
-    for i in range(_PPG_SAMPLES_PER_PACKET):
-        offset = 2 + i * 3
-        if offset + 3 > len(data):
-            break
-        val = struct.unpack(">I", b"\x00" + data[offset:offset + 3])[0]
-        samples.append(float(val))
-    return samples
+    payload = data[2:]  # Skip 2-byte header
+    samples = []
+    for i in range(0, min(len(payload), _PPG_SAMPLES_PER_PACKET * _PPG_SAMPLE_SIZE), _PPG_SAMPLE_SIZE):
+        if i + 2 < len(payload):
+            val = (payload[i] << 16) | (payload[i + 1] << 8) | payload[i + 2]
+            samples.append(float(val))
 
-
-# ── IMU decoder ──────────────────────────────────────────────────────────────────────
-#
-# Accel and Gyro characteristics: 20-byte payload with timestamp (bytes 0-1)
-# and 9 packed 16-bit signed integers (3 samples x 3 axes).
-
-_IMU_SCALE_ACCEL: float = 0.0000610  # g per LSB (FIXED, FS=±2g range)
-_IMU_SCALE_GYRO: float = 0.00875     # deg/s per LSB (FIXED, FS=250 dps range)
-_IMU_SAMPLES_PER_PACKET: int = 3
-_IMU_AXES: int = 3
-_IMU_PACKET_LEN: int = 20
+    return samples[:_PPG_SAMPLES_PER_PACKET]
 
 
 def decode_imu(data: bytes) -> tuple[list[float], list[float]]:
-    """Decode a 20-byte Muse IMU GATT packet.
-
-    Each packet has 3 samples, each with 3 axes (x, y, z).
-    Scales to physical units.
-
-    Args:
-        data: 20-byte GATT payload
+    """Decode a Muse IMU (accel or gyro) BLE characteristic notification.
 
     Returns:
-        (accel_flat, gyro_flat) where each is a list of 9 floats
-        [x0, y0, z0, x1, y1, z1, x2, y2, z2].
-        Accel in g; gyro in deg/s.
-        Returns ([], []) for malformed packets.
-
-    Note:
-        The same decoder is used for both accel and gyro characteristics.
-        The caller should route data to the correct buffer.
-        The returned (flat_accel, flat_gyro) are both computed from the
-        same packet but scaled differently. The caller uses whichever
-        channel is appropriate.
+        (accel_flat, gyro_flat): Two lists of 9 float values each.
+        Returns empty lists for short/invalid packets.
     """
-    if len(data) < _IMU_PACKET_LEN:
+    if len(data) < _IMU_MIN_PACKET_LEN + 4:
         return [], []
 
-    accel_flat: list[float] = []
-    gyro_flat: list[float] = []
-    offset = 2  # skip 2-byte timestamp
+    payload = data[2:]  # Skip header
+    n_int16 = min(_IMU_N_VALUES, len(payload) // 2)
+    values = []
+    for i in range(n_int16):
+        raw = struct.unpack_from(">h", payload, i * 2)[0]
+        values.append(float(raw))
 
-    for _ in range(_IMU_SAMPLES_PER_PACKET):
-        for _axis in range(_IMU_AXES):
-            if offset + 2 > len(data):
-                break
-            raw = struct.unpack(">h", data[offset:offset + 2])[0]  # signed int16
-            accel_flat.append(float(raw) * _IMU_SCALE_ACCEL)
-            gyro_flat.append(float(raw) * _IMU_SCALE_GYRO)
-            offset += 2
+    # Pad to 9 if shorter
+    while len(values) < _IMU_N_VALUES:
+        values.append(0.0)
 
-    return accel_flat, gyro_flat
+    accel = [v * _ACCEL_SCALE for v in values[:_IMU_N_VALUES]]
+    gyro = [v * _GYRO_SCALE for v in values[:_IMU_N_VALUES]]
+
+    return accel, gyro

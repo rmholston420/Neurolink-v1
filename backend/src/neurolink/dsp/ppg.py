@@ -1,118 +1,113 @@
-"""PPG processing: HR, IBI, HRV, Poincaré indices.
+"""PPG / HRV computation.
 
-Ported from Rigpa-v2 ppg.py + Rigpa-v3 dsp/ppg.py.
-Requires neurokit2 and scipy. Degrades gracefully if not installed.
-All functions are pure.
+Ported from Rigpa-v2 dsp/ppg.py + Rigpa-v3 dsp/ppg.py.
+Uses neurokit2 for R-peak detection and HRV metrics.
 """
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
+import structlog
 
-from neurolink.models.eeg import PoincareIndices, PPGPayload
+from neurolink.models.eeg import PPGPayload
 
-_MIN_SAMPLES_FOR_PPG: int = 320  # 5s @ 64 Hz
-_PPG_FS_DEFAULT: float = 64.0
+log = structlog.get_logger(__name__)
+
+_PPG_FS: float = 64.0
+_MIN_SAMPLES: int = int(_PPG_FS * 10)  # 10 seconds minimum
+_HR_VALID_MIN: float = 30.0
+_HR_VALID_MAX: float = 200.0
 
 
-def compute_ppg(ppg_ir: np.ndarray, fs: float = _PPG_FS_DEFAULT) -> PPGPayload:
-    """Compute HR, IBI, HRV from a PPG IR waveform.
+@dataclass
+class PoincareMetrics:
+    """Poincare plot HRV metrics."""
+    sd1: float = 0.0
+    sd2: float = 0.0
+    ellipse_area: float = 0.0
+
+
+def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
+    """Compute PPG-derived HR and HRV from a PPG buffer.
 
     Args:
-        ppg_ir: 1-D PPG IR waveform array
-        fs: sampling frequency (Hz)
+        ppg_arr: 1D PPG signal array.
+        fs: Sampling rate (Hz).
 
     Returns:
-        PPGPayload with hr_bpm, IBI list, RMSSD, SDNN, pNN50, and Poincaré.
-        Returns empty PPGPayload if buffer is too short or neurokit2 unavailable.
+        PPGPayload with hr_bpm, hrv_rmssd, ibi_ms, and Poincare metrics.
     """
-    if len(ppg_ir) < _MIN_SAMPLES_FOR_PPG:
-        return PPGPayload()
+    empty = PPGPayload(hr_bpm=0.0, hrv_rmssd=0.0, ibi_ms=[])
+
+    if ppg_arr is None or len(ppg_arr) < _MIN_SAMPLES:
+        return empty
 
     try:
-        import neurokit2 as nk  # lazy import
+        import neurokit2 as nk
 
-        signals, info = nk.ppg_process(ppg_ir, sampling_rate=int(fs))
+        processed, info = nk.ppg_process(ppg_arr, sampling_rate=int(fs))
         peaks = info.get("PPG_Peaks", [])
-        if len(peaks) < 2:
-            return PPGPayload()
 
-        # Compute IBIs (ms)
-        peak_times = np.array(peaks) / fs
-        ibis_s = np.diff(peak_times)
-        ibis_ms = (ibis_s * 1000.0).tolist()
+        if len(peaks) < 3:
+            return empty
 
-        # HR
-        hr_bpm = float(60.0 / np.mean(ibis_s)) if ibis_s.size > 0 else 0.0
+        # Compute IBI in ms
+        ibi_ms = list((np.diff(peaks) / fs * 1000).astype(float))
 
-        # HRV
-        rmssd = _compute_rmssd(ibis_ms)
-        sdnn = _compute_sdnn(ibis_ms)
-        pnn50 = _compute_pnn50(ibis_ms)
-        poincare = _poincare(ibis_ms)
+        # Filter physiologically valid IBIs
+        ibi_ms = [ibi for ibi in ibi_ms if 300 <= ibi <= 2000]
+
+        if not ibi_ms:
+            return empty
+
+        hr_bpm = 60000.0 / float(np.mean(ibi_ms))
+        if not (_HR_VALID_MIN <= hr_bpm <= _HR_VALID_MAX):
+            return empty
+
+        # RMSSD
+        if len(ibi_ms) >= 2:
+            diffs = np.diff(ibi_ms)
+            hrv_rmssd = float(np.sqrt(np.mean(diffs ** 2)))
+        else:
+            hrv_rmssd = 0.0
+
+        poincare = _poincare(ibi_ms)
 
         return PPGPayload(
             hr_bpm=hr_bpm,
-            ibi_ms=ibis_ms,
-            hrv_rmssd=rmssd,
-            hrv_sdnn=sdnn,
-            hrv_pnn50=pnn50,
-            poincare=poincare,
+            hrv_rmssd=hrv_rmssd,
+            ibi_ms=ibi_ms,
+            sd1=poincare.sd1,
+            sd2=poincare.sd2,
+            ellipse_area=poincare.ellipse_area,
         )
 
-    except Exception:
-        return PPGPayload()
+    except Exception as exc:
+        log.warning("ppg_compute_error", error=str(exc))
+        return empty
 
 
-def _compute_rmssd(ibis_ms: list[float]) -> float:
-    """Root mean square of successive differences."""
-    if len(ibis_ms) < 2:
-        return 0.0
-    diffs = np.diff(np.array(ibis_ms))
-    return float(math.sqrt(float(np.mean(diffs ** 2))))
-
-
-def _compute_sdnn(ibis_ms: list[float]) -> float:
-    """Standard deviation of NN intervals."""
-    if len(ibis_ms) < 2:
-        return 0.0
-    return float(np.std(np.array(ibis_ms)))
-
-
-def _compute_pnn50(ibis_ms: list[float]) -> float:
-    """Percentage of successive differences > 50 ms."""
-    if len(ibis_ms) < 2:
-        return 0.0
-    diffs = np.abs(np.diff(np.array(ibis_ms)))
-    return float(np.mean(diffs > 50.0) * 100.0)
-
-
-def _poincare(ibis_ms: list[float]) -> PoincareIndices:
-    """Compute Poincaré plot indices (SD1, SD2) from IBI list.
+def _poincare(ibi_ms: list[float]) -> PoincareMetrics:
+    """Compute Poincare plot HRV metrics (SD1, SD2, ellipse area).
 
     Args:
-        ibis_ms: list of IBI values in milliseconds
+        ibi_ms: List of IBI values in milliseconds.
 
     Returns:
-        PoincareIndices with sd1, sd2, sd1/sd2 ratio, and ellipse area.
+        PoincareMetrics with sd1, sd2, ellipse_area.
     """
-    if len(ibis_ms) < 2:
-        return PoincareIndices()
+    if len(ibi_ms) < 2:
+        return PoincareMetrics()
 
-    ibi = np.array(ibis_ms)
-    x = ibi[:-1]
-    y = ibi[1:]
+    arr = np.array(ibi_ms)
+    rr_n = arr[:-1]
+    rr_n1 = arr[1:]
 
-    # SD1 = std of (y - x) / sqrt(2)
-    diff_series = (y - x) / math.sqrt(2)
-    sd1 = float(np.std(diff_series))
+    sd1 = float(np.std((rr_n1 - rr_n) / math.sqrt(2)))
+    sd2 = float(np.std((rr_n1 + rr_n) / math.sqrt(2)))
+    ellipse_area = math.pi * sd1 * sd2
 
-    # SD2 = std of (y + x) / sqrt(2)
-    sum_series = (y + x) / math.sqrt(2)
-    sd2 = float(np.std(sum_series))
-
-    ratio = sd1 / sd2 if sd2 > 0 else 0.0
-    area = math.pi * sd1 * sd2
-
-    return PoincareIndices(sd1=sd1, sd2=sd2, sd1_sd2_ratio=ratio, ellipse_area=area)
+    return PoincareMetrics(sd1=sd1, sd2=sd2, ellipse_area=ellipse_area)
