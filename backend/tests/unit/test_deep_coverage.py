@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -107,32 +108,26 @@ def test_compute_all_bands_zero_psd_returns_zeros():
     assert all(v == 0.0 for v in result.values())
 
 
-def test_compute_all_bands_importerror_fallback(monkeypatch):
-    """ImportError for scipy.signal falls back to bandpower buffer path."""
-    import sys
-    # Remove scipy from sys.modules to force ImportError inside compute_all_bands
-    scipy_signal = sys.modules.pop("scipy.signal", None)
-    scipy = sys.modules.pop("scipy", None)
-    try:
-        # Re-import with scipy missing
-        import importlib
-        import neurolink.hardware.muse_s.compute as compute_mod
-        importlib.reload(compute_mod)
+def test_compute_all_bands_importerror_fallback():
+    """ImportError for scipy.signal falls back to bandpower buffer path.
 
-        n = 512
-        t = np.linspace(0, 2, n)
-        channel_samples = {
-            ch: (0.4 * np.sin(2 * np.pi * 10.0 * t)).tolist()
-            for ch in ["TP9", "AF7", "AF8", "TP10", "AUX"]
-        }
-        # We only need to reach the fallback branch; result shape is what matters
-        result = compute_mod.compute_all_bands(channel_samples)
-        assert isinstance(result, dict)
-    finally:
-        if scipy_signal is not None:
-            sys.modules["scipy.signal"] = scipy_signal
-        if scipy is not None:
-            sys.modules["scipy"] = scipy
+    patch.dict with None makes `from scipy.signal import welch` raise
+    ImportError at the call site without reloading any module.
+    """
+    from neurolink.hardware.muse_s.compute import compute_all_bands
+
+    n = 512
+    t = np.linspace(0, 2, n)
+    channel_samples = {
+        ch: (0.4 * np.sin(2 * np.pi * 10.0 * t)).tolist()
+        for ch in ["TP9", "AF7", "AF8", "TP10", "AUX"]
+    }
+
+    with patch.dict(sys.modules, {"scipy.signal": None, "scipy": None}):
+        result = compute_all_bands(channel_samples)
+
+    assert isinstance(result, dict)
+    assert set(result.keys()) == {"delta", "theta", "alpha", "beta", "gamma"}
 
 
 # ===========================================================================
@@ -178,10 +173,7 @@ def test_breathing_neither_source_rr_none():
 def test_breathing_ibi_no_valid_mask():
     """IBI freq range produces no valid mask -> _rr_from_ibis returns None."""
     from neurolink.dsp.breathing import _rr_from_ibis
-    # Very short array -> nfft small -> rfftfreq may not have bins in [0.1, 0.55]
-    # But we can force it by passing exactly 10 identical IBIs
     ibis = [500.0] * 10
-    # This will run through the FFT; result is float or None
     result = _rr_from_ibis(ibis)
     assert result is None or isinstance(result, float)
 
@@ -418,10 +410,8 @@ async def test_build_payload_eeg_single_channel():
     t = np.linspace(0, 4, n)
     signal = (0.4 * np.sin(2 * np.pi * 10.0 * t)).tolist()
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
-    # 1 channel (shape[0]=1, shape[1]=n) -> shape[1] >= 2 passes, derived also runs
     sample = _make_sample(eeg_buffer=[signal])
     payload = await pump._build_payload(sample)
-    # Just verify it doesn't raise
     assert payload is not None
 
 
@@ -442,7 +432,6 @@ async def test_build_payload_no_accel_buffer():
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
     sample = _make_sample(accel_buffer=[])
     payload = await pump._build_payload(sample)
-    # Doesn't raise; imu_payload is also None
     assert payload.imu is None
 
 
