@@ -1,36 +1,43 @@
-# Neurolink Agent Instructions
+# Neurolink — Agent Instructions
 
-See `neurolink_spec.md` for the full specification.
+> See `neurolink-app-spec.md` for full specification.
 
-## Quick Start (Mock Mode, No Hardware)
+## Quick Start
 
 ```bash
 cd backend
 pip install -e ".[dev]"
-NEUROLINK_ADAPTER_TYPE=mock uvicorn neurolink.main:app --reload --host 0.0.0.0 --port 8000
+pytest -v
+NEUROLINK_ADAPTER_TYPE=mock uvicorn neurolink.main:app --reload --port 8000
 ```
 
-## Testing
+## Key Decisions
+
+- **Dual classifier:** v0.1 (6-region S-space) runs when `source == "muse_ble"`; v2 (8-region alchemical) always runs.
+- **BLE protocol constants are IMMUTABLE.** See `hardware/muse_s/ble_adapter.py`.
+- **Hub is process-global, thread-safe.** One `EEGHub` per process.
+- **No business logic in routers.** Routers delegate to `NeuroLinkService` only.
+- **Mock mode:** `NEUROLINK_ADAPTER_TYPE=mock` for CI/CD and dev without hardware.
+
+## Running Tests
 
 ```bash
-cd backend
-pytest -v --tb=short
-pytest --cov=neurolink --cov-report=term-missing --cov-fail-under=85
-ruff check . && ruff format --check .
-mypy src/neurolink/
+pytest tests/unit/ -v                    # fast unit tests only
+pytest -v --tb=short                     # all tests
+pytest --cov=neurolink --cov-fail-under=85  # with coverage
 ```
 
-## Architecture
+## BLE Hardware Setup (Muse S Gen 1)
 
-- `backend/src/neurolink/` — FastAPI application
-- `frontend/` — React 18 + TypeScript + Vite dashboard
-- `compose.dev.yml` — Docker Compose dev stack
-- `compose.prod.yml` — Docker Compose prod stack
+```bash
+NEUROLINK_ADAPTER_TYPE=ble \
+NEUROLINK_MUSE_BLE_ADDRESS=<mac> \
+uvicorn neurolink.main:app --port 8000
+```
 
-## Key Invariants
+## LSL Hardware Setup (muselsl required externally)
 
-- BLE protocol constants in `ble_bridge.py` and `hardware/muse_s/ble_adapter.py` are IMMUTABLE
-- Hub is process-global, thread-safe via `threading.Lock`
-- All hardware imports are lazy (inside constructors)
-- No business logic in routers — call `NeuroLinkService` only
-- DSP functions are pure — no I/O, no globals
+```bash
+muselsl stream --address <mac> &
+NEUROLINK_ADAPTER_TYPE=lsl uvicorn neurolink.main:app --port 8000
+```

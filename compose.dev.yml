@@ -6,39 +6,51 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
       - NEUROLINK_ADAPTER_TYPE=mock
-      - NEUROLINK_DEVICE_MODEL=muse_s_gen1
-      - NEUROLINK_REDIS_URL=redis://redis:6379/0
       - NEUROLINK_DB_PATH=/app/data/neurolink.db
-      - NEUROLINK_LOG_JSON=false
+      - NEUROLINK_REDIS_URL=redis://redis:6379/0
+      - NEUROLINK_REDIS_ENABLED=false
+      - NEUROLINK_LOG_JSON=true
+      - NEUROLINK_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
     volumes:
-      - neurolink-data:/app/data
+      - neurolink_data:/app/data
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 15s
 
   frontend:
     build:
-      context: frontend
+      context: ./frontend
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
     depends_on:
       - backend
     restart: unless-stopped
+    profiles:
+      - frontend
 
 volumes:
-  neurolink-data:
+  neurolink_data:
