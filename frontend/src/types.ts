@@ -121,3 +121,26 @@ export interface SessionSummary {
   frame_count: number
   final_ea1_eligible: boolean | null
 }
+
+// ── BLE scan types (Path B) ───────────────────────────────────────────────────
+
+export interface BLEDevice {
+  address: string
+  name:    string | null
+  rssi?:   number
+}
+
+export interface BLEScanResponse {
+  devices: BLEDevice[]
+  scan_duration_sec: number
+}
+
+// ── Web Bluetooth status (Path A) ─────────────────────────────────────────────
+export type WebBTStatus =
+  | 'unsupported'
+  | 'idle'
+  | 'requesting'
+  | 'connecting'
+  | 'streaming'
+  | 'reconnecting'
+  | 'error'
