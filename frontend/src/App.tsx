@@ -29,26 +29,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#58a6ff',
     letterSpacing: '-0.5px',
   },
-  statusBadge: (
-    connected: boolean
-  ): React.CSSProperties => ({
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '4px 12px',
-    borderRadius: 20,
-    fontSize: 13,
-    fontWeight: 600,
-    background: connected ? 'rgba(46,160,67,0.15)' : 'rgba(248,81,73,0.15)',
-    color: connected ? '#3fb950' : '#f85149',
-    border: `1px solid ${connected ? '#238636' : '#da3633'}`,
-  }),
-  dot: (connected: boolean): React.CSSProperties => ({
-    width: 8,
-    height: 8,
-    borderRadius: '50%',
-    background: connected ? '#3fb950' : '#f85149',
-  }),
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
@@ -76,6 +56,26 @@ const styles: Record<string, React.CSSProperties> = {
   },
 }
 
+const statusBadgeStyle = (connected: boolean): React.CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 12px',
+  borderRadius: 20,
+  fontSize: 13,
+  fontWeight: 600,
+  background: connected ? 'rgba(46,160,67,0.15)' : 'rgba(248,81,73,0.15)',
+  color: connected ? '#3fb950' : '#f85149',
+  border: `1px solid ${connected ? '#238636' : '#da3633'}`,
+})
+
+const dotStyle = (connected: boolean): React.CSSProperties => ({
+  width: 8,
+  height: 8,
+  borderRadius: '50%',
+  background: connected ? '#3fb950' : '#f85149',
+})
+
 export default function App() {
   const state = useNeurolinkSSE(`${API_URL}/api/v1/neurolink/stream`)
   const connected = state?.connected ?? false
@@ -84,8 +84,8 @@ export default function App() {
     <div style={styles.app}>
       <header style={styles.header}>
         <h1 style={styles.title}>⚡ Neurolink</h1>
-        <span style={styles.statusBadge(connected)}>
-          <span style={styles.dot(connected)} />
+        <span style={statusBadgeStyle(connected)}>
+          <span style={dotStyle(connected)} />
           {connected ? 'Connected' : 'Disconnected'}
         </span>
       </header>

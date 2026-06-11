@@ -17,17 +17,6 @@ const FOCUS_COLORS: Record<string, string> = {
 const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', gap: 14 },
   label: { fontSize: 13, color: '#8b949e', marginBottom: 4 },
-  stateBadge: (color: string): React.CSSProperties => ({
-    display: 'inline-block',
-    padding: '4px 14px',
-    borderRadius: 20,
-    fontWeight: 600,
-    fontSize: 14,
-    background: `${color}22`,
-    color,
-    border: `1px solid ${color}66`,
-    marginBottom: 6,
-  }),
   barBg: {
     height: 12,
     background: '#21262d',
@@ -35,6 +24,18 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
   },
 }
+
+const stateBadgeStyle = (color: string): React.CSSProperties => ({
+  display: 'inline-block',
+  padding: '4px 14px',
+  borderRadius: 20,
+  fontWeight: 600,
+  fontSize: 14,
+  background: `${color}22`,
+  color,
+  border: `1px solid ${color}66`,
+  marginBottom: 6,
+})
 
 export default function FocusFatigueGauge({ focusState, focusScore, fatigueScore }: Props) {
   const focusColor = FOCUS_COLORS[focusState] ?? '#484f58'
@@ -44,7 +45,7 @@ export default function FocusFatigueGauge({ focusState, focusScore, fatigueScore
     <div style={styles.container}>
       <div>
         <div style={styles.label}>Focus State</div>
-        <span style={styles.stateBadge(focusColor)}>{focusState.replace('_', ' ')}</span>
+        <span style={stateBadgeStyle(focusColor)}>{focusState.replace('_', ' ')}</span>
         <div style={styles.barBg}>
           <div
             style={{

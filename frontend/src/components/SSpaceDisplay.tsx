@@ -22,19 +22,20 @@ const styles: Record<string, React.CSSProperties> = {
   container: { display: 'flex', flexDirection: 'column', gap: 12 },
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   label: { fontSize: 12, color: '#8b949e' },
-  badge: (color: string): React.CSSProperties => ({
-    display: 'inline-block',
-    padding: '3px 10px',
-    borderRadius: 12,
-    background: `${color}22`,
-    color,
-    border: `1px solid ${color}66`,
-    fontSize: 13,
-    fontWeight: 600,
-  }),
   region: { fontSize: 28, fontWeight: 700, color: '#e6edf3' },
   divider: { height: 1, background: '#21262d', margin: '4px 0' },
 }
+
+const badgeStyle = (color: string): React.CSSProperties => ({
+  display: 'inline-block',
+  padding: '3px 10px',
+  borderRadius: 12,
+  background: `${color}22`,
+  color,
+  border: `1px solid ${color}66`,
+  fontSize: 13,
+  fontWeight: 600,
+})
 
 export default function SSpaceDisplay({ region, stage, regionV01, stageV01 }: Props) {
   const color = STAGE_COLORS[stage] ?? '#58a6ff'
@@ -47,7 +48,7 @@ export default function SSpaceDisplay({ region, stage, regionV01, stageV01 }: Pr
           <div style={styles.label}>v2 Alchemical</div>
           <span style={{ ...styles.region, color }}>{region}</span>
         </div>
-        <span style={styles.badge(color)}>{stage}</span>
+        <span style={badgeStyle(color)}>{stage}</span>
       </div>
 
       <div style={styles.divider} />
@@ -57,7 +58,7 @@ export default function SSpaceDisplay({ region, stage, regionV01, stageV01 }: Pr
           <div style={styles.label}>v0.1 S-Space</div>
           <span style={{ fontSize: 20, fontWeight: 600, color: colorV01 }}>{regionV01}</span>
         </div>
-        <span style={styles.badge(colorV01)}>{stageV01}</span>
+        <span style={badgeStyle(colorV01)}>{stageV01}</span>
       </div>
     </div>
   )
