@@ -1,0 +1,83 @@
+"""Unit tests for db.repository using an in-memory SQLite database."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+
+async def _make_factory():
+    os.environ["NEUROLINK_DB_PATH"] = ":memory:"
+    import neurolink.db.engine as engine_module
+    engine_module._engine = None
+    engine_module._session_factory = None
+    await engine_module.init_db()
+    return engine_module.get_session_factory()
+
+
+async def test_create_session_returns_entry():
+    factory = await _make_factory()
+    from neurolink.db.repository import SessionLogRepository
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        entry = await repo.create_session(
+            device_model="muse_s_gen1",
+            adapter_type="mock",
+            address=None,
+        )
+    assert entry.id is not None
+    assert entry.device_model == "muse_s_gen1"
+
+
+async def test_end_session_updates_frame_count():
+    factory = await _make_factory()
+    from neurolink.db.repository import SessionLogRepository
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        entry = await repo.create_session(device_model="mock", adapter_type="mock")
+        session_id = entry.id
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        await repo.end_session(
+            session_id=session_id,
+            frame_count=42,
+            final_region="E",
+            final_stage="Rubedo",
+            final_ea1_eligible=True,
+        )
+
+
+async def test_list_recent_returns_entries():
+    factory = await _make_factory()
+    from neurolink.db.repository import SessionLogRepository
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        await repo.create_session(device_model="mock", adapter_type="mock")
+        await repo.create_session(device_model="muse", adapter_type="lsl")
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        sessions = await repo.list_recent(limit=10)
+    assert len(sessions) >= 2
+
+
+async def test_list_recent_empty_db_returns_empty():
+    factory = await _make_factory()
+    from neurolink.db.repository import SessionLogRepository
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        sessions = await repo.list_recent(limit=10)
+    assert sessions == []
+
+
+async def test_create_session_no_address():
+    factory = await _make_factory()
+    from neurolink.db.repository import SessionLogRepository
+    async with factory() as db:
+        repo = SessionLogRepository(db)
+        entry = await repo.create_session(
+            device_model="muse_athena",
+            adapter_type="lsl",
+            address=None,
+        )
+    assert entry.adapter_type == "lsl"

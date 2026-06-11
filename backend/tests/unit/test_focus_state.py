@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from neurolink.focus_state import (
     FocusState,
     classify_focus,
@@ -34,20 +32,17 @@ def test_classify_focus_boundary_high():
 
 
 def test_compute_focus_score_suppressed_alpha():
-    # alpha well below baseline -> high focus
     score = compute_focus_score(bands_alpha=0.05, bands_beta=0.10, baseline_alpha=0.30)
     assert score > 0.5
 
 
 def test_compute_focus_score_high_beta_penalty():
-    # Very high beta -> lower score
     low_beta = compute_focus_score(0.05, 0.05, 0.30)
     high_beta = compute_focus_score(0.05, 0.50, 0.30)
     assert high_beta < low_beta
 
 
 def test_compute_focus_score_zero_baseline_fallback():
-    # Zero baseline should not raise — uses fallback 0.3
     score = compute_focus_score(0.10, 0.10, 0.0)
     assert 0.0 <= score <= 1.0
 

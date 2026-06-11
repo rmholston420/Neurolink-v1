@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
-from neurolink.hub import EEGHub, get_hub, get_state, reset, snapshot, update
+from neurolink.hub import EEGHub, get_state, reset, snapshot, update
 from neurolink.models.eeg import BandPowers, IngestPayload, NeurolinkState
 
 
@@ -72,7 +70,6 @@ def test_hub_get_latest_initially_none():
 
 
 def test_module_level_delegates():
-    """Module-level update/get_state/reset/snapshot delegates work."""
     reset()
     update(_payload())
     state = get_state()

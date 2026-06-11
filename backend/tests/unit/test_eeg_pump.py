@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 import numpy as np
-import pytest
 
 from neurolink.eeg_pump import EEGPump
 from neurolink.hardware.base import EEGSample
@@ -13,8 +12,6 @@ from neurolink.hub import EEGHub
 
 
 class _ConstantAdapter:
-    """Minimal adapter that always returns a fixed EEGSample."""
-
     is_connected = True
     source = "mock"
     address = ""
@@ -41,8 +38,6 @@ class _ConstantAdapter:
 
 
 class _NullAdapter:
-    """Adapter that always returns None (no data available)."""
-
     is_connected = True
     source = "mock"
     address = ""
@@ -70,14 +65,13 @@ async def test_pump_null_adapter_does_not_crash():
     await pump.start()
     await asyncio.sleep(0.05)
     await pump.stop()
-    # No frames — null adapter returns None every tick
     assert hub.get_state().frame_count == 0
 
 
 async def test_pump_stop_before_start_is_safe():
     hub = EEGHub()
     pump = EEGPump(_NullAdapter(), hub)
-    await pump.stop()  # should not raise
+    await pump.stop()
 
 
 async def test_pump_multiple_stop_calls_are_safe():
@@ -85,4 +79,4 @@ async def test_pump_multiple_stop_calls_are_safe():
     pump = EEGPump(_ConstantAdapter(), hub, publish_hz=100.0)
     await pump.start()
     await pump.stop()
-    await pump.stop()  # second stop should be a no-op
+    await pump.stop()
