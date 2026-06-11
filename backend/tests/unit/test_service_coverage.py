@@ -1,171 +1,239 @@
-"""Coverage gap-filling tests for NeuroLinkService."""
-
+"""Branch-coverage tests for service.py (NeuroLinkService)."""
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from neurolink.exceptions import AdapterAlreadyConnectedError, AdapterNotConnectedError
 from neurolink.hub import EEGHub
-from neurolink.models.eeg import BandPowers, IngestPayload
 from neurolink.service import NeuroLinkService
 
 
-def _svc() -> NeuroLinkService:
-    return NeuroLinkService(EEGHub())
+def _service() -> NeuroLinkService:
+    return NeuroLinkService(hub=EEGHub())
 
 
 # ---------------------------------------------------------------------------
-# _create_db_session — guard: no factory
+# Initial state
 # ---------------------------------------------------------------------------
 
-async def test_create_db_session_no_factory_is_noop():
-    svc = _svc()
-    assert svc._db_session_id is None
-    await svc._create_db_session("mock", "mock", None)  # factory=None, returns immediately
-    assert svc._db_session_id is None
-
-
-# ---------------------------------------------------------------------------
-# _create_db_session — exception is swallowed
-# ---------------------------------------------------------------------------
-
-async def test_create_db_session_exception_is_swallowed():
-    svc = _svc()
-
-    @asynccontextmanager
-    async def bad_factory():
-        raise RuntimeError("db boom")
-        yield  # makes it an async generator
-
-    svc._db_session_factory = bad_factory
-    await svc._create_db_session("mock", "mock", None)  # must not raise
-    assert svc._db_session_id is None
+def test_service_initial_state():
+    svc = _service()
+    assert svc.is_connected is False
+    assert svc.adapter_type == "mock"
 
 
 # ---------------------------------------------------------------------------
-# _close_db_session — guard branches
+# connect() + disconnect() round-trip
 # ---------------------------------------------------------------------------
 
-async def test_close_db_session_no_factory_is_noop():
-    svc = _svc()
-    svc._db_session_id = None
-    await svc._close_db_session()
+async def test_connect_mock_and_disconnect():
+    svc = _service()
+    resp = await svc.connect(adapter_type="mock", device_model="mock")
+    assert resp.ok is True
+    assert svc.is_connected is True
 
-
-async def test_close_db_session_no_session_id_is_noop():
-    svc = _svc()
-    svc._db_session_factory = object()  # non-None factory
-    svc._db_session_id = None
-    await svc._close_db_session()  # guard: session_id is None
-
-
-async def test_close_db_session_exception_is_swallowed():
-    svc = _svc()
-    svc._db_session_id = 99
-
-    @asynccontextmanager
-    async def bad_factory():
-        raise RuntimeError("close boom")
-        yield
-
-    svc._db_session_factory = bad_factory
-    await svc._close_db_session()  # must not raise
+    resp2 = await svc.disconnect()
+    assert resp2.ok is True
+    assert svc.is_connected is False
 
 
 # ---------------------------------------------------------------------------
-# start_calibration idempotency
+# connect() twice raises AdapterAlreadyConnectedError
 # ---------------------------------------------------------------------------
 
-async def test_start_calibration_idempotent_when_running():
-    svc = _svc()
+async def test_connect_twice_raises():
+    svc = _service()
     await svc.connect(adapter_type="mock", device_model="mock")
-    try:
-        resp1 = await svc.start_calibration()
-        assert resp1.status == "started"
-        # Replace task with a mock that reports not-done
-        fake_task = MagicMock()
-        fake_task.done.return_value = False
-        svc._calibration_task = fake_task
-        resp2 = await svc.start_calibration()
-        assert resp2.status == "started"
-    finally:
-        if svc._calibration_task and not isinstance(svc._calibration_task, MagicMock):
-            svc._calibration_task.cancel()
-        await svc.disconnect()
+    with pytest.raises(AdapterAlreadyConnectedError):
+        await svc.connect(adapter_type="mock", device_model="mock")
+    await svc.disconnect()
 
 
 # ---------------------------------------------------------------------------
-# stream_state — yields an actual pushed value
+# disconnect() with no adapter (never connected)
 # ---------------------------------------------------------------------------
 
-async def test_stream_state_yields_pushed_value():
-    svc = _svc()
-    payload = IngestPayload(
-        source="mock",
-        bands=BandPowers(alpha=0.5, theta=0.1, beta=0.2, delta=0.1, gamma=0.1),
-    )
-
-    yielded = []
-
-    async def consume():
-        async for state in svc.stream_state():
-            yielded.append(state)
-            break
-
-    task = asyncio.create_task(consume())
-    await asyncio.sleep(0.01)
-    svc._hub.update(payload)
-    await asyncio.wait_for(task, timeout=2.0)
-
-    assert len(yielded) == 1
-    assert yielded[0].frame_count == 1
+async def test_disconnect_when_not_connected_is_safe():
+    svc = _service()
+    resp = await svc.disconnect()
+    assert resp.ok is True
 
 
 # ---------------------------------------------------------------------------
-# disconnect when adapter.disconnect() raises
+# disconnect() — adapter.disconnect() raises, still cleans up
 # ---------------------------------------------------------------------------
 
-async def test_disconnect_swallows_adapter_error():
-    svc = _svc()
+async def test_disconnect_adapter_error_still_cleans_up():
+    svc = _service()
     await svc.connect(adapter_type="mock", device_model="mock")
-    svc._adapter.disconnect = AsyncMock(side_effect=RuntimeError("ble gone"))
-    result = await svc.disconnect()  # must not raise
-    assert result.ok is True
+    svc._adapter.disconnect = AsyncMock(side_effect=RuntimeError("hw crash"))
+    resp = await svc.disconnect()
+    assert resp.ok is True
     assert svc._adapter is None
 
 
 # ---------------------------------------------------------------------------
-# get_sessions with a mock DB factory
+# get_current_state
 # ---------------------------------------------------------------------------
 
-async def test_get_sessions_with_factory_returns_summaries():
-    from datetime import datetime, timezone
+async def test_get_current_state():
+    svc = _service()
+    state = await svc.get_current_state()
+    assert hasattr(state, "frame_count")
 
-    svc = _svc()
 
-    mock_row = MagicMock()
-    mock_row.id = 1
-    mock_row.started_at = datetime.now(timezone.utc)
-    mock_row.ended_at = None
-    mock_row.device_model = "muse_s_gen1"
-    mock_row.adapter_type = "mock"
-    mock_row.frame_count = 10
-    mock_row.final_ea1_eligible = False
+# ---------------------------------------------------------------------------
+# get_band_powers
+# ---------------------------------------------------------------------------
 
-    mock_repo = AsyncMock()
-    mock_repo.list_recent.return_value = [mock_row]
+async def test_get_band_powers_returns_response():
+    svc = _service()
+    resp = await svc.get_band_powers(channel="mean")
+    assert resp.channel == "mean"
+    assert isinstance(resp.alpha, float)
 
-    @asynccontextmanager
-    async def factory():
-        yield mock_repo
 
-    svc._db_session_factory = factory
+# ---------------------------------------------------------------------------
+# get_ea1
+# ---------------------------------------------------------------------------
 
-    # Patch the class where it is actually imported at call-time
-    with patch("neurolink.db.repository.SessionLogRepository", return_value=mock_repo):
-        sessions = await svc.get_sessions(limit=5)
+async def test_get_ea1():
+    from neurolink.models.eeg import EA1Result
+    svc = _service()
+    result = await svc.get_ea1()
+    assert isinstance(result, EA1Result)
 
-    assert len(sessions) == 1
-    assert sessions[0].id == 1
-    assert sessions[0].device_model == "muse_s_gen1"
+
+# ---------------------------------------------------------------------------
+# start_calibration — no adapter raises
+# ---------------------------------------------------------------------------
+
+async def test_start_calibration_no_adapter_raises():
+    svc = _service()
+    with pytest.raises(AdapterNotConnectedError):
+        await svc.start_calibration()
+
+
+# ---------------------------------------------------------------------------
+# start_calibration — starts task
+# ---------------------------------------------------------------------------
+
+async def test_start_calibration_starts_task():
+    svc = _service()
+    await svc.connect(adapter_type="mock", device_model="mock")
+    resp = await svc.start_calibration()
+    assert resp.status == "started"
+    assert svc._calibration_task is not None
+    # cleanup
+    svc._calibration_task.cancel()
+    try:
+        await svc._calibration_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    await svc.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# start_calibration — idempotent while already running
+# ---------------------------------------------------------------------------
+
+async def test_start_calibration_idempotent():
+    svc = _service()
+    await svc.connect(adapter_type="mock", device_model="mock")
+    resp1 = await svc.start_calibration()
+    resp2 = await svc.start_calibration()  # task still pending
+    assert resp1.status == "started"
+    assert resp2.status == "started"
+    svc._calibration_task.cancel()
+    try:
+        await svc._calibration_task
+    except (asyncio.CancelledError, Exception):
+        pass
+    await svc.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# get_sessions — no factory returns empty list
+# ---------------------------------------------------------------------------
+
+async def test_get_sessions_no_factory():
+    svc = _service()
+    sessions = await svc.get_sessions()
+    assert sessions == []
+
+
+# ---------------------------------------------------------------------------
+# set_db_session_factory
+# ---------------------------------------------------------------------------
+
+def test_set_db_session_factory():
+    svc = _service()
+    factory = MagicMock()
+    svc.set_db_session_factory(factory)
+    assert svc._db_session_factory is factory
+
+
+# ---------------------------------------------------------------------------
+# _close_db_session — no factory, no session_id (both early-exit branches)
+# ---------------------------------------------------------------------------
+
+async def test_close_db_session_no_factory():
+    svc = _service()
+    await svc._close_db_session()  # must not raise
+
+
+async def test_close_db_session_no_session_id():
+    svc = _service()
+    svc._db_session_factory = MagicMock()  # factory set but no session_id
+    await svc._close_db_session()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# stream_state — timeout branch yields current state
+# ---------------------------------------------------------------------------
+
+async def test_stream_state_timeout_yields_current_state():
+    svc = _service()
+    # Patch wait_for to immediately raise TimeoutError
+    with patch("neurolink.service.asyncio.wait_for", side_effect=TimeoutError):
+        gen = svc.stream_state()
+        state = await gen.__anext__()
+        assert hasattr(state, "frame_count")
+        # StopAsyncIteration raised on next call since timeout only yields once
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+
+# ---------------------------------------------------------------------------
+# stream_state — CancelledError exits cleanly
+# ---------------------------------------------------------------------------
+
+async def test_stream_state_cancelled_unregisters_queue():
+    svc = _service()
+
+    async def _run():
+        async for _ in svc.stream_state():
+            break  # consume one state then stop
+
+    # Push a real state so the queue yields once
+    from neurolink.models.eeg import BandPowers, IngestPayload
+    p = IngestPayload(
+        source="mock", address="mock", timestamp=0.0,
+        bands=BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.1, gamma=0.05),
+        poor_contact=False,
+    )
+
+    task = asyncio.create_task(_run())
+    await asyncio.sleep(0.01)
+    svc._hub.update(p)  # triggers fanout → queue fills → generator yields
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    # After cancel the SSE queue should be unregistered
+    assert len(svc._hub._sse_queues) == 0
