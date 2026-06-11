@@ -119,8 +119,13 @@ class EEGPump:
         faa: float | None = None
         fmt: float | None = None
         if sample.eeg_buffer:
-            eeg_arr2 = np.array(sample.eeg_buffer, dtype=np.float32)
-            derived = derived_eeg(eeg_arr2, fs=_EEG_FS)
+            _min2 = min(len(b) for b in sample.eeg_buffer)
+            if _min2 >= 2:
+                eeg_arr2 = np.array([b[:_min2] for b in sample.eeg_buffer], dtype=np.float32)
+            else:
+                eeg_arr2 = None
+            if eeg_arr2 is not None:
+                derived = derived_eeg(eeg_arr2, fs=_EEG_FS)
             faa = derived.get("faa")
             fmt = derived.get("fmt")
 
