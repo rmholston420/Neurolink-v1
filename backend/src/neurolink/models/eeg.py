@@ -87,6 +87,37 @@ class EA1Result(BaseModel):
     integration_coverage: float = 0.0
 
 
+class ArtifactAnnotationPayload(BaseModel):
+    """Single artifact annotation produced by Stage 3b ArtifactDetector.
+
+    Mirrors ``neurolink.dsp.artifact_detector.ArtifactAnnotation`` as a
+    serialisable Pydantic model so the result can travel through
+    IngestPayload → NeurolinkState → SSE stream to the frontend.
+    """
+
+    artifact_type: str        # ArtifactType.name  e.g. "BLINK", "EMG"
+    confidence: float         # 0.0–1.0
+    channels: list[str]       # channel names where artifact was detected
+    feature_value: float      # raw feature value that triggered detection
+    feature_name: str         # human-readable feature label
+    threshold: float          # the threshold that was exceeded
+
+
+class ArtifactCorrectionPlanPayload(BaseModel):
+    """Serialisable snapshot of the CorrectionPlan built by Stage 3b.
+
+    Forwarded through IngestPayload → NeurolinkState → SSE stream so the
+    frontend and monitoring tools can see which correctors were invoked
+    on each frame without needing to parse artifact_annotations.
+    """
+
+    hard_reject: bool = False
+    apply_ocular_regression: bool = False
+    apply_asr: bool = False
+    apply_notch: bool = False
+    apply_cardiac_regression: bool = False
+
+
 # ============================================================================
 # Ingest Payload (internal: EEGPump -> Hub)
 # ============================================================================
@@ -116,6 +147,12 @@ class IngestPayload(BaseModel):
     # Stage 3: epoch-level artifact gate decision
     artifact_rejected: bool = False
     artifact_reasons: list[str] = Field(default_factory=list)
+    # Stage 3b: multi-type artifact classifier results
+    # Empty list when Stage 3b is disabled or no artifacts detected.
+    artifact_annotations: list[ArtifactAnnotationPayload] = Field(default_factory=list)
+    # Stage 3b: correction plan built from classifier results.
+    # None when Stage 3b is disabled.
+    artifact_correction_plan: ArtifactCorrectionPlanPayload | None = None
     # Per-channel impedance in kΩ. Only hardware adapters that expose electrode
     # impedance need to populate this; defaults to empty dict.
     channel_impedances: dict[str, float] = Field(default_factory=dict)
@@ -175,6 +212,12 @@ class NeurolinkState(BaseModel):
     # Stage 3: epoch-level artifact gate
     artifact_rejected: bool = False
     artifact_reasons: list[str] = Field(default_factory=list)
+    # Stage 3b: multi-type artifact classifier results forwarded from IngestPayload.
+    # Empty list when Stage 3b is disabled or no artifacts detected.
+    artifact_annotations: list[ArtifactAnnotationPayload] = Field(default_factory=list)
+    # Stage 3b: correction plan forwarded from IngestPayload.
+    # None when Stage 3b is disabled.
+    artifact_correction_plan: ArtifactCorrectionPlanPayload | None = None
     # Per-channel impedance in kΩ, forwarded verbatim from IngestPayload.
     channel_impedances: dict[str, float] = Field(default_factory=dict)
     # Baseline phase forwarded verbatim from IngestPayload.

@@ -31,6 +31,13 @@ class FilterToggleConfig:
     # Stage 3 — epoch-level artifact gate (amplitude / IMU RMS / kurtosis)
     stage3_artifact_gate: bool = True
 
+    # Stage 3b — multi-type artifact classifier + correction router
+    # Classifies 7 artifact types (blink, H-EOG, EMG, cardiac, electrode pop,
+    # line noise, motion) and builds a CorrectionPlan that routes Stages 4-5.
+    # When disabled, Stages 4-5 still run unconditionally on clean frames
+    # (same behaviour as before Stage 3b was added).
+    stage3b_artifact_detector: bool = True
+
     # Stage 4 — Artifact Subspace Reconstruction (ASR burst repair)
     stage4_asr: bool = True
 

@@ -34,16 +34,38 @@ After Stage 2 interpolation:
        b. IMU motion gate (0.15 g RMS default) — from accel_buffer
        c. Kurtosis burst detection (excess kurtosis > 5.0 default)
   2. If decision.reject is True:
-       - Band powers, derived EEG (FAA/FMt), ASR, regression, and
-         baseline recording are skipped entirely.
+       - All downstream stages are skipped entirely.
        - artifact_rejected=True and artifact_reasons are set.
        - PPG, breathing, IMU orientation still computed (unaffected).
   3. decision is carried through IngestPayload → NeurolinkState →
      SSE stream so the frontend can show a per-frame quality indicator.
 
+Stage 3b integration — ArtifactDetector (multi-type classifier)
+---------------------------------------------------------------
+Runs on frames that pass Stage 3 (not coarse-rejected).
+  1. detector.classify(eeg_arr, accel_arr, fs) identifies up to 7
+     artifact types: BLINK, HORIZONTAL_EOG, EMG, CARDIAC,
+     ELECTRODE_POP, LINE_NOISE, MOTION.
+  2. Returns a DetectionReport with:
+       - annotations  : list of ArtifactAnnotation (type, confidence,
+                        channels, feature value, threshold)
+       - correction_plan : CorrectionPlan routing flags
+  3. CorrectionPlan overrides downstream corrector routing:
+       - hard_reject          → skip Stages 4/5 and band powers
+                                (same effect as Stage 3 reject)
+       - apply_asr            → Stage 4 ASR runs only when True
+       - apply_ocular_regression → Stage 5 runs only when True
+       - apply_notch          → notch filter re-applied after Stage 5
+  4. When Stage 3b is disabled (toggle off), Stages 4-5 run
+     unconditionally on clean frames — prior behaviour preserved.
+  5. Annotations and correction plan serialised as
+     ArtifactAnnotationPayload / ArtifactCorrectionPlanPayload and
+     carried through IngestPayload → NeurolinkState → SSE stream.
+
 Stage 4 integration — Artifact Subspace Reconstruction (ASR)
 -------------------------------------------------------------
 ASR runs on clean frames only (after Stage 3 passes the frame).
+  - When Stage 3b is active, ASR runs only when plan.apply_asr is True.
   - Prioritised over pure ICA for low-channel-count wearable EEG;
     ICA source separation degrades below ~64 channels.
   - Calibration phase (first calib_sec s, default 30 s) accumulates
@@ -80,6 +102,8 @@ serving two purposes:
 Stage 5 integration — Gratton-Coles Ocular Regression
 -------------------------------------------------------
 Ocular regression runs on clean frames only (after Stage 4).
+  - When Stage 3b is active, regression runs only when
+    plan.apply_ocular_regression is True.
   - Gratton-Coles temporal regression is used in preference to ICA
     for the same reason as Stage 4.
   - Requires an EOG/AUX reference channel (default: channel 4, Muse
@@ -109,18 +133,23 @@ Pipeline per tick
                                          (bypassed if stage2_bad_channels=False)
  8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
                                          (bypassed if stage3_artifact_gate=False)
- 9.  [Stage 4] ASR burst reconstruction  (clean frames only)
+ 8b. [Stage 3b] Multi-type artifact classifier + correction router
+                                         (bypassed if stage3b_artifact_detector=False)
+ 9.  [Stage 4] ASR burst reconstruction  (clean frames; plan.apply_asr when 3b active)
                                          (bypassed if stage4_asr=False)
  9b. [Stage 4b] Baseline recording / impedance stabilisation
                                          (bypassed if stage4b_baseline=False)
-10.  [Stage 5] Gratton-Coles ocular regression   (clean frames only)
+10.  [Stage 5] Gratton-Coles ocular regression
+               (clean frames; plan.apply_ocular_regression when 3b active)
                                          (bypassed if stage5_ocular=False)
+10b. [Stage 5b] Notch re-apply (plan.apply_notch when 3b active)
 11.  Band powers from corrected+filtered buffer  (clean frames only)
 12.  Derived EEG (FAA, FMt)                      (clean frames only)
 13.  PPG HRV
 14.  Breathing
 15.  IMU head orientation
-16.  Build IngestPayload  (includes baseline_phase)
+16.  Build IngestPayload  (includes baseline_phase, artifact_annotations,
+                           artifact_correction_plan)
 17.  hub.update()
 """
 
@@ -133,6 +162,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import structlog
 
+from neurolink.dsp.artifact_detector import ArtifactDetector, CorrectionPlan
 from neurolink.dsp.artifact_gate import ArtifactGate
 from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
@@ -142,7 +172,14 @@ from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
 from neurolink.hardware.base import EEGSample, HardwareAdapter
-from neurolink.models.eeg import BandPowers, BreathingPayload, IMUPayload, IngestPayload
+from neurolink.models.eeg import (
+    ArtifactAnnotationPayload,
+    ArtifactCorrectionPlanPayload,
+    BandPowers,
+    BreathingPayload,
+    IMUPayload,
+    IngestPayload,
+)
 
 if TYPE_CHECKING:
     from neurolink.stage0 import Stage0Guard
@@ -168,6 +205,11 @@ class EEGPump:
     equivalent or better correction with lower compute cost and no
     minimum-channel requirement.
 
+    Stage 3b (ArtifactDetector) adds multi-type classification between
+    the coarse gate and the correctors, enabling precise routing:
+    only the correctors relevant to the detected artifact type(s) are
+    invoked, rather than running all correctors unconditionally.
+
     Baseline
     --------
     A BaselineRecorder is created at construction time using the same
@@ -192,15 +234,17 @@ class EEGPump:
     6.  [Stage 2] Bad channel detection (EMA update)
     7.  [Stage 2] Spherical spline interpolation of bad channels
     8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
-    9.  [Stage 4] ASR burst reconstruction          (clean frames only)
+    8b. [Stage 3b] Multi-type artifact classifier + correction router
+    9.  [Stage 4] ASR burst reconstruction  (plan-gated when 3b active)
     9b. [Stage 4b] Baseline recording / impedance stabilisation
-    10. [Stage 5] Gratton-Coles ocular regression   (clean frames only)
+    10. [Stage 5] Gratton-Coles ocular regression (plan-gated when 3b active)
+    10b.[Stage 5b] Notch re-apply (plan.apply_notch when 3b active)
     11. Band powers from corrected+filtered buffer  (clean frames only)
     12. Derived EEG (FAA, FMt)                      (clean frames only)
     13. PPG HRV
     14. Breathing
     15. IMU head orientation
-    16. Build IngestPayload  (includes baseline_phase)
+    16. Build IngestPayload
     17. hub.update()
     """
 
@@ -213,6 +257,7 @@ class EEGPump:
         stage1_registry: FilterChainRegistry | None = None,
         bad_channel_detector: BadChannelDetector | None = None,
         artifact_gate: ArtifactGate | None = None,
+        artifact_detector: ArtifactDetector | None = None,
         asr: ArtifactSubspaceReconstructor | None = None,
         ocular_regressor: OcularRegressor | None = None,
     ) -> None:
@@ -223,6 +268,7 @@ class EEGPump:
         self._stage1: FilterChainRegistry = stage1_registry or get_registry()
         self._stage2: BadChannelDetector = bad_channel_detector or BadChannelDetector()
         self._stage3: ArtifactGate = artifact_gate or ArtifactGate()
+        self._stage3b: ArtifactDetector = artifact_detector or ArtifactDetector()
         self._stage4: ArtifactSubspaceReconstructor = asr or ArtifactSubspaceReconstructor()
         self._stage5: OcularRegressor = ocular_regressor or OcularRegressor()
         # Stage 4b: per-session resting baseline (impedance stabilisation +
@@ -325,6 +371,14 @@ class EEGPump:
                     [b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32
                 )
 
+        # ── Shared accel array (built once, reused by Stage 3, 3b, IMU) ─
+        accel_arr: np.ndarray | None = None
+        if sample.accel_buffer and len(sample.accel_buffer) >= 3:
+            try:
+                accel_arr = np.array(sample.accel_buffer, dtype=np.float32)
+            except Exception:
+                accel_arr = None
+
         # ── Stage 1 — zero-phase FIR filter chain ──────────────────────
         if eeg_arr is not None and toggles.stage1_fir:
             eeg_arr = self._stage1.apply(eeg_arr)
@@ -346,13 +400,6 @@ class EEGPump:
         artifact_rejected: bool = False
         artifact_reasons: list[str] = []
         if eeg_arr is not None and toggles.stage3_artifact_gate:
-            accel_arr: np.ndarray | None = None
-            if sample.accel_buffer and len(sample.accel_buffer) >= 3:
-                try:
-                    accel_arr = np.array(sample.accel_buffer, dtype=np.float32)
-                except Exception:
-                    accel_arr = None
-
             decision = self._stage3.evaluate(eeg_arr, accel_arr)
             if decision.reject:
                 artifact_rejected = True
@@ -363,8 +410,84 @@ class EEGPump:
                     n_bad_ch=len(bad_channels),
                 )
 
+        # ── Stage 3b — multi-type artifact classifier + router ──────────
+        # Only runs on frames that passed the coarse Stage 3 gate.
+        # The CorrectionPlan produced here overrides whether Stages 4/5
+        # are invoked.  When Stage 3b is disabled, plan defaults to
+        # "run all correctors" (apply_asr=True, apply_ocular_regression=True)
+        # preserving prior behaviour exactly.
+        detection_report = None
+        artifact_annotations: list[ArtifactAnnotationPayload] = []
+        correction_plan_payload: ArtifactCorrectionPlanPayload | None = None
+
+        # Plan controls downstream corrector routing.
+        # Default: run all correctors unconditionally (prior behaviour).
+        _plan_apply_asr: bool = True
+        _plan_apply_ocular: bool = True
+        _plan_apply_notch: bool = False
+        _plan_hard_reject: bool = False
+
+        if (
+            eeg_arr is not None
+            and not artifact_rejected
+            and toggles.stage3b_artifact_detector
+        ):
+            detection_report = self._stage3b.classify(
+                eeg_arr, accel=accel_arr, fs=_EEG_FS
+            )
+            plan = detection_report.correction_plan
+
+            # Serialise annotations for IngestPayload
+            artifact_annotations = [
+                ArtifactAnnotationPayload(
+                    artifact_type=a.artifact_type.name,
+                    confidence=a.confidence,
+                    channels=a.channels,
+                    feature_value=a.feature_value,
+                    feature_name=a.feature_name,
+                    threshold=a.threshold,
+                )
+                for a in detection_report.annotations
+            ]
+            correction_plan_payload = ArtifactCorrectionPlanPayload(
+                hard_reject=plan.hard_reject,
+                apply_ocular_regression=plan.apply_ocular_regression,
+                apply_asr=plan.apply_asr,
+                apply_notch=plan.apply_notch,
+                apply_cardiac_regression=plan.apply_cardiac_regression,
+            )
+
+            # Extract routing flags from plan
+            _plan_hard_reject = plan.hard_reject
+            _plan_apply_asr = plan.apply_asr
+            _plan_apply_ocular = plan.apply_ocular_regression
+            _plan_apply_notch = plan.apply_notch
+
+            if _plan_hard_reject:
+                log.debug(
+                    "stage3b_hard_reject",
+                    types=detection_report.type_names(),
+                    n_annotations=len(artifact_annotations),
+                )
+
+        # Treat Stage 3b hard_reject identically to Stage 3 gate reject
+        if _plan_hard_reject:
+            artifact_rejected = True
+            if not artifact_reasons:
+                artifact_reasons = [
+                    f"3b:{a.artifact_type}" for a in detection_report.annotations
+                    if detection_report is not None
+                ]
+
         # ── Stage 4 — ASR burst reconstruction (clean frames only) ─────
-        if eeg_arr is not None and not artifact_rejected and toggles.stage4_asr:
+        # When Stage 3b active: only runs if plan.apply_asr is True.
+        # When Stage 3b disabled: runs unconditionally on clean frames.
+        if (
+            eeg_arr is not None
+            and not artifact_rejected
+            and toggles.stage4_asr
+            and _plan_apply_asr
+        ):
             eeg_arr = self._stage4.apply(eeg_arr)
 
         # ── Stage 4b — Baseline recording (clean frames only) ───────────
@@ -372,8 +495,28 @@ class EEGPump:
             eeg_arr = self._baseline.process(eeg_arr)
 
         # ── Stage 5 — Gratton-Coles ocular regression (clean frames) ───
-        if eeg_arr is not None and not artifact_rejected and toggles.stage5_ocular:
+        # When Stage 3b active: only runs if plan.apply_ocular_regression.
+        # When Stage 3b disabled: runs unconditionally on clean frames.
+        if (
+            eeg_arr is not None
+            and not artifact_rejected
+            and toggles.stage5_ocular
+            and _plan_apply_ocular
+        ):
             eeg_arr = self._stage5.apply(eeg_arr)
+
+        # ── Stage 5b — Notch re-apply (only when Stage 3b requests it) ─
+        # Line-noise artifacts that slip through Stage 1 are re-notched here.
+        # Only fires when Stage 3b is active AND plan.apply_notch is True.
+        if (
+            eeg_arr is not None
+            and not artifact_rejected
+            and toggles.stage3b_artifact_detector
+            and _plan_apply_notch
+            and toggles.stage1_fir
+        ):
+            eeg_arr = self._stage1.apply(eeg_arr)
+            log.debug("stage5b_notch_reapply")
 
         # ── Band powers (clean frames only) ─────────────────────────────
         bands_dict: dict[str, float] = {}
@@ -447,5 +590,7 @@ class EEGPump:
             bad_channels=bad_channels,
             artifact_rejected=artifact_rejected,
             artifact_reasons=artifact_reasons,
+            artifact_annotations=artifact_annotations,
+            artifact_correction_plan=correction_plan_payload,
             baseline_phase=self._baseline.phase,
         )
