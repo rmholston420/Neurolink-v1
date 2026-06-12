@@ -119,6 +119,11 @@ class IngestPayload(BaseModel):
     # Per-channel impedance in kΩ. Only hardware adapters that expose electrode
     # impedance need to populate this; defaults to empty dict.
     channel_impedances: dict[str, float] = Field(default_factory=dict)
+    # Baseline phase: "warmup" | "recording" | "complete"
+    # Set by EEGPump from BaselineRecorder.phase every tick.
+    # Lets the frontend know which phase of the startup baseline is active
+    # and when to expect the bell event.
+    baseline_phase: str = "warmup"
     # Filled by hub.update()
     region: str = "A"
     alchemical_stage: str = "Nigredo"
@@ -172,6 +177,9 @@ class NeurolinkState(BaseModel):
     artifact_reasons: list[str] = Field(default_factory=list)
     # Per-channel impedance in kΩ, forwarded verbatim from IngestPayload.
     channel_impedances: dict[str, float] = Field(default_factory=dict)
+    # Baseline phase forwarded verbatim from IngestPayload.
+    # "warmup" | "recording" | "complete"
+    baseline_phase: str = "warmup"
 
 
 # ============================================================================

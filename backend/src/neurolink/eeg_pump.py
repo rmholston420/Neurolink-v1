@@ -34,8 +34,8 @@ After Stage 2 interpolation:
        b. IMU motion gate (0.15 g RMS default) — from accel_buffer
        c. Kurtosis burst detection (excess kurtosis > 5.0 default)
   2. If decision.reject is True:
-       - Band powers, derived EEG (FAA/FMt), ASR, and regression are
-         skipped entirely.
+       - Band powers, derived EEG (FAA/FMt), ASR, regression, and
+         baseline recording are skipped entirely.
        - artifact_rejected=True and artifact_reasons are set.
        - PPG, breathing, IMU orientation still computed (unaffected).
   3. decision is carried through IngestPayload → NeurolinkState →
@@ -51,6 +51,31 @@ ASR runs on clean frames only (after Stage 3 passes the frame).
   - After calibration, burst samples (> burst_sd × calib_rms in the
     whitened subspace) are reconstructed from the calibration
     covariance projection.
+
+Baseline integration (Stage 4b)
+--------------------------------
+A 150-second eyes-closed resting baseline runs at session startup,
+serving two purposes:
+
+  1. Impedance stabilisation (dry electrodes):
+     The first 30 seconds are discarded (WARMUP phase).  Dry electrodes
+     require 20-40 s to form a stable sweat-film contact; data from
+     this window is mechanically unreliable regardless of amplitude.
+
+  2. ASR calibration window:
+     Clean frames during the RECORDING phase (seconds 30-150) are
+     forwarded to the ASR instance so that ASR calibrates on genuinely
+     rested, stabilised signal rather than the noisier early-session
+     data it would otherwise receive.
+
+  When the 150-second window completes, BaselineRecorder calls
+  hub.notify_baseline_complete(), which pushes a baseline_complete SSE
+  event to all connected clients so the frontend can sound a bell.
+
+  The current phase ("warmup" | "recording" | "complete") is carried
+  through IngestPayload.baseline_phase → NeurolinkState.baseline_phase
+  → SSE stream on every tick so the frontend can display a progress
+  indicator during the baseline window.
 
 Stage 5 integration — Gratton-Coles Ocular Regression
 -------------------------------------------------------
@@ -73,13 +98,14 @@ Pipeline per tick
  7.  [Stage 2] Spherical spline interpolation of bad channels
  8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
  9.  [Stage 4] ASR burst reconstruction          (clean frames only)
+ 9b. [Stage 4b] Baseline recording / impedance stabilisation
 10.  [Stage 5] Gratton-Coles ocular regression   (clean frames only)
 11.  Band powers from corrected+filtered buffer  (clean frames only)
 12.  Derived EEG (FAA, FMt)                      (clean frames only)
 13.  PPG HRV
 14.  Breathing
 15.  IMU head orientation
-16.  Build IngestPayload
+16.  Build IngestPayload  (includes baseline_phase)
 17.  hub.update()
 """
 
@@ -95,6 +121,7 @@ import structlog
 from neurolink.dsp.artifact_gate import ArtifactGate
 from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
+from neurolink.dsp.baseline import BaselineRecorder
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
@@ -125,6 +152,13 @@ class EEGPump:
     equivalent or better correction with lower compute cost and no
     minimum-channel requirement.
 
+    Baseline
+    --------
+    A BaselineRecorder is created at construction time using the same
+    ASR and hub instances that the pump owns.  It runs silently inside
+    _build_payload() on every clean frame; no external configuration
+    is required.
+
     Pipeline per tick
     -----------------
     1.  Read EEGSample from adapter
@@ -136,13 +170,14 @@ class EEGPump:
     7.  [Stage 2] Spherical spline interpolation of bad channels
     8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
     9.  [Stage 4] ASR burst reconstruction          (clean frames only)
+    9b. [Stage 4b] Baseline recording / impedance stabilisation
     10. [Stage 5] Gratton-Coles ocular regression   (clean frames only)
     11. Band powers from corrected+filtered buffer  (clean frames only)
     12. Derived EEG (FAA, FMt)                      (clean frames only)
     13. PPG HRV
     14. Breathing
     15. IMU head orientation
-    16. Build IngestPayload
+    16. Build IngestPayload  (includes baseline_phase)
     17. hub.update()
     """
 
@@ -167,6 +202,14 @@ class EEGPump:
         self._stage3: ArtifactGate = artifact_gate or ArtifactGate()
         self._stage4: ArtifactSubspaceReconstructor = asr or ArtifactSubspaceReconstructor()
         self._stage5: OcularRegressor = ocular_regressor or OcularRegressor()
+        # Stage 4b: per-session resting baseline (impedance stabilisation +
+        # ASR calibration window).  Constructed here so it shares the same
+        # ASR instance as Stage 4 — BaselineRecorder.process() feeds frames
+        # directly to self._stage4.apply() during the RECORDING phase.
+        self._baseline: BaselineRecorder = BaselineRecorder(
+            asr=self._stage4,
+            hub=self._hub,
+        )
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
@@ -293,6 +336,17 @@ class EEGPump:
         if eeg_arr is not None and not artifact_rejected:
             eeg_arr = self._stage4.apply(eeg_arr)
 
+        # ── Stage 4b — Baseline recording (clean frames only) ───────────
+        # BaselineRecorder.process() is a pure side-effect shim: it
+        # returns eeg_arr unchanged in all phases while internally:
+        #   WARMUP    — discards frames (electrode stabilisation)
+        #   RECORDING — feeds frames to ASR for covariance fitting
+        #   COMPLETE  — fires bell SSE event exactly once, then no-ops
+        # The current phase is written to baseline_phase on every tick
+        # so the frontend can show a countdown / progress indicator.
+        if eeg_arr is not None and not artifact_rejected:
+            eeg_arr = self._baseline.process(eeg_arr)
+
         # ── Stage 5 — Gratton-Coles ocular regression (clean frames) ───
         # Temporal regression is preferred over ICA ocular removal for
         # low-channel hardware.  Falls back to pass-through when no
@@ -372,4 +426,5 @@ class EEGPump:
             bad_channels=bad_channels,
             artifact_rejected=artifact_rejected,
             artifact_reasons=artifact_reasons,
+            baseline_phase=self._baseline.phase,
         )

@@ -31,6 +31,10 @@ log = structlog.get_logger(__name__)
 
 _DEFAULT_BASELINE_ALPHA: float = 0.30
 
+# Sentinel object pushed to SSE queues when the baseline completes.
+# Clients receive event type "baseline_complete" carrying this dict.
+_BASELINE_COMPLETE_EVENT: dict = {"event": "baseline_complete"}
+
 
 class EEGHub:
     """Central in-memory EEG state store.
@@ -128,6 +132,7 @@ class EEGHub:
                 artifact_rejected=payload.artifact_rejected,
                 artifact_reasons=payload.artifact_reasons,
                 channel_impedances=payload.channel_impedances,
+                baseline_phase=payload.baseline_phase,
             )
             self._state = new_state
             self._ea1 = ea1_result
@@ -136,6 +141,24 @@ class EEGHub:
         self._schedule_redis_push(new_state)
 
         return new_state
+
+    def notify_baseline_complete(self) -> None:
+        """Push a baseline_complete sentinel to all SSE queues.
+
+        Called exactly once per session by BaselineRecorder._fire_bell().
+        The sentinel is a plain dict — not a NeurolinkState — so SSE
+        consumers must check the type before deserialising.
+        Clients that receive this event should play a bell sound and
+        unlock the session UI.
+        """
+        log.info("hub_baseline_complete_notified")
+        with self._sse_lock:
+            queues = list(self._sse_queues)
+        for q in queues:
+            try:
+                q.put_nowait(_BASELINE_COMPLETE_EVENT)
+            except asyncio.QueueFull:
+                log.warning("sse_queue_full_dropping_baseline_event")
 
     def _schedule_redis_push(self, state: NeurolinkState) -> None:
         """Schedule a non-blocking Redis write-through for the new state."""

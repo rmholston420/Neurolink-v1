@@ -50,7 +50,23 @@ environments."""
 
 ASR_CALIB_SEC: float = 30.0
 """Seconds of clean resting EEG required before ASR activates.
-Increase to 60 s for more stable covariance estimates."""
+The BaselineRecorder feeds ASR during its 120-second RECORDING window
+(seconds 30-150 of the baseline), so ASR will be calibrated well before
+the baseline completes.  This value is the ASR module's own internal
+minimum — raise to 60 s for more stable covariance estimates."""
+
+# ── Session baseline (impedance stabilisation + ASR calibration) ─────────────
+BASELINE_TOTAL_SEC: float = 150.0
+"""Total eyes-closed resting baseline duration (seconds).
+The first BASELINE_DISCARD_SEC are discarded for dry-electrode
+impedance stabilisation; the remainder feed ASR calibration.
+A bell sounds when this window is complete."""
+
+BASELINE_DISCARD_SEC: float = 30.0
+"""Seconds discarded at the start of the baseline for electrode
+stabilisation.  Dry electrodes require 20-40 s to form a stable
+sweat-film contact; data from this period is unreliable regardless
+of amplitude."""
 
 # ── EA-1 scorer thresholds ───────────────────────────────────────────────────
 EA1_ALPHA_THRESHOLD: float = 0.30
