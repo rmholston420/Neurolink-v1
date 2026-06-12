@@ -47,12 +47,18 @@ jobs:
           pytest -v --tb=short \
             --cov=neurolink \
             --cov-config=pyproject.toml \
-            --cov-report=term-missing
+            --cov-report=term-missing \
+            --cov-fail-under=85
 
       - name: Lint with ruff
         working-directory: backend
         run: |
-          ruff check . || true
+          ruff check .
+
+      - name: Type-check with mypy
+        working-directory: backend
+        run: |
+          mypy src/neurolink/
 
   frontend-tests:
     name: Frontend Tests
