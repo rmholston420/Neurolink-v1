@@ -20,7 +20,10 @@ log = structlog.get_logger(__name__)
 _EEG_FS: float = 256.0
 _PPG_FS: float = 64.0
 _ACCEL_FS: float = 52.0
-_WATCHDOG_SEC: float = 10.0  # if no frame in 10s, log warning
+_WATCHDOG_SEC: float = 10.0
+# Number of raw samples to forward per SSE frame for spectrogram rendering.
+# At 256 Hz EEG and 4 Hz publish rate the buffer holds ~64 samples/channel.
+_EEG_SAMPLES_WINDOW: int = 64
 
 
 class EEGPump:
@@ -33,7 +36,7 @@ class EEGPump:
     4. Compute PPG HRV if buffer available
     5. Compute breathing rate if IMU available
     6. Compute head orientation
-    7. Build IngestPayload
+    7. Build IngestPayload (including raw eeg_samples window)
     8. Call hub.update()
     """
 
@@ -72,7 +75,6 @@ class EEGPump:
                 await self._tick()
             except Exception as exc:
                 log.error("eeg_pump_tick_error", error=str(exc), exc_info=True)
-            # Watchdog
             if self._last_frame_ts > 0 and (time.time() - self._last_frame_ts) > _WATCHDOG_SEC:
                 log.warning("eeg_pump_no_frames", since_sec=_WATCHDOG_SEC)
             elapsed = time.monotonic() - tick_start
@@ -99,8 +101,9 @@ class EEGPump:
         from neurolink.dsp.imu import head_orientation
         from neurolink.dsp.ppg import compute_ppg
 
-        # Band powers
+        # ── Band powers ──────────────────────────────────────────────────────
         bands_dict: dict[str, float] = {}
+        eeg_arr: np.ndarray | None = None
         if sample.eeg_buffer:
             _min_len = min(len(b) for b in sample.eeg_buffer)
             if _min_len >= 2:
@@ -115,7 +118,16 @@ class EEGPump:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # Derived EEG (FAA, FMt)
+        # ── Raw EEG sample window for spectrogram / topo ─────────────────────
+        # Forward the most recent _EEG_SAMPLES_WINDOW samples per channel.
+        # Shape: [n_channels][n_samples]  — serialised as nested JSON array.
+        eeg_samples: list[list[float]] = []
+        if eeg_arr is not None and eeg_arr.ndim == 2:
+            n_samples = eeg_arr.shape[1]
+            start = max(0, n_samples - _EEG_SAMPLES_WINDOW)
+            eeg_samples = eeg_arr[:, start:].tolist()
+
+        # ── Derived EEG (FAA, FMt) ───────────────────────────────────────────
         faa: float | None = None
         fmt: float | None = None
         derived: dict = {}
@@ -127,13 +139,13 @@ class EEGPump:
             faa = derived.get("faa")
             fmt = derived.get("fmt")
 
-        # PPG HRV
+        # ── PPG HRV ──────────────────────────────────────────────────────────
         ppg_payload = None
         if sample.ppg_buffer:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
-        # Breathing
+        # ── Breathing ────────────────────────────────────────────────────────
         breathing_payload: BreathingPayload | None = None
         accel_z: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
@@ -142,7 +154,7 @@ class EEGPump:
         ibis: list[float] = ppg_payload.ibi_ms if ppg_payload else []
         breathing_payload = compute_breathing(ibis, accel_z=accel_z)
 
-        # IMU head orientation
+        # ── IMU head orientation ─────────────────────────────────────────────
         imu_payload: IMUPayload | None = None
         if sample.accel_buffer and sample.gyro_buffer:
             accel_arr = np.array(sample.accel_buffer, dtype=np.float32)
@@ -150,7 +162,7 @@ class EEGPump:
             if accel_arr.shape[1] > 0:
                 imu_payload = head_orientation(accel_arr, gyro_arr)
 
-        # fNIRS (Athena)
+        # ── fNIRS (Athena) ───────────────────────────────────────────────────
         fnirs_oxy: float | None = sample.extra.get("fnirs_oxy")
         fnirs_deoxy: float | None = sample.extra.get("fnirs_deoxy")
 
@@ -167,4 +179,5 @@ class EEGPump:
             imu=imu_payload,
             fnirs_oxy=fnirs_oxy,
             fnirs_deoxy=fnirs_deoxy,
+            eeg_samples=eeg_samples,
         )

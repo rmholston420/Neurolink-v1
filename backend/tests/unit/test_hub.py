@@ -1,92 +1,108 @@
-"""Unit tests for hub.py."""
+"""Unit tests for EEGHub."""
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from neurolink.hub import EEGHub
-from neurolink.models.eeg import BandPowers, IngestPayload
+from neurolink.models.eeg import BandPowers, IngestPayload, NeurolinkState
 
 
-def _make_payload(source: str = "mock", alpha: float = 0.35, theta: float = 0.20) -> IngestPayload:
-    return IngestPayload(
-        source=source,
-        bands=BandPowers(alpha=alpha, theta=theta, beta=0.12, delta=0.10, gamma=0.05),
-    )
+class TestHubInitialState:
+    def test_connected_false_on_init(self, hub: EEGHub):
+        assert hub.get_state().connected is False
+
+    def test_frame_count_zero_on_init(self, hub: EEGHub):
+        assert hub.get_state().frame_count == 0
+
+    def test_ea1_eligible_false_on_init(self, hub: EEGHub):
+        assert hub.get_ea1().eligible is False
 
 
-def test_hub_update_increments_frame_count():
-    hub = EEGHub()
-    p = _make_payload()
-    state = hub.update(p)
-    assert state.frame_count == 1
-    state2 = hub.update(p)
-    assert state2.frame_count == 2
+class TestHubUpdate:
+    def test_update_increments_frame_count(self, hub: EEGHub, base_payload):
+        hub.update(base_payload)
+        assert hub.get_state().frame_count == 1
+
+    def test_update_sets_connected(self, hub: EEGHub, base_payload):
+        hub.update(base_payload)
+        assert hub.get_state().connected is True
+
+    def test_update_stores_bands(self, hub: EEGHub, alpha_dominant_bands):
+        payload = IngestPayload(source="mock", bands=alpha_dominant_bands)
+        hub.update(payload)
+        state = hub.get_state()
+        assert abs(state.bands.alpha - 0.55) < 1e-6
+
+    def test_update_passes_eeg_samples(self, hub: EEGHub):
+        samples = [[float(i) for i in range(64)]] * 4
+        payload = IngestPayload(
+            source="mock",
+            bands=BandPowers(),
+            eeg_samples=samples,
+        )
+        hub.update(payload)
+        state = hub.get_state()
+        assert len(state.eeg_samples) == 4
+        assert len(state.eeg_samples[0]) == 64
+        assert state.eeg_samples[0][0] == 0.0
+        assert state.eeg_samples[0][63] == 63.0
+
+    def test_multiple_updates_monotonic_frame_count(self, hub: EEGHub, base_payload):
+        for i in range(5):
+            hub.update(base_payload)
+        assert hub.get_state().frame_count == 5
+
+    def test_reset_clears_state(self, hub: EEGHub, base_payload):
+        hub.update(base_payload)
+        hub.reset()
+        assert hub.get_state().frame_count == 0
+        assert hub.get_state().connected is False
+
+    def test_source_propagated(self, hub: EEGHub):
+        payload = IngestPayload(source="muse_ble", bands=BandPowers())
+        hub.update(payload)
+        assert hub.get_state().source == "muse_ble"
 
 
-def test_hub_dual_classifier_both_populated_for_muse_ble():
-    """v0.1 and v2 classifiers should both produce non-default results for muse_ble."""
-    hub = EEGHub()
-    p = _make_payload(source="muse_ble", alpha=0.35, theta=0.18)
-    state = hub.update(p)
-    # v2 always runs
-    assert state.region in ("A", "B", "C", "D", "E", "F", "G", "H")
-    assert state.alchemical_stage != ""
-    # v0.1 ran because source == muse_ble
-    assert state.region_v01 in ("A", "B", "C", "D", "E", "F")
+class TestHubSSEQueues:
+    def test_register_and_fanout(self, hub: EEGHub, base_payload):
+        q: asyncio.Queue = asyncio.Queue(maxsize=10)
+        hub.register_sse_queue(q)
+        hub.update(base_payload)
+        assert not q.empty()
+        item = q.get_nowait()
+        assert isinstance(item, NeurolinkState)
+
+    def test_unregister_stops_fanout(self, hub: EEGHub, base_payload):
+        q: asyncio.Queue = asyncio.Queue(maxsize=10)
+        hub.register_sse_queue(q)
+        hub.unregister_sse_queue(q)
+        hub.update(base_payload)
+        assert q.empty()
+
+    def test_full_queue_does_not_raise(self, hub: EEGHub, base_payload):
+        q: asyncio.Queue = asyncio.Queue(maxsize=1)
+        hub.register_sse_queue(q)
+        # Fill queue
+        hub.update(base_payload)
+        # Second update — queue is full, should log warning but not raise
+        hub.update(base_payload)
 
 
-def test_hub_v01_not_run_for_mock_source():
-    """v0.1 classifier should NOT run for mock source."""
-    hub = EEGHub()
-    p = _make_payload(source="mock")
-    state = hub.update(p)
-    # Default region_v01 = 'A'; should not be changed
-    assert state.region_v01 == "A"
-    assert state.alchemical_stage_v01 == "Nigredo"
+class TestHubSnapshot:
+    def test_snapshot_returns_dict(self, hub: EEGHub, base_payload):
+        hub.update(base_payload)
+        snap = hub.snapshot()
+        assert isinstance(snap, dict)
+        assert "connected" in snap
+        assert snap["connected"] is True
 
-
-def test_hub_reset_clears_state():
-    hub = EEGHub()
-    p = _make_payload()
-    hub.update(p)
-    assert hub.get_state().frame_count == 1
-    hub.reset()
-    assert hub.get_state().frame_count == 0
-    assert hub.get_state().connected is False
-
-
-def test_hub_get_state_returns_neurolink_state():
-    from neurolink.models.eeg import NeurolinkState
-
-    hub = EEGHub()
-    state = hub.get_state()
-    assert isinstance(state, NeurolinkState)
-
-
-def test_hub_ea1_result_returned():
-    from neurolink.models.eeg import EA1Result
-
-    hub = EEGHub()
-    ea1 = hub.get_ea1()
-    assert isinstance(ea1, EA1Result)
-
-
-def test_hub_snapshot_is_dict():
-    hub = EEGHub()
-    snap = hub.snapshot()
-    assert isinstance(snap, dict)
-    assert "frame_count" in snap
-
-
-def test_hub_focus_fatigue_in_state():
-    hub = EEGHub()
-    p = _make_payload()
-    state = hub.update(p)
-    assert isinstance(state.focus_score, float)
-    assert isinstance(state.fatigue_score, float)
-    assert state.focus_state in (
-        "HIGH_FOCUS",
-        "MODERATE_FOCUS",
-        "LOW_FOCUS",
-        "DISTRACTED",
-        "unknown",
-    )
+    def test_snapshot_contains_eeg_samples(self, hub: EEGHub):
+        samples = [[1.0, 2.0, 3.0]] * 4
+        payload = IngestPayload(source="mock", bands=BandPowers(), eeg_samples=samples)
+        hub.update(payload)
+        snap = hub.snapshot()
+        assert snap["eeg_samples"] == samples

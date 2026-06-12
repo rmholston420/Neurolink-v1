@@ -1,256 +1,229 @@
 /**
- * RollingSpectrogram — Canvas 2D real-time STFT spectrogram.
+ * RollingSpectrogram — Canvas 2D rolling STFT spectrogram.
  *
- * Layout: one canvas per Muse S channel (TP9, AF7, AF8, TP10) plus a
- * channel-averaged view selectable via tabs.  Each frame the DFT of the
- * most recent eeg_samples window is computed, power is log-scaled, and a
- * new column is painted on the right edge while the existing image scrolls
- * one pixel left.
+ * Data source priority:
+ *   1. Real eeg_samples from SSE frame (4 ch × N samples from hardware adapter)
+ *   2. Synthetic signal reconstructed from band powers (offline/mock fallback)
  *
- * Frequency axis: 1–50 Hz, logarithmic, with band boundary lines.
- * Colour: diverging RdBu centred on the running session mean.
- * Update rate: driven by SSE frames (~4 Hz).
+ * The synthetic fallback produces a plausible-looking spectrogram so the
+ * visualisation is always live, even when the backend is in mock mode without
+ * raw sample emission.
  */
 
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useCallback } from 'react';
+import type { NeurolinkState } from '../types';
 
-// ── constants ─────────────────────────────────────────────────────────────────
-const CHANNELS = ['TP9', 'AF7', 'AF8', 'TP10'] as const
-type Channel = typeof CHANNELS[number] | 'Mean'
-const ALL_CHANNELS: Channel[] = [...CHANNELS, 'Mean']
+const CHANNELS = ['TP9', 'AF7', 'AF8', 'TP10'] as const;
+type Channel = typeof CHANNELS[number] | 'mean';
 
-const CANVAS_W = 480
-const CANVAS_H = 120
-const FREQ_BINS = 64          // DFT output bins we visualise
-const MAX_FREQ  = 50          // Hz
-const MIN_FREQ  = 1           // Hz
-const HISTORY   = CANVAS_W    // one pixel per frame column
+const CANVAS_W = 480;
+const CANVAS_H = 120;
+const FFT_SIZE = 64;
+const FS = 256;
+const FREQ_MIN = 1;
+const FREQ_MAX = 50;
+// Band boundary frequencies (Hz) for overlay lines
+const BAND_BOUNDARIES = [4, 8, 13, 30];
 
-// Band boundary frequencies (Hz)
-const BAND_LINES = [
-  { hz: 4,  label: 'δ/θ', color: 'rgba(255,255,255,0.25)' },
-  { hz: 8,  label: 'θ/α', color: 'rgba(255,255,255,0.35)' },
-  { hz: 13, label: 'α/β', color: 'rgba(255,255,255,0.35)' },
-  { hz: 30, label: 'β/γ', color: 'rgba(255,255,255,0.20)' },
-]
+// Approximate EMA of log power — persists across renders via module-level ref
+const _ema: Record<string, number[]> = {};
+const EMA_ALPHA = 0.05;
 
-// ── DFT helpers ───────────────────────────────────────────────────────────────
-function hann(n: number, N: number): number {
-  return 0.5 * (1 - Math.cos((2 * Math.PI * n) / (N - 1)))
+// ── Hann window ─────────────────────────────────────────────────────────────
+function hannWindow(n: number): Float32Array {
+  const w = new Float32Array(n);
+  for (let i = 0; i < n; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)));
+  return w;
 }
 
-/** Compute power spectrum (magnitude²) for a real signal. */
-function powerSpectrum(samples: number[], sampleRate = 256): Float32Array {
-  const N = samples.length
-  // Apply Hann window
-  const windowed = samples.map((v, i) => v * hann(i, N))
-  // DFT — O(N²) but N is small (≤256 samples)
-  const half = Math.floor(N / 2)
-  const power = new Float32Array(half)
+// ── Radix-2 DFT (real input, power spectrum) ────────────────────────────────
+function powerSpectrum(samples: number[], hann: Float32Array): Float32Array {
+  const n = hann.length;
+  const re = new Float32Array(n);
+  const im = new Float32Array(n);
+  for (let i = 0; i < n; i++) re[i] = (samples[i] ?? 0) * hann[i];
+
+  // DFT O(n²) — adequate for n=64
+  const half = n / 2;
+  const ps = new Float32Array(half);
   for (let k = 0; k < half; k++) {
-    let re = 0, im = 0
-    const omega = (2 * Math.PI * k) / N
-    for (let n = 0; n < N; n++) {
-      re += windowed[n] * Math.cos(omega * n)
-      im -= windowed[n] * Math.sin(omega * n)
+    let sumRe = 0, sumIm = 0;
+    for (let t = 0; t < n; t++) {
+      const angle = (2 * Math.PI * k * t) / n;
+      sumRe += re[t] * Math.cos(angle);
+      sumIm -= re[t] * Math.sin(angle);
     }
-    power[k] = re * re + im * im
+    ps[k] = sumRe * sumRe + sumIm * sumIm;
   }
-  return power
+  return ps;
 }
 
-/** Map a frequency (Hz) to a canvas y-pixel (log scale, 0=top). */
+// ── Map linear frequency bin index → log-scale canvas y ─────────────────────
 function freqToY(hz: number, h: number): number {
-  const logMin = Math.log(MIN_FREQ)
-  const logMax = Math.log(MAX_FREQ)
-  const logHz  = Math.log(Math.max(MIN_FREQ, Math.min(hz, MAX_FREQ)))
-  return h - ((logHz - logMin) / (logMax - logMin)) * h
+  const logMin = Math.log10(FREQ_MIN);
+  const logMax = Math.log10(FREQ_MAX);
+  const norm = (Math.log10(Math.max(hz, FREQ_MIN)) - logMin) / (logMax - logMin);
+  return h - norm * h; // flip: high freq at top
 }
 
-/** Extract the power at a specific frequency bin. */
-function binForFreq(hz: number, N: number, sr: number): number {
-  return Math.round((hz * N) / sr)
-}
-
-// ── RdBu diverging colormap ───────────────────────────────────────────────────
-// Colour centres on 0 deviation from mean; negative=blue, positive=red.
-function rdbu(t: number): [number, number, number] {
-  // t in [-1, 1]
-  const v = Math.max(-1, Math.min(1, t))
-  if (v < 0) {
-    // blue side: white → blue
-    const s = -v
-    const r = Math.round(255 * (1 - s * 0.78))
-    const g = Math.round(255 * (1 - s * 0.58))
-    const b = 255
-    return [r, g, b]
+// ── Diverging RdBu colour: deviation from EMA baseline ─────────────────────
+function deviationColour(logP: number, baseline: number): string {
+  const dev = logP - baseline;
+  const norm = Math.max(-1, Math.min(1, dev / 3)); // ±3 nats = full saturation
+  if (norm > 0) {
+    const r = Math.round(220 + 35 * norm);
+    const g = Math.round(220 - 120 * norm);
+    const b = Math.round(220 - 180 * norm);
+    return `rgb(${r},${g},${b})`;
   } else {
-    // red side: white → red
-    const r = 255
-    const g = Math.round(255 * (1 - v * 0.75))
-    const bl = Math.round(255 * (1 - v * 0.75))
-    return [r, g, bl]
+    const abs = -norm;
+    const r = Math.round(220 - 180 * abs);
+    const g = Math.round(220 - 80 * abs);
+    const b = Math.round(220 + 35 * abs);
+    return `rgb(${r},${g},${b})`;
   }
 }
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-export interface Props {
-  /** Raw EEG samples: shape [numChannels][numSamples].  Index 0=TP9,1=AF7,2=AF8,3=TP10. */
-  eegSamples: number[][] | null
-  sampleRate?: number
+// ── Synthetic signal from band powers (mock/offline fallback) ───────────────
+function syntheticSamples(bands: NeurolinkState['bands'], n: number, t: number): number[] {
+  const out = new Array<number>(n).fill(0);
+  const specs: Array<[number, number]> = [
+    [2, bands.delta],
+    [6, bands.theta],
+    [10, bands.alpha],
+    [20, bands.beta],
+    [40, bands.gamma],
+  ];
+  for (let i = 0; i < n; i++) {
+    const ti = (t * n + i) / FS;
+    for (const [f, amp] of specs) {
+      out[i] += Math.sqrt(amp + 1e-6) * Math.sin(2 * Math.PI * f * ti);
+    }
+  }
+  return out;
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-export default function RollingSpectrogram({ eegSamples, sampleRate = 256 }: Props) {
-  const [activeChannel, setActiveChannel] = useState<Channel>('Mean')
-  const canvasRef    = useRef<HTMLCanvasElement>(null)
-  // Rolling history: array of FREQ_BINS-length columns
-  const historyRef   = useRef<Float32Array[]>([])
-  // Running mean for normalisation
-  const meanRef      = useRef<Float32Array>(new Float32Array(FREQ_BINS))
-  const countRef     = useRef(0)
+// ── Main component ───────────────────────────────────────────────────────────
+interface Props {
+  state: NeurolinkState | null;
+  channel?: Channel;
+}
 
-  const paint = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+export default function RollingSpectrogram({ state, channel = 'mean' }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef(0);
+  const hannRef = useRef<Float32Array>(hannWindow(FFT_SIZE));
 
-    const history = historyRef.current
-    const mean    = meanRef.current
-    const W = CANVAS_W, H = CANVAS_H
+  const draw = useCallback(() => {
+    if (!state) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
 
-    ctx.clearRect(0, 0, W, H)
-    const imgData = ctx.createImageData(W, H)
-    const data = imgData.data
+    // ── Resolve signal for this channel ──────────────────────────────────
+    const real = state.eeg_samples;
+    const hasReal = Array.isArray(real) && real.length >= 4 && real[0].length >= FFT_SIZE;
 
-    for (let col = 0; col < history.length; col++) {
-      const pwr = history[col]
-      const x = W - history.length + col
-      if (x < 0) continue
+    let signal: number[];
+    if (hasReal) {
+      const chIdx = channel === 'mean'
+        ? null
+        : CHANNELS.indexOf(channel as typeof CHANNELS[number]);
+      if (chIdx === null) {
+        // Average across channels
+        signal = real[0].map((_, i) =>
+          real.reduce((sum, ch) => sum + (ch[i] ?? 0), 0) / real.length
+        );
+      } else {
+        signal = real[chIdx] ?? real[0];
+      }
+    } else {
+      // Synthetic fallback — reconstructed from band powers
+      signal = syntheticSamples(state.bands, FFT_SIZE, frameRef.current);
+    }
 
-      for (let y = 0; y < H; y++) {
-        // Map pixel y → frequency
-        const logMin = Math.log(MIN_FREQ)
-        const logMax = Math.log(MAX_FREQ)
-        const hz = Math.exp(logMin + ((H - y) / H) * (logMax - logMin))
-        const bin = binForFreq(hz, pwr.length * 2, sampleRate)
-        const clampedBin = Math.max(0, Math.min(bin, pwr.length - 1))
+    // Take last FFT_SIZE samples
+    const window = signal.slice(-FFT_SIZE);
+    const ps = powerSpectrum(window, hannRef.current);
+    const logPs = ps.map(p => Math.log(p + 1e-9));
 
-        const rawPwr = pwr[clampedBin]
-        const mu     = mean[clampedBin] || 1e-10
-        const dev    = (rawPwr - mu) / (mu + 1e-10)  // normalised deviation
-        const t      = Math.max(-1, Math.min(1, dev * 2))
-        const [r, g, b] = rdbu(t)
-
-        const idx = (y * W + x) * 4
-        data[idx]     = r
-        data[idx + 1] = g
-        data[idx + 2] = b
-        data[idx + 3] = 255
+    // ── Update EMA baseline ───────────────────────────────────────────────
+    const key = channel;
+    if (!_ema[key] || _ema[key].length !== logPs.length) {
+      _ema[key] = [...logPs];
+    } else {
+      for (let i = 0; i < logPs.length; i++) {
+        _ema[key][i] = EMA_ALPHA * logPs[i] + (1 - EMA_ALPHA) * _ema[key][i];
       }
     }
-    ctx.putImageData(imgData, 0, 0)
 
-    // Band boundary lines
-    ctx.save()
-    BAND_LINES.forEach(({ hz, label, color }) => {
-      const y = freqToY(hz, H)
-      ctx.strokeStyle = color
-      ctx.lineWidth = 1
-      ctx.setLineDash([3, 3])
-      ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(W, y)
-      ctx.stroke()
-      ctx.fillStyle = 'rgba(255,255,255,0.5)'
-      ctx.font = '9px monospace'
-      ctx.fillText(label, 4, y - 2)
-    })
-    ctx.restore()
+    // ── Scroll canvas left by 1px ─────────────────────────────────────────
+    const img = ctx.getImageData(1, 0, CANVAS_W - 1, CANVAS_H);
+    ctx.putImageData(img, 0, 0);
+    ctx.clearRect(CANVAS_W - 1, 0, 1, CANVAS_H);
 
-    // Frequency axis labels
-    ctx.save()
-    ctx.fillStyle = 'rgba(255,255,255,0.4)'
-    ctx.font = '9px monospace'
-    ;[2, 4, 8, 13, 20, 30, 50].forEach(hz => {
-      const y = freqToY(hz, H)
-      ctx.fillText(`${hz}`, W - 22, y + 3)
-    })
-    ctx.restore()
-  }, [sampleRate])
-
-  useEffect(() => {
-    if (!eegSamples) return
-
-    // Build per-channel power, then pick active
-    const perChannel: Float32Array[] = eegSamples.map(ch => powerSpectrum(ch, sampleRate))
-
-    let col: Float32Array
-    if (activeChannel === 'Mean') {
-      col = new Float32Array(perChannel[0]?.length ?? 0)
-      perChannel.forEach(ch => ch.forEach((v, i) => { col[i] += v }))
-      col.forEach((_, i) => { col[i] /= perChannel.length })
-    } else {
-      const idx = CHANNELS.indexOf(activeChannel as typeof CHANNELS[number])
-      col = perChannel[idx] ?? new Float32Array(0)
+    // ── Paint new column ──────────────────────────────────────────────────
+    const half = ps.length;
+    for (let k = 1; k < half; k++) {
+      const hz = (k * FS) / (FFT_SIZE * 2);
+      if (hz < FREQ_MIN || hz > FREQ_MAX) continue;
+      const y1 = Math.round(freqToY(hz, CANVAS_H));
+      const y0 = Math.round(freqToY((k - 1) * FS / (FFT_SIZE * 2), CANVAS_H));
+      const h = Math.max(1, Math.abs(y0 - y1));
+      ctx.fillStyle = deviationColour(logPs[k], _ema[key][k]);
+      ctx.fillRect(CANVAS_W - 1, y1, 1, h);
     }
 
-    // Update running mean (exponential moving average)
-    const mean = meanRef.current
-    const alpha = 0.05
-    col.forEach((v, i) => { mean[i] = mean[i] * (1 - alpha) + v * alpha })
-    countRef.current++
+    // ── Band boundary overlay lines ───────────────────────────────────────
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1;
+    for (const hz of BAND_BOUNDARIES) {
+      const y = Math.round(freqToY(hz, CANVAS_H));
+      ctx.beginPath();
+      ctx.moveTo(CANVAS_W - 8, y);
+      ctx.lineTo(CANVAS_W - 1, y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
 
-    // Append column and trim to HISTORY length
-    historyRef.current.push(col)
-    if (historyRef.current.length > HISTORY) historyRef.current.shift()
+    frameRef.current += 1;
+  }, [state, channel]);
 
-    paint()
-  }, [eegSamples, activeChannel, paint, sampleRate])
-
-  // Repaint when channel tab changes
-  useEffect(() => { paint() }, [activeChannel, paint])
-
-  const tabStyle = (ch: Channel): React.CSSProperties => ({
-    padding: '3px 10px',
-    fontSize: 11,
-    fontWeight: 600,
-    borderRadius: 4,
-    border: 'none',
-    cursor: 'pointer',
-    background: ch === activeChannel ? '#388bfd' : 'transparent',
-    color: ch === activeChannel ? '#fff' : '#8b949e',
-    transition: 'background 0.15s',
-  })
+  useEffect(() => {
+    draw();
+  }, [draw]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-        {ALL_CHANNELS.map(ch => (
-          <button key={ch} style={tabStyle(ch)} onClick={() => {
-            historyRef.current = []
-            meanRef.current = new Float32Array(FREQ_BINS)
-            setActiveChannel(ch)
-          }}>{ch}</button>
-        ))}
-      </div>
+    <div style={{ position: 'relative', background: '#111', borderRadius: 6, overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
         width={CANVAS_W}
         height={CANVAS_H}
-        style={{ width: '100%', height: 'auto', borderRadius: 6, imageRendering: 'pixelated' }}
+        style={{ display: 'block', width: '100%', imageRendering: 'pixelated' }}
       />
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#484f58' }}>
-        <span>1 Hz</span>
-        <span style={{ color: '#8b949e', fontSize: 11 }}>Frequency (log) · RdBu centred on session mean</span>
-        <span>50 Hz</span>
+      {/* Frequency axis labels */}
+      <div style={{
+        position: 'absolute', top: 0, left: 4,
+        fontSize: 9, color: 'rgba(255,255,255,0.5)',
+        display: 'flex', flexDirection: 'column',
+        height: CANVAS_H, justifyContent: 'space-between', pointerEvents: 'none'
+      }}>
+        <span>50Hz</span>
+        <span>13Hz</span>
+        <span>4Hz</span>
+        <span>1Hz</span>
       </div>
-      {!eegSamples && (
-        <div style={{ fontSize: 12, color: '#484f58', textAlign: 'center', padding: '20px 0' }}>
-          Waiting for EEG stream…
+      {state && !state.eeg_samples?.length && (
+        <div style={{
+          position: 'absolute', bottom: 2, right: 4,
+          fontSize: 9, color: 'rgba(255,200,80,0.7)',
+          pointerEvents: 'none'
+        }}>
+          synthetic (no raw samples)
         </div>
       )}
     </div>
-  )
+  );
 }

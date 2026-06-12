@@ -123,6 +123,7 @@ class EEGHub:
                 fatigue_score=fatigue_score,
                 fnirs_oxy=payload.fnirs_oxy,
                 fnirs_deoxy=payload.fnirs_deoxy,
+                eeg_samples=payload.eeg_samples,
             )
             self._state = new_state
             self._ea1 = ea1_result

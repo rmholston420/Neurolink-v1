@@ -1,23 +1,40 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
 *.egg-info/
 dist/
 build/
 .eggs/
-
-# Coverage — regenerated on every CI run, never commit
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
-
-# Virtual environments
+*.so
 .venv/
 venv/
 env/
+.env
+.env.*
+!.env.example
 
-# Editors
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.pnp
+.pnp.js
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+junit.xml
+coverage.xml
+
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -27,9 +44,5 @@ env/
 .DS_Store
 Thumbs.db
 
-# Node
-node_modules/
-
-# Env files
-.env
-.env.local
+# Docker
+*.log
