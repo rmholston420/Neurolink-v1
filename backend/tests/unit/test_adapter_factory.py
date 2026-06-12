@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from neurolink.adapter_factory import create_adapter
@@ -15,8 +17,21 @@ def test_create_adapter_mock():
 
 def test_create_adapter_mock_default():
     """Default adapter_type from settings should be mock in test env."""
-    adapter = create_adapter()
-    assert isinstance(adapter, MockAdapter)
+    import neurolink.config as config_module
+
+    prev_type = os.environ.get("NEUROLINK_ADAPTER_TYPE")
+    prev_settings = config_module._settings
+    try:
+        os.environ["NEUROLINK_ADAPTER_TYPE"] = "mock"
+        config_module._settings = None
+        adapter = create_adapter()
+        assert isinstance(adapter, MockAdapter)
+    finally:
+        if prev_type is None:
+            os.environ.pop("NEUROLINK_ADAPTER_TYPE", None)
+        else:
+            os.environ["NEUROLINK_ADAPTER_TYPE"] = prev_type
+        config_module._settings = prev_settings
 
 
 def test_create_adapter_unknown_type_raises():
