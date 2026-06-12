@@ -2,6 +2,30 @@
 
 /api/v1/neurolink/* routes.
 Thin layer - delegates to NeuroLinkService.
+
+SSE event types
+---------------
+The generator encodes three distinct queue item types into SSE frames:
+
+  NeurolinkState (object)
+    event: state
+    data:  <NeurolinkState model_dump_json>
+
+  baseline_complete sentinel  {"event": "baseline_complete"}
+    event: baseline_complete
+    data:  {}
+
+  settling sentinel  {"event": "settling", "reason": <code>}
+    event: settling
+    data:  {"reason": "impedance_unstable" | "motion_settling"
+                      | "env_not_ready"    | "settling"}
+
+  Any other dict (future sentinels, forwards-compatible)
+    event: unknown
+    data:  <raw dict JSON>
+
+Keepalive (no hub item)
+    : keepalive   (SSE comment line, not an event)
 """
 
 from __future__ import annotations
@@ -92,14 +116,15 @@ async def get_sessions(
 
 @router.get("/stream")
 async def sse_stream(service: ServiceDep) -> StreamingResponse:
-    """SSE endpoint - streams NeurolinkState JSON as server-sent events.
+    """SSE endpoint - streams EEG events as server-sent events.
 
-    Each event: event: state\\ndata: <NeurolinkState JSON>\\n\\n
+    Three event types are multiplexed on the same stream; see module
+    docstring for the full event-type table.
 
     Keepalive strategy
     ------------------
     The pump publishes at 4 Hz (250 ms cadence).  The generator waits up
-    to _SSE_IDLE_TIMEOUT_S (5 s) for the next queued frame.  On timeout
+    to _SSE_IDLE_TIMEOUT_S (5 s) for the next queued item.  On timeout
     it sends an SSE keepalive comment (': keepalive') to prevent Nginx /
     browser proxies from closing the idle connection, then resumes waiting.
 
@@ -117,35 +142,37 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Always emit current state immediately (guaranteed >= 1 frame).
-            yield _sse_frame(hub.get_state())
+            # Emit current state immediately — but only when connected so the
+            # client does not receive a blank NeurolinkState before any device
+            # has been paired.  The first real frame arrives within 250 ms.
+            if hub.get_state().connected:
+                yield _encode_sse_item(hub.get_state())
 
             while True:
                 try:
-                    # Primary wait - up to 5 s for the next pump frame.
-                    state = await asyncio.wait_for(q.get(), timeout=_SSE_IDLE_TIMEOUT_S)
-                    yield _sse_frame(state)
+                    # Primary wait — up to 5 s for the next hub item.
+                    item = await asyncio.wait_for(q.get(), timeout=_SSE_IDLE_TIMEOUT_S)
+                    yield _encode_sse_item(item)
                 except TimeoutError:
-                    # 5 s passed with no frame.  Check if the queue filled
-                    # in the meantime (burst catch-up), otherwise keepalive.
+                    # 5 s passed with no item.  Drain any burst that arrived
+                    # while we were not watching, then keepalive.
                     if not q.empty():
-                        state = q.get_nowait()
-                        yield _sse_frame(state)
+                        yield _encode_sse_item(q.get_nowait())
                         continue
 
                     # Try the short test-exit window to detect ASGITransport.
                     try:
-                        state = await asyncio.wait_for(
+                        item = await asyncio.wait_for(
                             q.get(), timeout=_SSE_TEST_EXIT_TIMEOUT_S
                         )
-                        yield _sse_frame(state)
+                        yield _encode_sse_item(item)
                     except TimeoutError:
                         # No pump running (test harness) -> exit cleanly.
                         # Under uvicorn the pump always fills the queue within
                         # 250 ms so this inner branch is never reached in prod.
                         if not hub.get_state().connected:
                             return
-                        # Still connected but genuinely idle - send keepalive
+                        # Still connected but genuinely idle — send keepalive
                         # comment and keep the loop alive.
                         yield b": keepalive\n\n"
 
@@ -164,7 +191,50 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
     )
 
 
-def _sse_frame(state: NeurolinkState) -> bytes:
-    """Encode a NeurolinkState as a raw SSE frame (bytes)."""
-    data = json.loads(state.model_dump_json())
-    return f"event: state\ndata: {json.dumps(data)}\n\n".encode()
+# ── SSE serialisation helpers ───────────────────────────────────────────────
+
+def _encode_sse_item(item: NeurolinkState | dict) -> bytes:
+    """Encode any hub queue item as a raw SSE frame (bytes).
+
+    Dispatches on item type:
+
+      NeurolinkState
+        -> event: state
+           data: <model_dump_json>
+
+      {"event": "baseline_complete"}
+        -> event: baseline_complete
+           data: {}
+
+      {"event": "settling", "reason": <code>}
+        -> event: settling
+           data: {"reason": <code>}
+
+      Any other dict (forwards-compatible)
+        -> event: unknown
+           data: <raw JSON>
+
+    Returns bytes ready to write directly into the SSE stream.
+    """
+    if isinstance(item, NeurolinkState):
+        data = json.loads(item.model_dump_json())
+        return f"event: state\ndata: {json.dumps(data)}\n\n".encode()
+
+    if isinstance(item, dict):
+        event_type = item.get("event", "unknown")
+
+        if event_type == "baseline_complete":
+            return b"event: baseline_complete\ndata: {}\n\n"
+
+        if event_type == "settling":
+            reason = item.get("reason", "settling")
+            payload = json.dumps({"reason": reason})
+            return f"event: settling\ndata: {payload}\n\n".encode()
+
+        # Forwards-compatible fallback: unknown sentinel shape.
+        log.warning("sse_unknown_sentinel", item=item)
+        return f"event: unknown\ndata: {json.dumps(item)}\n\n".encode()
+
+    # Should never happen — log and drop.
+    log.error("sse_unrecognised_item_type", item_type=type(item).__name__)
+    return b""
