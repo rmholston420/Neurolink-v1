@@ -62,22 +62,14 @@ Runs on frames that pass Stage 3 (not coarse-rejected).
      ArtifactAnnotationPayload / ArtifactCorrectionPlanPayload and
      carried through IngestPayload → NeurolinkState → SSE stream.
 
-Stage 4 integration — Artifact Subspace Reconstruction (ASR)
--------------------------------------------------------------
-ASR runs on clean frames only (after Stage 3 passes the frame).
-  - When Stage 3b is active, ASR runs only when plan.apply_asr is True.
-  - Prioritised over pure ICA for low-channel-count wearable EEG;
-    ICA source separation degrades below ~64 channels.
-  - Calibration phase (first calib_sec s, default 30 s) accumulates
-    data silently; the frame is returned unchanged during this period.
-  - After calibration, burst samples (> burst_sd × calib_rms in the
-    whitened subspace) are reconstructed from the calibration
-    covariance projection.
+Stage 4b integration — BaselineRecorder (impedance stabilisation + ASR gate)
+----------------------------------------------------------------------------
+A 150-second eyes-closed resting baseline runs at session startup.
 
-Baseline integration (Stage 4b)
---------------------------------
-A 150-second eyes-closed resting baseline runs at session startup,
-serving two purposes:
+  Stage 4b now runs BEFORE Stage 4 (ASR) on every clean tick so that
+  the recorder can advance its phase state machine first.  This is the
+  correct ordering: BaselineRecorder is the gatekeeper that determines
+  whether ASR is allowed to receive the current frame.
 
   1. Impedance stabilisation (dry electrodes):
      The first 30 seconds are discarded (WARMUP phase).  Dry electrodes
@@ -85,10 +77,9 @@ serving two purposes:
      this window is mechanically unreliable regardless of amplitude.
 
   2. ASR calibration window:
-     Clean frames during the RECORDING phase (seconds 30-150) are
-     forwarded to the ASR instance so that ASR calibrates on genuinely
-     rested, stabilised signal rather than the noisier early-session
-     data it would otherwise receive.
+     Clean frames during the RECORDING phase (seconds 30-150) flow
+     through to ASR (Stage 4) because the warmup guard is now lifted.
+     ASR calibrates on genuinely rested, stabilised signal.
 
   When the 150-second window completes, BaselineRecorder calls
   hub.notify_baseline_complete(), which pushes a baseline_complete SSE
@@ -98,6 +89,22 @@ serving two purposes:
   through IngestPayload.baseline_phase → NeurolinkState.baseline_phase
   → SSE stream on every tick so the frontend can display a progress
   indicator during the baseline window.
+
+Stage 4 integration — Artifact Subspace Reconstruction (ASR)
+-------------------------------------------------------------
+ASR runs on clean frames only (after Stage 3 passes the frame) AND
+only once the baseline is past the WARMUP phase.
+  - Guard: self._baseline.phase != "warmup" — prevents ASR from
+    ingesting electrode-stabilisation data for covariance fitting.
+  - When Stage 3b is active, ASR also runs only when plan.apply_asr
+    is True.
+  - Prioritised over pure ICA for low-channel-count wearable EEG;
+    ICA source separation degrades below ~64 channels.
+  - Calibration phase (first calib_sec s, default 30 s) accumulates
+    data silently; the frame is returned unchanged during this period.
+  - After calibration, burst samples (> burst_sd × calib_rms in the
+    whitened subspace) are reconstructed from the calibration
+    covariance projection.
 
 Stage 5 integration — Gratton-Coles Ocular Regression
 -------------------------------------------------------
@@ -135,10 +142,13 @@ Pipeline per tick
                                          (bypassed if stage3_artifact_gate=False)
  8b. [Stage 3b] Multi-type artifact classifier + correction router
                                          (bypassed if stage3b_artifact_detector=False)
- 9.  [Stage 4] ASR burst reconstruction  (clean frames; plan.apply_asr when 3b active)
-                                         (bypassed if stage4_asr=False)
- 9b. [Stage 4b] Baseline recording / impedance stabilisation
+ 9.  [Stage 4b] Baseline recording / impedance stabilisation
                                          (bypassed if stage4b_baseline=False)
+                                         NOTE: runs BEFORE Stage 4 so the phase
+                                         gate is advanced before ASR sees the frame.
+ 9b. [Stage 4] ASR burst reconstruction  (clean frames; post-warmup only;
+                                          plan.apply_asr when 3b active)
+                                         (bypassed if stage4_asr=False)
 10.  [Stage 5] Gratton-Coles ocular regression
                (clean frames; plan.apply_ocular_regression when 3b active)
                                          (bypassed if stage5_ocular=False)
@@ -217,6 +227,13 @@ class EEGPump:
     _build_payload() on every clean frame; no external configuration
     is required.
 
+    Stage ordering (Stages 4b → 4)
+    --------------------------------
+    BaselineRecorder (Stage 4b) runs BEFORE ASR (Stage 4) so the
+    recorder advances its phase state machine first.  Stage 4 is
+    additionally guarded by `self._baseline.phase != "warmup"` to
+    prevent ASR from calibrating on electrode-stabilisation data.
+
     Filter toggles
     --------------
     get_toggles() is called once per tick at the top of _build_payload()
@@ -235,8 +252,8 @@ class EEGPump:
     7.  [Stage 2] Spherical spline interpolation of bad channels
     8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
     8b. [Stage 3b] Multi-type artifact classifier + correction router
-    9.  [Stage 4] ASR burst reconstruction  (plan-gated when 3b active)
-    9b. [Stage 4b] Baseline recording / impedance stabilisation
+    9.  [Stage 4b] Baseline recording / impedance stabilisation  ← BEFORE Stage 4
+    9b. [Stage 4]  ASR burst reconstruction (post-warmup; plan-gated when 3b active)
     10. [Stage 5] Gratton-Coles ocular regression (plan-gated when 3b active)
     10b.[Stage 5b] Notch re-apply (plan.apply_notch when 3b active)
     11. Band powers from corrected+filtered buffer  (clean frames only)
@@ -272,9 +289,11 @@ class EEGPump:
         self._stage4: ArtifactSubspaceReconstructor = asr or ArtifactSubspaceReconstructor()
         self._stage5: OcularRegressor = ocular_regressor or OcularRegressor()
         # Stage 4b: per-session resting baseline (impedance stabilisation +
-        # ASR calibration window).  Constructed here so it shares the same
-        # ASR instance as Stage 4 — BaselineRecorder.process() feeds frames
-        # directly to self._stage4.apply() during the RECORDING phase.
+        # ASR calibration gate).  Constructed here so it shares the same
+        # ASR instance as Stage 4.
+        # IMPORTANT: BaselineRecorder no longer calls asr.apply() internally.
+        # Instead it advances the phase state machine; Stage 4 in the pipeline
+        # is guarded by `self._baseline.phase != "warmup"` and runs after 4b.
         self._baseline: BaselineRecorder = BaselineRecorder(
             asr=self._stage4,
             hub=self._hub,
@@ -496,20 +515,27 @@ class EEGPump:
                     if detection_report is not None
                 ]
 
-        # ── Stage 4 — ASR burst reconstruction (clean frames only) ─────
-        # When Stage 3b active: only runs if plan.apply_asr is True.
-        # When Stage 3b disabled: runs unconditionally on clean frames.
+        # ── Stage 4b — Baseline recording (clean frames only) ───────────
+        # MUST run before Stage 4 (ASR) so the phase state machine is
+        # advanced before we decide whether ASR may receive this frame.
+        # BaselineRecorder.process() no longer calls asr.apply() internally;
+        # it only advances WARMUP → RECORDING → COMPLETE and fires the bell.
+        if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
+            eeg_arr = self._baseline.process(eeg_arr)
+
+        # ── Stage 4 — ASR burst reconstruction (clean, post-warmup frames) ─
+        # Guard: self._baseline.phase != "warmup" prevents ASR from
+        # calibrating its covariance model on electrode-stabilisation data.
+        # When Stage 3b active: also only runs if plan.apply_asr is True.
+        # When Stage 3b disabled: runs unconditionally on clean post-warmup frames.
         if (
             eeg_arr is not None
             and not artifact_rejected
             and toggles.stage4_asr
             and _plan_apply_asr
+            and self._baseline.phase != "warmup"
         ):
             eeg_arr = self._stage4.apply(eeg_arr)
-
-        # ── Stage 4b — Baseline recording (clean frames only) ───────────
-        if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
-            eeg_arr = self._baseline.process(eeg_arr)
 
         # ── Stage 5 — Gratton-Coles ocular regression (clean frames) ───
         # When Stage 3b active: only runs if plan.apply_ocular_regression.

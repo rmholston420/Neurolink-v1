@@ -11,18 +11,23 @@ baseline that serves two independent goals:
      sweat film; data from this period is mechanically and electrically
      unreliable regardless of signal amplitude.
 
-  2. **ASR calibration window**:
-     Frames accepted during the RECORDING phase (seconds 30-150) are
-     forwarded to the ASR instance for covariance-model fitting.  This
-     120-second clean window replaces the previous 30-second default and
-     produces substantially more stable burst-reconstruction statistics.
+  2. **ASR calibration gate**:
+     This recorder no longer calls asr.apply() directly.  Instead it
+     exposes the current phase via the ``phase`` property, and
+     EEGPump._build_payload() guards Stage 4 (ASR) with::
+
+         self._baseline.phase != "warmup"
+
+     This ensures ASR only receives frames from the post-warmup
+     RECORDING and COMPLETE phases, where electrode contact is stable.
+     The guard lives in the pump (not here) so the control flow is
+     explicit and auditable in one place.
 
 State machine
 -------------
   WARMUP    — electrode stabilisation; frames discarded, nothing forwarded
-  RECORDING — clean frames forwarded to ASR; counter advancing
-  COMPLETE  — bell event fired once via hub; all subsequent frames pass
-              directly to ASR as normal (baseline has no further effect)
+  RECORDING — phase gate lifted; ASR receives frames via main pipeline
+  COMPLETE  — bell event fired once via hub; phase gate remains lifted
 
 Bell notification
 -----------------
@@ -36,8 +41,13 @@ Usage (EEGPump)
     # Once at startup:
     self._baseline = BaselineRecorder(asr=self._stage4, hub=hub)
 
-    # Every clean tick (after Stage 3 passes):
+    # Every clean tick (Stage 4b — runs BEFORE Stage 4 / ASR):
     eeg_arr = self._baseline.process(eeg_arr)
+
+    # Stage 4 guard (in the same tick, after Stage 4b):
+    if self._baseline.phase != "warmup":
+        eeg_arr = self._stage4.apply(eeg_arr)
+
     payload.baseline_phase = self._baseline.phase
 
 The recorder is a drop-in shim: process() always returns the (unchanged)
@@ -62,9 +72,9 @@ log = structlog.get_logger(__name__)
 
 
 class BaselinePhase(str, Enum):
-    WARMUP = "warmup"       # electrodes stabilising — frames discarded
-    RECORDING = "recording" # accumulating ASR calibration data
-    COMPLETE = "complete"   # baseline done; bell has fired
+    WARMUP = "warmup"       # electrodes stabilising — ASR gate closed
+    RECORDING = "recording" # ASR gate open; baseline window accumulating
+    COMPLETE = "complete"   # baseline done; bell has fired; ASR gate open
 
 
 class BaselineRecorder:
@@ -73,9 +83,10 @@ class BaselineRecorder:
     Parameters
     ----------
     asr:
-        The session's ArtifactSubspaceReconstructor instance.  Clean
-        frames during the RECORDING phase are forwarded to asr.apply()
-        so that ASR calibrates on genuinely rested, stabilised data.
+        The session's ArtifactSubspaceReconstructor instance.  Retained
+        for API compatibility; no longer called directly from this class.
+        The pump guards Stage 4 using ``self._baseline.phase != "warmup"``
+        so ASR calibrates only on post-warmup frames.
     hub:
         The EEGHub instance.  Used only once: to fire the bell event
         when the baseline transitions to COMPLETE.
@@ -86,7 +97,7 @@ class BaselineRecorder:
         asr: ArtifactSubspaceReconstructor,
         hub,  # EEGHub — avoid circular import with TYPE_CHECKING only
     ) -> None:
-        self._asr = asr
+        self._asr = asr  # kept for API compatibility; not called here
         self._hub = hub
         self._phase: BaselinePhase = BaselinePhase.WARMUP
         self._start_ts: float = time.monotonic()
@@ -104,9 +115,12 @@ class BaselineRecorder:
         return self._phase is BaselinePhase.COMPLETE
 
     def process(self, eeg_arr: np.ndarray) -> np.ndarray:
-        """Advance the state machine and (conditionally) feed ASR.
+        """Advance the state machine and fire the bell when complete.
 
-        Called on every clean frame (Stage 3 passed, not artifact_rejected).
+        Called on every clean frame (Stage 3 passed, not artifact_rejected),
+        and MUST be called before Stage 4 (ASR) each tick so the phase
+        gate is up-to-date when the pump evaluates it.
+
         Returns eeg_arr unchanged in all phases — this is a pure side-effect
         shim so the downstream pipeline requires no branching.
 
@@ -115,6 +129,12 @@ class BaselineRecorder:
         WARMUP     → RECORDING  when elapsed >= BASELINE_DISCARD_SEC
         RECORDING  → COMPLETE   when elapsed >= BASELINE_TOTAL_SEC
         COMPLETE   → COMPLETE   (terminal state)
+
+        Note
+        ----
+        This method no longer calls self._asr.apply().  ASR is driven
+        exclusively by EEGPump._build_payload() (Stage 4), which is
+        gated on ``self._baseline.phase != "warmup"``.
         """
         elapsed = time.monotonic() - self._start_ts
 
@@ -126,21 +146,15 @@ class BaselineRecorder:
                     elapsed_s=round(elapsed, 1),
                     discard_s=BASELINE_DISCARD_SEC,
                 )
-            # Frames during WARMUP are discarded — do NOT feed ASR.
+            # WARMUP: return early — ASR gate remains closed this tick.
             return eeg_arr
 
         if self._phase is BaselinePhase.RECORDING:
             if elapsed >= BASELINE_TOTAL_SEC:
                 self._phase = BaselinePhase.COMPLETE
                 self._fire_bell(elapsed)
-            else:
-                # Feed clean frame to ASR for covariance model fitting.
-                # asr.apply() is idempotent once calibrated so calling it
-                # here is safe regardless of whether ASR is still in its
-                # own calib window.
-                self._asr.apply(eeg_arr)
 
-        # COMPLETE phase: baseline has no further effect.
+        # RECORDING / COMPLETE: ASR gate is open; pump handles Stage 4.
         return eeg_arr
 
     def reset(self) -> None:
