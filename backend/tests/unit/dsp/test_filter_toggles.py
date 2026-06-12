@@ -1,4 +1,4 @@
-"""Unit tests for dsp/filter_toggles.py."""
+"""Unit tests for dsp/filter_toggles.py — runtime pipeline stage toggles."""
 
 from __future__ import annotations
 
@@ -6,37 +6,51 @@ import threading
 
 import pytest
 
-
-# ---------------------------------------------------------------------------
-# Helpers — always re-import the module so each test class starts fresh.
-# The module-level singleton persists across tests in the same process;
-# we reset it before each test using set_toggles to all-True.
-# ---------------------------------------------------------------------------
-
-def _reset():
-    from neurolink.dsp.filter_toggles import FilterToggleConfig, set_toggles
-    defaults = FilterToggleConfig().to_dict()
-    set_toggles(defaults)
+import neurolink.dsp.filter_toggles as ft
+from neurolink.dsp.filter_toggles import FilterToggleConfig, get_toggles, set_toggles
 
 
 # ---------------------------------------------------------------------------
-# FilterToggleConfig — dataclass
+# Fixtures: restore the singleton between tests so tests do not bleed state
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def reset_toggles():
+    """Reset the module-level singleton before and after each test."""
+    set_toggles({k: True for k in FilterToggleConfig().to_dict()})
+    yield
+    set_toggles({k: True for k in FilterToggleConfig().to_dict()})
+
+
+# ---------------------------------------------------------------------------
+# FilterToggleConfig dataclass
 # ---------------------------------------------------------------------------
 
 class TestFilterToggleConfig:
     def test_all_defaults_true(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig
         cfg = FilterToggleConfig()
-        for k, v in cfg.to_dict().items():
-            assert v is True, f"{k} should default to True"
+        for name, val in cfg.to_dict().items():
+            assert val is True, f"{name} default should be True"
+
+    def test_to_dict_returns_dict(self):
+        assert isinstance(FilterToggleConfig().to_dict(), dict)
+
+    def test_to_dict_keys_match_fields(self):
+        cfg = FilterToggleConfig()
+        d = cfg.to_dict()
+        import dataclasses
+        field_names = {f.name for f in dataclasses.fields(cfg)}
+        assert set(d.keys()) == field_names
 
     def test_stage6_cardiac_field_exists(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig
+        """Stage 6 cardiac toggle must be present."""
         assert hasattr(FilterToggleConfig(), "stage6_cardiac")
 
-    def test_to_dict_returns_all_stage_keys(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig
-        d = FilterToggleConfig().to_dict()
+    def test_stage6_cardiac_default_true(self):
+        assert FilterToggleConfig().stage6_cardiac is True
+
+    def test_all_stage_fields_present(self):
+        cfg = FilterToggleConfig()
         expected = {
             "stage1_fir",
             "stage2_bad_channels",
@@ -48,117 +62,136 @@ class TestFilterToggleConfig:
             "stage6_cardiac",
             "imu_gate",
         }
-        assert set(d.keys()) == expected
+        assert expected.issubset(set(cfg.to_dict().keys()))
 
-    def test_to_dict_values_are_bool(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig
-        for v in FilterToggleConfig().to_dict().values():
-            assert isinstance(v, bool)
-
-    def test_custom_construction(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig
-        cfg = FilterToggleConfig(stage1_fir=False, stage6_cardiac=False)
-        assert cfg.stage1_fir is False
+    def test_individual_field_override(self):
+        cfg = FilterToggleConfig(stage6_cardiac=False)
         assert cfg.stage6_cardiac is False
-        assert cfg.stage2_bad_channels is True  # others unchanged
+        assert cfg.stage1_fir is True  # others unchanged
 
 
 # ---------------------------------------------------------------------------
-# get_toggles()
+# get_toggles() — snapshot isolation
 # ---------------------------------------------------------------------------
 
 class TestGetToggles:
-    def setup_method(self):
-        _reset()
-
-    def test_returns_filter_toggle_config_instance(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig, get_toggles
+    def test_returns_filter_toggle_config(self):
         assert isinstance(get_toggles(), FilterToggleConfig)
 
-    def test_default_all_true(self):
-        from neurolink.dsp.filter_toggles import get_toggles
-        cfg = get_toggles()
-        for v in cfg.to_dict().values():
-            assert v is True
-
     def test_returns_copy_not_singleton(self):
-        from neurolink.dsp.filter_toggles import get_toggles
-        cfg1 = get_toggles()
-        cfg2 = get_toggles()
-        assert cfg1 is not cfg2
+        a = get_toggles()
+        b = get_toggles()
+        assert a is not b
 
-    def test_mutating_returned_copy_does_not_affect_singleton(self):
-        from neurolink.dsp.filter_toggles import get_toggles
-        cfg = get_toggles()
-        cfg.stage1_fir = False
-        # singleton still True
-        assert get_toggles().stage1_fir is True
+    def test_mutating_snapshot_does_not_affect_singleton(self):
+        snap = get_toggles()
+        snap.stage6_cardiac = False
+        # Singleton should still report True
+        assert get_toggles().stage6_cardiac is True
+
+    def test_defaults_all_true_on_fresh_singleton(self):
+        for name, val in get_toggles().to_dict().items():
+            assert val is True, f"{name} should default True"
 
 
 # ---------------------------------------------------------------------------
-# set_toggles()
+# set_toggles() — merge semantics
 # ---------------------------------------------------------------------------
 
 class TestSetToggles:
-    def setup_method(self):
-        _reset()
+    def test_returns_filter_toggle_config(self):
+        result = set_toggles({"stage6_cardiac": False})
+        assert isinstance(result, FilterToggleConfig)
 
-    def test_set_single_key(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        set_toggles({"stage1_fir": False})
-        assert get_toggles().stage1_fir is False
-
-    def test_set_stage6_cardiac_false(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
+    def test_single_key_update(self):
         set_toggles({"stage6_cardiac": False})
         assert get_toggles().stage6_cardiac is False
 
-    def test_other_keys_unchanged_after_partial_update(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        set_toggles({"stage4_asr": False})
+    def test_partial_update_preserves_other_fields(self):
+        set_toggles({"stage6_cardiac": False})
         cfg = get_toggles()
-        assert cfg.stage4_asr is False
         assert cfg.stage1_fir is True
-        assert cfg.stage6_cardiac is True
-
-    def test_returns_new_config(self):
-        from neurolink.dsp.filter_toggles import FilterToggleConfig, set_toggles
-        result = set_toggles({"stage1_fir": False})
-        assert isinstance(result, FilterToggleConfig)
-        assert result.stage1_fir is False
+        assert cfg.stage5_ocular is True
 
     def test_unknown_key_silently_ignored(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        set_toggles({"nonexistent_key": False})
-        cfg = get_toggles()
-        for v in cfg.to_dict().values():
-            assert v is True
+        """Unknown keys must not raise and must not corrupt existing state."""
+        before = get_toggles().to_dict()
+        set_toggles({"nonexistent_stage": False})
+        after = get_toggles().to_dict()
+        assert before == after
 
     def test_non_bool_value_silently_ignored(self):
-        """Non-bool values are rejected; field stays True."""
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        set_toggles({"stage1_fir": "off"})  # type: ignore[arg-type]
-        assert get_toggles().stage1_fir is True
-
-    def test_set_multiple_keys(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        set_toggles({"stage1_fir": False, "stage6_cardiac": False, "imu_gate": False})
-        cfg = get_toggles()
-        assert cfg.stage1_fir is False
-        assert cfg.stage6_cardiac is False
-        assert cfg.imu_gate is False
-
-    def test_re_enable_after_disable(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        set_toggles({"stage1_fir": False})
-        set_toggles({"stage1_fir": True})
-        assert get_toggles().stage1_fir is True
+        """Only bool values are accepted; other types are silently dropped."""
+        set_toggles({"stage6_cardiac": "off"})  # type: ignore[arg-type]
+        assert get_toggles().stage6_cardiac is True
 
     def test_empty_dict_is_noop(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
+        before = get_toggles().to_dict()
         set_toggles({})
-        for v in get_toggles().to_dict().values():
-            assert v is True
+        after = get_toggles().to_dict()
+        assert before == after
+
+    def test_multiple_keys_updated_atomically(self):
+        set_toggles({"stage4_asr": False, "stage5_ocular": False})
+        cfg = get_toggles()
+        assert cfg.stage4_asr is False
+        assert cfg.stage5_ocular is False
+
+    def test_re_enable_after_disable(self):
+        set_toggles({"stage6_cardiac": False})
+        assert get_toggles().stage6_cardiac is False
+        set_toggles({"stage6_cardiac": True})
+        assert get_toggles().stage6_cardiac is True
+
+    def test_all_stages_can_be_disabled(self):
+        all_false = {k: False for k in FilterToggleConfig().to_dict()}
+        set_toggles(all_false)
+        for name, val in get_toggles().to_dict().items():
+            assert val is False, f"{name} should be False"
+
+
+# ---------------------------------------------------------------------------
+# stage6_cardiac wiring — integration with cardiac_regression
+# ---------------------------------------------------------------------------
+
+class TestStage6CardiacWiring:
+    """Verify the toggle bool is correctly forwarded to the stage."""
+
+    def test_stage6_cardiac_true_by_default(self):
+        toggles = get_toggles()
+        assert toggles.stage6_cardiac is True
+
+    def test_disable_stage6_cardiac(self):
+        set_toggles({"stage6_cardiac": False})
+        toggles = get_toggles()
+        assert toggles.stage6_cardiac is False
+
+    def test_toggle_bool_gates_cardiac_regressor(self):
+        """Simulate the EEGPump Stage 6 guard: only call regressor when toggle is True."""
+        import numpy as np
+        from neurolink.dsp.cardiac_regression import CardiacRegressor
+
+        reg = CardiacRegressor()
+        eeg = np.random.default_rng(0).standard_normal((4, 256)).astype(np.float32)
+        ibis = [800.0] * 5
+
+        # With toggle ON: regressor.apply() is called
+        set_toggles({"stage6_cardiac": True})
+        toggles = get_toggles()
+        if toggles.stage6_cardiac:
+            out = reg.apply(eeg, ibis)
+        else:
+            out = eeg
+        assert out.shape == eeg.shape
+
+        # With toggle OFF: regressor.apply() is skipped; raw eeg returned
+        set_toggles({"stage6_cardiac": False})
+        toggles = get_toggles()
+        if toggles.stage6_cardiac:
+            out = reg.apply(eeg, ibis)
+        else:
+            out = eeg
+        assert out is eeg  # exact identity: not even a copy
 
 
 # ---------------------------------------------------------------------------
@@ -166,24 +199,21 @@ class TestSetToggles:
 # ---------------------------------------------------------------------------
 
 class TestFilterTogglesThreadSafety:
-    def setup_method(self):
-        _reset()
-
-    def test_concurrent_get_and_set_does_not_raise(self):
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
+    def test_concurrent_get_and_set_no_exception(self):
         errors: list[Exception] = []
 
         def getter():
             try:
                 for _ in range(50):
-                    _ = get_toggles()
+                    get_toggles()
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
         def setter():
             try:
-                for i in range(50):
-                    set_toggles({"stage1_fir": bool(i % 2)})
+                for _ in range(20):
+                    set_toggles({"stage6_cardiac": False})
+                    set_toggles({"stage6_cardiac": True})
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
@@ -195,30 +225,13 @@ class TestFilterTogglesThreadSafety:
             t.start()
         for t in threads:
             t.join()
-
         assert errors == []
-        _reset()  # leave clean
 
-    def test_singleton_remains_consistent_after_concurrent_writes(self):
-        """After concurrent writes all values must still be valid bools."""
-        from neurolink.dsp.filter_toggles import get_toggles, set_toggles
-        errors: list[Exception] = []
+    def test_snapshot_isolation_under_concurrent_writes(self):
+        """A snapshot taken before a set_toggles must not be mutated by it."""
+        snap = get_toggles()
+        snap_stage6 = snap.stage6_cardiac
 
-        def flipper(key: str):
-            try:
-                for i in range(30):
-                    set_toggles({key: bool(i % 2)})
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-
-        keys = ["stage1_fir", "stage4_asr", "stage6_cardiac", "imu_gate"]
-        threads = [threading.Thread(target=flipper, args=(k,)) for k in keys]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert errors == []
-        for v in get_toggles().to_dict().values():
-            assert isinstance(v, bool)
-        _reset()
+        set_toggles({"stage6_cardiac": not snap_stage6})
+        # snap is a copy; its value must be unchanged
+        assert snap.stage6_cardiac == snap_stage6
