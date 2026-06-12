@@ -8,11 +8,16 @@ When a Stage0Guard is supplied:
   1. gate_sample() annotates motion flags on every raw EEGSample.
   2. acquisition_ready is checked before hub.update(); frames dropped
      when not ready (except mock source).
+  3. When a frame is held, _stage0_settling_reason() emits a structured
+     reason code ('impedance_unstable' | 'motion_settling' | 'env_not_ready'
+     | 'settling') and hub.emit_settling(reason) pushes a settling SSE
+     event to all connected clients so the frontend can show a contextual
+     waiting indicator.
 
 Stage 1 integration
 -------------------
 After eeg_arr is assembled, apply_online_filters() runs the zero-phase
-FIR chain (HP 0.5 Hz + notch(s) + LP 45 Hz) on the buffer.  The
+FIR chain (HP 0.5 Hz + notch(s) + LP 55 Hz) on the buffer.  The
 filtered array flows into all downstream DSP.
 
 Stage 2 integration
@@ -30,7 +35,7 @@ Stage 3 integration
 -------------------
 After Stage 2 interpolation:
   1. gate.evaluate(eeg_arr, accel_arr) runs three independent passes:
-       a. Amplitude threshold (±100 µV default) — EEG channels only
+       a. Amplitude threshold (device-aware: dry=75µV, semi=90µV, wet=100µV)
        b. IMU motion gate (0.15 g RMS default) — from accel_buffer
        c. Kurtosis burst detection (excess kurtosis > 5.0 default)
   2. If decision.reject is True:
@@ -56,7 +61,8 @@ Runs on frames that pass Stage 3 (not coarse-rejected).
        - apply_asr            → Stage 4 ASR runs only when True
        - apply_ocular_regression → Stage 5 runs only when True
        - apply_notch          → notch filter re-applied after Stage 5
-  4. When Stage 3b is disabled (toggle off), Stages 4-5 run
+       - apply_cardiac_regression → Stage 6 runs only when True
+  4. When Stage 3b is disabled (toggle off), Stages 4-6 run
      unconditionally on clean frames — prior behaviour preserved.
   5. Annotations and correction plan serialised as
      ArtifactAnnotationPayload / ArtifactCorrectionPlanPayload and
@@ -115,8 +121,19 @@ Ocular regression runs on clean frames only (after Stage 4).
     for the same reason as Stage 4.
   - Requires an EOG/AUX reference channel (default: channel 4, Muse
     AUX jack).  Falls back to a pass-through when no AUX is present.
-  - OLS slope coefficients are refitted every recalib_frames ticks
-    (default 512 ≈ 2 min at 4 Hz) to track slow skin-potential drift.
+  - OLS slope coefficients are refitted adaptively: EOG variance shift
+    >2x or <0.5x rolling mean triggers early recalibration; the fixed
+    recalib_frames interval acts as a fallback floor.
+
+Stage 6 integration — PPG-referenced Cardiac Regression (AAS)
+--------------------------------------------------------------
+Cardiac regression runs on clean frames only (after Stage 5).
+  - When Stage 3b is active, runs only when plan.apply_cardiac_regression
+    is True AND toggles.stage6_cardiac is True.
+  - Uses PPG inter-beat intervals (IBI ms list) from the PPG payload
+    to build a trimmed-mean cardiac template via AAS (Adaptive Artifact
+    Subtraction) and subtract it from each EEG channel.
+  - Gracefully skipped when ppg_payload is None or ibi_ms is empty.
 
 Filter toggles
 --------------
@@ -132,8 +149,8 @@ Pipeline per tick
  1.  Read EEGSample from adapter
  2.  [Stage 0] IMU motion gate          (skipped if imu_gate=False)
  3.  [Stage 0] Impedance update
- 4.  [Stage 0] Acquisition readiness gate
- 5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP)
+ 4.  [Stage 0] Acquisition readiness gate → emit_settling(reason) on hold
+ 5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP 55 Hz)
                                          (bypassed if stage1_fir=False)
  6.  [Stage 2] Bad channel detection (EMA update)
  7.  [Stage 2] Spherical spline interpolation of bad channels
@@ -153,14 +170,17 @@ Pipeline per tick
                (clean frames; plan.apply_ocular_regression when 3b active)
                                          (bypassed if stage5_ocular=False)
 10b. [Stage 5b] Notch re-apply (plan.apply_notch when 3b active)
-11.  Band powers from corrected+filtered buffer  (clean frames only)
-12.  Derived EEG (FAA, FMt)                      (clean frames only)
-13.  PPG HRV
-14.  Breathing
-15.  IMU head orientation
-16.  Build IngestPayload  (includes baseline_phase, artifact_annotations,
+11.  [Stage 6] PPG cardiac regression (AAS)
+               (clean frames; plan.apply_cardiac_regression + ppg IBI present)
+                                         (bypassed if stage6_cardiac=False)
+12.  Band powers from corrected+filtered buffer  (clean frames only)
+13.  Derived EEG (FAA, FMt)                      (clean frames only)
+14.  PPG HRV
+15.  Breathing
+16.  IMU head orientation
+17.  Build IngestPayload  (includes baseline_phase, artifact_annotations,
                            artifact_correction_plan)
-17.  hub.update()
+18.  hub.update()
 """
 
 from __future__ import annotations
@@ -177,6 +197,7 @@ from neurolink.dsp.artifact_gate import ArtifactGate
 from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
 from neurolink.dsp.baseline import BaselineRecorder
+from neurolink.dsp.cardiac_regression import CardiacRegressor
 from neurolink.dsp.filter_toggles import get_toggles
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
@@ -209,11 +230,11 @@ class EEGPump:
     Artifact strategy
     -----------------
     ASR (Stage 4) + temporal filtering (Stage 1) + Gratton-Coles
-    regression (Stage 5) are prioritised over pure ICA.  ICA source
-    separation degrades significantly at the 4-channel density of
-    Muse-class hardware; the temporal/regression stack achieves
-    equivalent or better correction with lower compute cost and no
-    minimum-channel requirement.
+    regression (Stage 5) + cardiac regression (Stage 6) are prioritised
+    over pure ICA.  ICA source separation degrades significantly at the
+    4-channel density of Muse-class hardware; the temporal/regression
+    stack achieves equivalent or better correction with lower compute
+    cost and no minimum-channel requirement.
 
     Stage 3b (ArtifactDetector) adds multi-type classification between
     the coarse gate and the correctors, enabling precise routing:
@@ -246,8 +267,8 @@ class EEGPump:
     1.  Read EEGSample from adapter
     2.  [Stage 0] IMU motion gate
     3.  [Stage 0] Impedance update
-    4.  [Stage 0] Acquisition readiness gate
-    5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP)
+    4.  [Stage 0] Acquisition readiness gate → emit_settling(reason) on hold
+    5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP 55 Hz)
     6.  [Stage 2] Bad channel detection (EMA update)
     7.  [Stage 2] Spherical spline interpolation of bad channels
     8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
@@ -256,13 +277,14 @@ class EEGPump:
     9b. [Stage 4]  ASR burst reconstruction (post-warmup; plan-gated when 3b active)
     10. [Stage 5] Gratton-Coles ocular regression (plan-gated when 3b active)
     10b.[Stage 5b] Notch re-apply (plan.apply_notch when 3b active)
-    11. Band powers from corrected+filtered buffer  (clean frames only)
-    12. Derived EEG (FAA, FMt)                      (clean frames only)
-    13. PPG HRV
-    14. Breathing
-    15. IMU head orientation
-    16. Build IngestPayload
-    17. hub.update()
+    11. [Stage 6] PPG cardiac regression / AAS (plan-gated when 3b active)
+    12. Band powers from corrected+filtered buffer  (clean frames only)
+    13. Derived EEG (FAA, FMt)                      (clean frames only)
+    14. PPG HRV
+    15. Breathing
+    16. IMU head orientation
+    17. Build IngestPayload
+    18. hub.update()
     """
 
     def __init__(
@@ -277,6 +299,7 @@ class EEGPump:
         artifact_detector: ArtifactDetector | None = None,
         asr: ArtifactSubspaceReconstructor | None = None,
         ocular_regressor: OcularRegressor | None = None,
+        cardiac_regressor: CardiacRegressor | None = None,
     ) -> None:
         self._adapter = adapter
         self._hub = hub
@@ -288,6 +311,7 @@ class EEGPump:
         self._stage3b: ArtifactDetector = artifact_detector or ArtifactDetector()
         self._stage4: ArtifactSubspaceReconstructor = asr or ArtifactSubspaceReconstructor()
         self._stage5: OcularRegressor = ocular_regressor or OcularRegressor()
+        self._stage6: CardiacRegressor = cardiac_regressor or CardiacRegressor()
         # Stage 4b: per-session resting baseline (impedance stabilisation +
         # ASR calibration gate).  Constructed here so it shares the same
         # ASR instance as Stage 4.
@@ -324,14 +348,15 @@ class EEGPump:
         Called by NeuroLinkService.disconnect() so that a subsequent
         reconnect starts a fresh 150 s baseline window.  Resets the
         BaselineRecorder first (restores WARMUP phase and restarts the
-        monotonic clock), then delegates to hub.reset() so all hub-owned
-        state (NeurolinkState, EA1, FatigueDetector, baseline_alpha) is
-        cleared in the same call.
+        monotonic clock), then resets Stage 6 (CardiacRegressor) so the
+        cardiac template is rebuilt fresh, then delegates to hub.reset()
+        so all hub-owned state is cleared in the same call.
 
         Safe to call while the pump loop is still running — both
         BaselineRecorder and EEGHub protect their state with locks.
         """
         self._baseline.reset()
+        self._stage6.reset()
         self._hub.reset()
         log.info("eeg_pump_reset")
 
@@ -347,6 +372,30 @@ class EEGPump:
                 log.warning("eeg_pump_no_frames", since_sec=_WATCHDOG_SEC)
             elapsed = time.monotonic() - tick_start
             await asyncio.sleep(max(0.0, interval - elapsed))
+
+    def _stage0_settling_reason(self) -> str:
+        """Return a structured reason code for the Stage 0 acquisition hold.
+
+        Codes (first match wins):
+            'impedance_unstable'  -- electrode contact not yet stable
+            'motion_settling'     -- movement detected; waiting for rest
+            'env_not_ready'       -- environment sensor not yet ready
+            'settling'            -- generic fallback
+
+        The reason is passed to hub.emit_settling(reason) so the frontend
+        can display a contextual waiting message (e.g. "Keep still" vs
+        "Adjusting headband") instead of a generic spinner.
+        """
+        if self._stage0 is None:
+            return "settling"
+        if not self._stage0.impedance.all_channels_ok:
+            return "impedance_unstable"
+        latest = getattr(self._stage0, "_latest_sample", None)
+        if latest is not None and latest.extra.get("motion_flagged", False):
+            return "motion_settling"
+        if not self._stage0.environment.is_ready:
+            return "env_not_ready"
+        return "settling"
 
     async def _tick(self) -> None:
         sample = await self._adapter.read_sample()
@@ -368,12 +417,15 @@ class EEGPump:
             and not self._stage0.acquisition_ready
             and sample.source != "mock"
         ):
+            reason = self._stage0_settling_reason()
             log.debug(
                 "stage0_frame_held",
                 impedance_ok=self._stage0.impedance.all_channels_ok,
                 env_ready=self._stage0.environment.is_ready,
                 motion_flagged=sample.extra.get("motion_flagged", False),
+                settling_reason=reason,
             )
+            self._hub.emit_settling(reason=reason)
             return
 
         self._last_frame_ts = time.time()
@@ -448,7 +500,7 @@ class EEGPump:
 
         # ── Stage 3b — multi-type artifact classifier + router ──────────
         # Only runs on frames that passed the coarse Stage 3 gate.
-        # The CorrectionPlan produced here overrides whether Stages 4/5
+        # The CorrectionPlan produced here overrides whether Stages 4/5/6
         # are invoked.  When Stage 3b is disabled, plan defaults to
         # "run all correctors" (apply_asr=True, apply_ocular_regression=True)
         # preserving prior behaviour exactly.
@@ -462,6 +514,7 @@ class EEGPump:
         _plan_apply_ocular: bool = True
         _plan_apply_notch: bool = False
         _plan_hard_reject: bool = False
+        _plan_apply_cardiac: bool = True
 
         if (
             eeg_arr is not None
@@ -498,6 +551,7 @@ class EEGPump:
             _plan_apply_asr = plan.apply_asr
             _plan_apply_ocular = plan.apply_ocular_regression
             _plan_apply_notch = plan.apply_notch
+            _plan_apply_cardiac = plan.apply_cardiac_regression
 
             if _plan_hard_reject:
                 log.debug(
@@ -561,6 +615,32 @@ class EEGPump:
             eeg_arr = self._stage1.apply(eeg_arr)
             log.debug("stage5b_notch_reapply")
 
+        # ── Stage 6 — PPG-referenced cardiac regression (AAS) ──────────
+        # Runs after Stage 5 on clean frames only.
+        # Requires: toggles.stage6_cardiac + plan.apply_cardiac_regression
+        #           + PPG payload with at least one IBI measurement.
+        # When Stage 3b is disabled, _plan_apply_cardiac defaults True so
+        # Stage 6 runs unconditionally whenever PPG IBIs are present.
+        ppg_payload = None
+        if sample.ppg_buffer:
+            ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
+            from neurolink.dsp.ppg import compute_ppg
+            ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
+
+        if (
+            eeg_arr is not None
+            and not artifact_rejected
+            and toggles.stage6_cardiac
+            and _plan_apply_cardiac
+            and ppg_payload is not None
+            and ppg_payload.ibi_ms
+        ):
+            eeg_arr = self._stage6.apply(eeg_arr, ppg_payload.ibi_ms, fs=_EEG_FS)
+            log.debug(
+                "stage6_cardiac_regression_applied",
+                n_ibis=len(ppg_payload.ibi_ms),
+            )
+
         # ── Band powers (clean frames only) ─────────────────────────────
         bands_dict: dict[str, float] = {}
         if eeg_arr is not None and not artifact_rejected:
@@ -589,12 +669,6 @@ class EEGPump:
             derived = _derived(eeg_arr, fs=_EEG_FS)
             faa = derived.get("faa")
             fmt = derived.get("fmt")
-
-        # ── PPG HRV ───────────────────────────────────────────────────
-        ppg_payload = None
-        if sample.ppg_buffer:
-            ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
-            ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
         # ── Breathing ──────────────────────────────────────────────────
         breathing_payload: BreathingPayload | None = None

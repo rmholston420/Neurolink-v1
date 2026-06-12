@@ -56,9 +56,10 @@ eeg_arr so the rest of the pipeline is unaffected.
 
 from __future__ import annotations
 
+import threading
 import time
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import structlog
@@ -181,3 +182,83 @@ class BaselineRecorder:
             self._hub.notify_baseline_complete()
         except Exception as exc:  # pragma: no cover
             log.warning("baseline_bell_notify_failed", error=str(exc))
+
+
+# =============================================================================
+# ASR Covariance Cache
+# =============================================================================
+# Persists ASR calibration covariance across short reconnection windows so
+# that a quick device disconnect / reconnect does not require a full 150 s
+# baseline re-run.  Entries expire after _COV_CACHE_TTL_SEC (5 min) to
+# discard stale covariance when electrode conditions have drifted.
+#
+# Usage (EEGPump.reset + EEGPump.__init__):
+#   On disconnect:  save_asr_covariance(device_address, user_id, asr.get_calibration_cov())
+#   On reconnect:   cov = load_asr_covariance(device_address, user_id)
+#                   if cov is not None: asr.set_calibration_cov(cov)
+# =============================================================================
+
+_cov_cache: dict[str, dict] = {}
+_cov_cache_lock = threading.Lock()
+_COV_CACHE_TTL_SEC: float = 300.0  # 5 minutes
+
+
+def _cov_cache_key(device_address: str, user_id: str) -> str:
+    return f"{device_address}::{user_id}"
+
+
+def save_asr_covariance(
+    device_address: str,
+    user_id: str,
+    covariance: Any,
+) -> None:
+    """Persist an ASR calibration covariance matrix for a (device, user) pair.
+
+    Called by EEGPump.reset() before clearing state so that a quick
+    reconnect can restore the pre-calibration without a full 150 s baseline.
+
+    Parameters
+    ----------
+    device_address:
+        BLE MAC or LSL stream ID that uniquely identifies the hardware.
+    user_id:
+        Session or user identifier.  Use settings.user_id or a session UUID.
+    covariance:
+        np.ndarray returned by ArtifactSubspaceReconstructor.get_calibration_cov().
+    """
+    key = _cov_cache_key(device_address, user_id)
+    with _cov_cache_lock:
+        _cov_cache[key] = {"cov": covariance, "ts": time.monotonic()}
+    log.info("asr_covariance_cached", key=key)
+
+
+def load_asr_covariance(
+    device_address: str,
+    user_id: str,
+) -> Any | None:
+    """Retrieve a cached ASR covariance matrix if still within TTL.
+
+    Returns None if:
+    - No entry exists for the key.
+    - The entry is older than _COV_CACHE_TTL_SEC (5 min).
+      After a long disconnect electrode conditions will have drifted
+      enough to warrant fresh calibration.
+
+    Parameters
+    ----------
+    device_address / user_id : same keys passed to save_asr_covariance().
+    """
+    key = _cov_cache_key(device_address, user_id)
+    with _cov_cache_lock:
+        entry = _cov_cache.get(key)
+    if entry is None:
+        log.debug("asr_covariance_cache_miss", key=key)
+        return None
+    age = time.monotonic() - entry["ts"]
+    if age > _COV_CACHE_TTL_SEC:
+        log.info("asr_covariance_cache_expired", key=key, age_s=round(age, 1))
+        with _cov_cache_lock:
+            _cov_cache.pop(key, None)
+        return None
+    log.info("asr_covariance_cache_hit", key=key, age_s=round(age, 1))
+    return entry["cov"]

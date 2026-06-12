@@ -25,9 +25,14 @@ Velisar A et al. (2019) review of EOG artifact removal in wearable EEG.
 Algorithm
 ---------
 1. Maintain a rolling window of (EEG, EOG) sample pairs.
-2. Every ``recalib_frames`` frames, refit OLS slopes:
-     b_i = cov(EEG_i, EOG) / var(EOG)   for each channel i
+2. Adaptive recalibration (replaces fixed recalib_frames interval):
+     - Every frame, the last 30 EOG samples' variance is compared to a
+       rolling 30-frame mean.  When the ratio exceeds 2.0 or falls below
+       0.5, early recalibration fires immediately to track electrode
+       shifts, sweat-film changes, or a new eye-movement baseline.
+     - recalib_frames acts as a fixed fallback floor (max interval).
 3. Each frame: EEG_corrected_i = EEG_i - b_i * EOG
+   where b_i = cov(EEG_i, EOG) / var(EOG)
 
 Graceful degradation
 --------------------
@@ -73,9 +78,9 @@ class OcularRegressionConfig:
         samples ≈ 4 s at 256 Hz — long enough to capture several
         blinks for stable OLS.
     recalib_frames:
-        How often (in EEGPump frames, i.e. publish_hz ticks) to
-        refit the OLS coefficients.  Default 512 ≈ 2 min at 4 Hz.
-        Lower values track drift faster at higher compute cost.
+        Maximum interval (in EEGPump frames) before a forced
+        recalibration.  Default 512 ≈ 2 min at 4 Hz.  Acts as a
+        fallback floor; adaptive variance detection fires earlier.
     min_eog_variance:
         Minimum variance of the EOG signal required to attempt
         regression.  Prevents division near zero when the subject is
@@ -123,6 +128,12 @@ class OcularRegressor:
         self._frames_since_recalib: int = 0
         self._frames_applied: int = 0
         self._frames_passed_through: int = 0
+        self._total_frames: int = 0
+        self._last_recalib_frame: int = 0
+        # Rolling EOG variance history for adaptive recalibration.
+        # Stores variance of the last 30 EOG samples, one entry per frame.
+        # When current_var / rolling_mean > 2.0 or < 0.5, early recalib fires.
+        self._var_history: deque[float] = deque(maxlen=30)
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -170,9 +181,12 @@ class OcularRegressor:
                 self._eog_buf.append(float(eog_signal[s]))
 
             self._frames_since_recalib += 1
-            should_recalib = (
-                self._frames_since_recalib >= cfg.recalib_frames
-                or self._slopes is None
+            self._total_frames += 1
+            # Adaptive variance check: snapshot last 30 EOG samples
+            _eog_snap = list(self._eog_buf)[-30:] if len(self._eog_buf) >= 30 else None
+            should_recalib = self._variance_triggered(
+                np.array(_eog_snap, dtype=np.float64) if _eog_snap else None,
+                cfg,
             ) and len(self._eog_buf) >= cfg.calib_window_samples
 
         if should_recalib:
@@ -206,6 +220,9 @@ class OcularRegressor:
             self._frames_since_recalib = 0
             self._frames_applied = 0
             self._frames_passed_through = 0
+            self._total_frames = 0
+            self._last_recalib_frame = 0
+            self._var_history.clear()
         log.info("stage5_ocular_regression_reset")
 
     def get_stats(self) -> dict:
@@ -217,6 +234,9 @@ class OcularRegressor:
                 "frames_applied": self._frames_applied,
                 "frames_passed_through": self._frames_passed_through,
                 "frames_since_recalib": self._frames_since_recalib,
+                "total_frames": self._total_frames,
+                "last_recalib_frame": self._last_recalib_frame,
+                "var_history_len": len(self._var_history),
             }
 
     def get_config(self) -> OcularRegressionConfig:
@@ -234,6 +254,41 @@ class OcularRegressor:
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
+
+    def _variance_triggered(
+        self,
+        eog_recent: "np.ndarray | None",
+        cfg: OcularRegressionConfig,
+    ) -> bool:
+        """Return True if recalibration should fire this frame.
+
+        Trigger conditions (first match wins):
+        1. First-ever calibration (no slopes yet).
+        2. Adaptive: EOG variance has shifted by >2x or <0.5x rolling mean.
+           Indicates electrode shift, sweat film change, or new eye baseline.
+        3. Fixed-interval fallback: frames since last recalib >= recalib_frames.
+        """
+        if self._slopes is None:
+            return True
+
+        if eog_recent is not None and len(eog_recent) >= 10:
+            current_var = float(np.var(eog_recent))
+            self._var_history.append(current_var)
+            if len(self._var_history) >= 5:
+                rolling_mean = float(np.mean(self._var_history))
+                if rolling_mean > 0:
+                    ratio = current_var / rolling_mean
+                    if ratio > 2.0 or ratio < 0.5:
+                        log.debug(
+                            "stage5_variance_triggered_recalib",
+                            current_var=round(current_var, 3),
+                            rolling_mean=round(rolling_mean, 3),
+                            ratio=round(ratio, 3),
+                            frames_since_last=self._frames_since_recalib,
+                        )
+                        return True
+
+        return self._frames_since_recalib >= cfg.recalib_frames
 
     def _fit_slopes(self, cfg: OcularRegressionConfig) -> None:
         """Refit OLS regression coefficients from the rolling buffer."""
@@ -259,6 +314,7 @@ class OcularRegressor:
             with self._lock:
                 self._slopes = slopes
                 self._frames_since_recalib = 0
+                self._last_recalib_frame = self._total_frames
 
             log.info(
                 "stage5_ocular_regression_recalibrated",
