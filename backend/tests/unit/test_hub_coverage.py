@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -117,7 +117,7 @@ def test_fanout_delivers_state_to_queue():
     hub = EEGHub()
     q = asyncio.Queue(maxsize=16)
     hub.register_sse_queue(q)
-    state = hub.update(_payload())
+    hub.update(_payload())
     assert not q.empty()
     item = q.get_nowait()
     assert item.frame_count == 1
