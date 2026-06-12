@@ -6,6 +6,8 @@ Computes pitch, roll, and motion RMS from accelerometer + optional gyro.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from neurolink.models.eeg import IMUPayload
@@ -54,3 +56,21 @@ def head_orientation(
         roll_deg=roll,
         motion_rms=motion_rms,
     )
+
+
+def compute_motion_rms(ax: float, ay: float, az: float) -> float:
+    """Return the Euclidean magnitude of a 3-axis acceleration vector.
+
+    This is a lightweight scalar helper for callers that already have
+    per-axis mean values and need a single motion-intensity number,
+    e.g. for real-time artifact gating.
+
+    Args:
+        ax: X-axis acceleration (g).
+        ay: Y-axis acceleration (g).
+        az: Z-axis acceleration (g).
+
+    Returns:
+        sqrt(ax² + ay² + az²) as a float.
+    """
+    return math.sqrt(ax ** 2 + ay ** 2 + az ** 2)
