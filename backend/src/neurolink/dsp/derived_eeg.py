@@ -8,6 +8,8 @@ Ported from Rigpa-v2 dsp/derived_eeg.py.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from neurolink.dsp.bandpower import bandpower
@@ -60,3 +62,55 @@ def derived_eeg(eeg: np.ndarray, fs: float = _EEG_FS) -> dict[str, float | None]
     result["fmt"] = float(theta_aux) if theta_aux > 0 else 0.0
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Thin functional helpers — used by tests and external callers that already
+# have pre-computed band-power scalars rather than raw EEG buffers.
+# ---------------------------------------------------------------------------
+
+def compute_faa(alpha_left: float, alpha_right: float) -> float:
+    """Frontal Alpha Asymmetry: log(alpha_left) - log(alpha_right).
+
+    Near-zero values are clamped to a small epsilon to avoid log(0).
+
+    Args:
+        alpha_left: Alpha power of the left frontal channel (e.g. AF7).
+        alpha_right: Alpha power of the right frontal channel (e.g. AF8).
+
+    Returns:
+        FAA score as a float. Positive = left-dominant, negative = right-dominant.
+    """
+    eps = 1e-12
+    return float(math.log(max(alpha_left, eps)) - math.log(max(alpha_right, eps)))
+
+
+def compute_fmt(theta_frontal: float) -> float:
+    """Frontal Midline Theta: returns the theta power value as a float.
+
+    Args:
+        theta_frontal: Theta-band power from the frontal midline channel.
+
+    Returns:
+        theta_frontal cast to float.
+    """
+    return float(theta_frontal)
+
+
+def compute_contact_quality(noise_rms: float) -> str:
+    """Classify electrode contact quality from noise RMS amplitude.
+
+    Thresholds are empirical for dry consumer-grade EEG electrodes.
+
+    Args:
+        noise_rms: RMS amplitude of the noise floor on the channel.
+
+    Returns:
+        One of 'good', 'fair', or 'poor'.
+    """
+    if noise_rms < 0.1:
+        return "good"
+    elif noise_rms < 10.0:
+        return "fair"
+    else:
+        return "poor"
