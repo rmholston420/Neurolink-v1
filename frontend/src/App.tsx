@@ -24,6 +24,9 @@ import ImpedancePanel      from './components/ImpedancePanel'
 // Stage 3 config panel
 import ArtifactConfigPanel from './components/ArtifactConfigPanel'
 
+// Artifact intelligence + encyclopedia
+import ArtifactGuidePanel from './components/ArtifactGuidePanel'
+
 // Visualisation components
 import RollingSpectrogram  from './components/RollingSpectrogram'
 import TopoMap             from './components/TopoMap'
@@ -422,6 +425,16 @@ export default function App() {
             <div style={S.cardTitle}>⚡ Electrode Impedance · Per Channel</div>
             <ImpedancePanel impedances={channelImpedances} />
           </div>
+
+          {/* ── Artifact Guide ── */}
+          <div style={S.cardWide}>
+            <div style={S.cardTitle}>🧠 Artifact Intelligence Guide</div>
+            <ArtifactGuidePanel
+              state={state}
+              rejectRate={artifactStats.rejectRate}
+              connected={connected}
+            />
+          </div>
         </div>
       )}
 
@@ -545,6 +558,20 @@ export default function App() {
 
           {/* ── Section 2: Stage 3 numeric threshold editor ── */}
           <ArtifactConfigPanel apiUrl={API_URL} />
+
+          {/* ── Divider ── */}
+          <div style={S.divider}>
+            <div style={S.dividerLine} />
+            <span style={S.dividerLabel}>Artifact Intelligence</span>
+            <div style={S.dividerLine} />
+          </div>
+
+          {/* ── Section 3: Live artifact guide + encyclopedia ── */}
+          <ArtifactGuidePanel
+            state={state}
+            rejectRate={artifactStats.rejectRate}
+            connected={connected}
+          />
 
         </div>
       )}
