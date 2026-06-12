@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
 import { useNeurolinkSSE } from './hooks/useNeurolinkSSE'
+import { useMuseBLE } from './hooks/useMuseBLE'
 
-// Existing components
+// Components
 import BandPowerChart    from './components/BandPowerChart'
 import SSpaceDisplay    from './components/SSpaceDisplay'
 import EA1Score         from './components/EA1Score'
@@ -11,6 +12,7 @@ import BreathingPanel   from './components/BreathingPanel'
 import IMUPanel         from './components/IMUPanel'
 import CalibrationPanel from './components/CalibrationPanel'
 import ConnectionPanel  from './components/ConnectionPanel'
+import DeviceStatusBar  from './components/DeviceStatusBar'
 
 // New visualisation components
 import RollingSpectrogram  from './components/RollingSpectrogram'
@@ -33,6 +35,10 @@ const S: Record<string, React.CSSProperties> = {
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     marginBottom: 20, paddingBottom: 14, borderBottom: '1px solid #30363d',
+    gap: 12, flexWrap: 'wrap' as const,
+  },
+  headerLeft: {
+    display: 'flex', alignItems: 'center', gap: 14,
   },
   title: { fontSize: 22, fontWeight: 700, color: '#58a6ff', letterSpacing: '-0.5px' },
   tabBar: {
@@ -99,7 +105,6 @@ function tabBtn(id: Tab, active: Tab): React.CSSProperties {
   }
 }
 
-// Synthetic per-channel band values from global bands (until backend emits them)
 function syntheticChannelBands(
   bands: { alpha: number; theta: number; beta: number; delta: number; gamma: number } | null,
   band: 'alpha' | 'theta' | 'beta' | 'delta' | 'gamma'
@@ -109,14 +114,13 @@ function syntheticChannelBands(
   return [0.9, 1.1, 1.05, 0.95].map(f => base * f)
 }
 
-// Simulate per-channel eeg_samples from band power (real impl waits for backend raw sample emission)
 function syntheticEEGSamples(
   bands: { alpha: number } | null
 ): number[][] | null {
   if (!bands) return null
   const base = bands.alpha
   return Array.from({ length: 4 }, (_, ch) => {
-    const freq = 8 + ch * 1.2  // slightly different dominant freq per channel
+    const freq = 8 + ch * 1.2
     return Array.from({ length: 128 }, (__, n) =>
       base * 200 * Math.sin(2 * Math.PI * freq * n / 256) +
       (Math.random() - 0.5) * base * 50
@@ -124,20 +128,47 @@ function syntheticEEGSamples(
   })
 }
 
+// Convert useMuseBLE ContactQuality (4 booleans) to a 0-1 fraction
+function bleContactToQuality(contact: { tp9: boolean; af7: boolean; af8: boolean; tp10: boolean }): number {
+  const goods = [contact.tp9, contact.af7, contact.af8, contact.tp10].filter(Boolean).length
+  return goods / 4
+}
+
 export default function App() {
-  const state = useNeurolinkSSE(`${API_URL}/api/v1/neurolink/stream`)
-  const connected = state?.connected ?? false
+  const state      = useNeurolinkSSE(`${API_URL}/api/v1/neurolink/stream`)
+  const ble        = useMuseBLE(API_URL)
+  const connected  = state?.connected ?? false
   const [tab, setTab] = useState<Tab>('live')
 
+  // Battery: Path A (Web BT) has numeric %; Path B has nothing.
+  const battery = ble.battery
+
+  // Signal quality: prefer SSE float, fall back to BLE electrode fraction
+  const contactQuality: number | null =
+    state?.contact_quality !== null && state?.contact_quality !== undefined
+      ? state.contact_quality
+      : ble.status === 'streaming'
+        ? bleContactToQuality(ble.contact)
+        : null
+
   // Shared derived data
-  const eegSamples    = (state as any)?.eeg_samples ?? syntheticEEGSamples(state?.bands ?? null)
-  const channelBands  = syntheticChannelBands(state?.bands ?? null, 'alpha')
+  const eegSamples   = (state as any)?.eeg_samples ?? syntheticEEGSamples(state?.bands ?? null)
+  const channelBands = syntheticChannelBands(state?.bands ?? null, 'alpha')
 
   return (
     <div style={S.app}>
       {/* ── Header ── */}
       <header style={S.header}>
-        <h1 style={S.title}>⚡ Neurolink</h1>
+        <div style={S.headerLeft}>
+          <h1 style={S.title}>⚡ Neurolink</h1>
+          <DeviceStatusBar
+            battery={battery}
+            contactQuality={contactQuality}
+            poorContact={state?.poor_contact ?? false}
+            source={connected ? (state?.source ?? null) : null}
+            connected={connected}
+          />
+        </div>
         <span style={statusBadge(connected)}>
           <span style={dot(connected)} />
           {connected ? 'Connected' : 'Disconnected'}
@@ -159,7 +190,11 @@ export default function App() {
           <div style={{ ...S.grid, gridTemplateColumns: '1fr' }}>
             <div style={S.cardWide}>
               <div style={S.cardTitle}>Device Connection</div>
-              <ConnectionPanel apiUrl={API_URL} connected={connected} />
+              <ConnectionPanel
+                apiUrl={API_URL}
+                connected={connected}
+                bleInstance={ble}
+              />
             </div>
           </div>
 
