@@ -93,8 +93,25 @@ from scipy import stats as sp_stats
 
 from neurolink.dsp.artifact_config import (
     ARTIFACT_ACCEL_RMS_G,
+    ARTIFACT_BLINK_FRONTAL_UV,
+    ARTIFACT_EMG_HF_RATIO,
+    ARTIFACT_HEOG_ASYMMETRY_UV,
     ARTIFACT_KURTOSIS_THRESHOLD,
+    ARTIFACT_LINE_BAND_HZ,
+    ARTIFACT_LINE_FREQ_HZ,
+    ARTIFACT_LINE_POWER_RATIO,
     ARTIFACT_PK2PK_UV,
+    BLINK_FREQ_HZ_MAX,
+    BLINK_FRONTAL_RATIO,
+    BLINK_LOW_FREQ_RATIO_MIN,
+    CARDIAC_FREQ_HIGH_HZ,
+    CARDIAC_FREQ_LOW_HZ,
+    CARDIAC_TEMPORAL_UV,
+    ELECTRODE_POP_ISOLATION_RATIO,
+    ELECTRODE_POP_STEP_UV,
+    EMG_FREQ_HIGH_HZ,
+    EMG_FREQ_LOW_HZ,
+    HEOG_FREQ_HZ_MAX,
 )
 
 log = structlog.get_logger(__name__)
@@ -144,35 +161,36 @@ class DetectorConfig:
     """
 
     # ── Blink detection ────────────────────────────────────────────────
-    blink_frontal_uv: float = ARTIFACT_PK2PK_UV * 0.80  # 80 µV at AF7/AF8
-    blink_freq_hz_max: float = 10.0   # blink energy concentrated below 10 Hz
-    blink_frontal_ratio: float = 2.0  # frontal pk2pk must be >= 2× temporal
+    blink_frontal_uv: float = ARTIFACT_BLINK_FRONTAL_UV   # 80 µV at AF7/AF8
+    blink_freq_hz_max: float = BLINK_FREQ_HZ_MAX           # 10.0 Hz
+    blink_low_freq_ratio_min: float = BLINK_LOW_FREQ_RATIO_MIN  # 0.50
+    blink_frontal_ratio: float = BLINK_FRONTAL_RATIO       # 2.0×
 
     # ── Horizontal EOG ─────────────────────────────────────────────────
-    heog_asymmetry_uv: float = 30.0   # |AF7 mean − AF8 mean| threshold (µV)
-    heog_freq_hz_max: float = 4.0     # saccade energy below 4 Hz
+    heog_asymmetry_uv: float = ARTIFACT_HEOG_ASYMMETRY_UV  # 30.0 µV
+    heog_freq_hz_max: float = HEOG_FREQ_HZ_MAX             # 4.0 Hz
 
     # ── EMG / muscle ───────────────────────────────────────────────────
-    emg_hf_ratio: float = 0.30        # fraction of total power above 30 Hz
-    emg_freq_low_hz: float = 30.0     # lower bound of EMG band
-    emg_freq_high_hz: float = 100.0   # upper bound of EMG band
+    emg_hf_ratio: float = ARTIFACT_EMG_HF_RATIO            # 0.30
+    emg_freq_low_hz: float = EMG_FREQ_LOW_HZ               # 30.0 Hz
+    emg_freq_high_hz: float = EMG_FREQ_HIGH_HZ             # 100.0 Hz
 
     # ── Cardiac pulse ──────────────────────────────────────────────────
-    cardiac_freq_low_hz: float = 0.8   # heart-rate band start
-    cardiac_freq_high_hz: float = 1.8  # heart-rate band end
-    cardiac_temporal_uv: float = 15.0  # µV threshold at temporal channels
+    cardiac_freq_low_hz: float = CARDIAC_FREQ_LOW_HZ       # 0.8 Hz
+    cardiac_freq_high_hz: float = CARDIAC_FREQ_HIGH_HZ     # 1.8 Hz
+    cardiac_temporal_uv: float = CARDIAC_TEMPORAL_UV       # 15.0 µV
 
     # ── Electrode pop ──────────────────────────────────────────────────
-    pop_step_uv: float = 60.0          # µV single-sample step change
-    pop_isolation_ratio: float = 3.0   # single-channel amplitude / median ratio
+    pop_step_uv: float = ELECTRODE_POP_STEP_UV             # 60.0 µV
+    pop_isolation_ratio: float = ELECTRODE_POP_ISOLATION_RATIO  # 3.0
 
     # ── Line noise ─────────────────────────────────────────────────────
-    line_freq_hz: float = 60.0         # nominal line frequency (50 or 60 Hz)
-    line_band_hz: float = 2.0          # ± bandwidth around line frequency
-    line_power_ratio: float = 0.15     # fraction of broadband power in notch-band
+    line_freq_hz: float = ARTIFACT_LINE_FREQ_HZ            # 60.0 Hz
+    line_band_hz: float = ARTIFACT_LINE_BAND_HZ            # 2.0 Hz
+    line_power_ratio: float = ARTIFACT_LINE_POWER_RATIO    # 0.15
 
     # ── Motion (IMU) ───────────────────────────────────────────────────
-    motion_accel_rms_g: float = ARTIFACT_ACCEL_RMS_G  # g RMS threshold
+    motion_accel_rms_g: float = ARTIFACT_ACCEL_RMS_G       # 0.15 g
 
     # ── Global feature switches ────────────────────────────────────────
     enable_blink: bool = True
@@ -270,7 +288,7 @@ class ArtifactDetector:
     def __init__(
         self,
         config: DetectorConfig | None = None,
-        line_freq_hz: float = 60.0,
+        line_freq_hz: float = ARTIFACT_LINE_FREQ_HZ,
     ) -> None:
         self._cfg_lock = threading.Lock()
         self._stats_lock = threading.Lock()
@@ -517,7 +535,10 @@ class ArtifactDetector:
 
         Criteria (all must pass):
         1. Frontal pk2pk >= blink_frontal_uv
-        2. Frontal low-frequency power ratio (0–10 Hz) >= 0.60
+        2. Frontal low-frequency power ratio (0–blink_freq_hz_max Hz)
+           >= blink_low_freq_ratio_min (sourced from artifact_config;
+           default 0.50).  Prevents broadband EMG bursts that happen
+           to be large from being misclassified as blinks.
         3. Frontal pk2pk >= blink_frontal_ratio × temporal pk2pk
            (ensures the large amplitude is genuinely frontal, not global)
         """
@@ -528,7 +549,7 @@ class ArtifactDetector:
         if max_frontal_pk2pk < cfg.blink_frontal_uv:
             return
 
-        # Criterion 2: spectral — blink energy concentrated below 10 Hz
+        # Criterion 2: spectral — blink energy concentrated below blink_freq_hz_max
         frontal_low = float(
             np.mean(self._band_power(freqs, psd[frontal_idx], 0.5, cfg.blink_freq_hz_max))
         )
@@ -536,7 +557,7 @@ class ArtifactDetector:
         if frontal_total <= 0:
             return
         low_freq_ratio = frontal_low / frontal_total
-        if low_freq_ratio < 0.50:
+        if low_freq_ratio < cfg.blink_low_freq_ratio_min:
             return
 
         # Criterion 3: topographic — frontal much larger than temporal
