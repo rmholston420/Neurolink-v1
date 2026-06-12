@@ -2,6 +2,7 @@
  * WanderingLog
  *
  * Displays mind-wandering detection results for the current session:
+ *   - Live wandering badge (always-mounted, fades in/out — no layout shift)
  *   - Session stats row (events, mean recovery, longest focus run, EA-1%)
  *   - Horizontal timeline bar (50 buckets coloured by focus level)
  *   - Scrollable event list with timestamps and recovery times
@@ -66,6 +67,16 @@ const s: Record<string, React.CSSProperties> = {
   eventTime:  { color: '#58a6ff', fontVariantNumeric: 'tabular-nums', minWidth: 80 },
   eventRec:   { marginLeft: 'auto', color: '#3fb950', fontVariantNumeric: 'tabular-nums' },
   noEvents:   { fontSize: 12, color: '#484f58', fontStyle: 'italic', padding: '8px 0' },
+  // Always-mounted row — height is reserved at all times, badge fades in/out.
+  // height: 26px matches badge line-height; no layout shift ever occurs.
+  wanderRow: (visible: boolean): React.CSSProperties => ({
+    height: 26,
+    display: 'flex', alignItems: 'center',
+    opacity: visible ? 1 : 0,
+    visibility: visible ? 'visible' : 'hidden',
+    transition: 'opacity 300ms ease, visibility 300ms ease',
+    pointerEvents: visible ? 'auto' : 'none',
+  }),
   wanderBadge: {
     display: 'inline-flex', alignItems: 'center', gap: 5,
     padding: '2px 8px', borderRadius: 20, fontSize: 11, fontWeight: 700,
@@ -79,12 +90,10 @@ export default function WanderingLog({ detector }: Props) {
 
   return (
     <div style={s.root}>
-      {/* Live wandering indicator */}
-      {isWandering && (
-        <div>
-          <span style={s.wanderBadge}>🧠 Mind wandering detected</span>
-        </div>
-      )}
+      {/* Live wandering indicator — always mounted, fades in/out to avoid layout shift */}
+      <div style={s.wanderRow(isWandering)} aria-live="polite" aria-atomic="true">
+        <span style={s.wanderBadge}>🧠 Mind wandering detected</span>
+      </div>
 
       {/* Session stats */}
       <div style={s.stats}>
