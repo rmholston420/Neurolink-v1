@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useNeurolinkSSE } from './hooks/useNeurolinkSSE'
 import { useMuseBLE } from './hooks/useMuseBLE'
+import { useArtifactStats } from './hooks/useArtifactStats'
 
 // Core components
 import BandPowerChart    from './components/BandPowerChart'
@@ -13,6 +14,11 @@ import IMUPanel         from './components/IMUPanel'
 import CalibrationPanel from './components/CalibrationPanel'
 import ConnectionPanel  from './components/ConnectionPanel'
 import DeviceStatusBar  from './components/DeviceStatusBar'
+
+// Stage 0-3 pipeline visualisation components
+import BadChannelPanel     from './components/BadChannelPanel'
+import ArtifactStatsPanel  from './components/ArtifactStatsPanel'
+import SignalPipelinePanel from './components/SignalPipelinePanel'
 
 // Visualisation components
 import RollingSpectrogram  from './components/RollingSpectrogram'
@@ -105,9 +111,10 @@ const dot = (connected: boolean): React.CSSProperties => ({
   background: connected ? '#3fb950' : '#f85149',
 })
 
-type Tab = 'live' | 'spectrogram' | 'topo' | 'connectivity' | 'practice' | 'journal' | 'history'
+type Tab = 'live' | 'pipeline' | 'spectrogram' | 'topo' | 'connectivity' | 'practice' | 'journal' | 'history'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'live',          label: '⚡ Live' },
+  { id: 'pipeline',      label: '🔬 Pipeline' },
   { id: 'spectrogram',   label: '🌊 Spectrogram' },
   { id: 'topo',          label: '🧠 Topo Map' },
   { id: 'connectivity',  label: '🔗 Connectivity' },
@@ -162,6 +169,9 @@ export default function App() {
   const connected  = state?.connected ?? false
   const [tab, setTab] = useState<Tab>('live')
 
+  // ── Stage 0-3 stats hook ──────────────────────────────────────────────────
+  const artifactStats = useArtifactStats(state)
+
   // ── Tier 1 hooks ──────────────────────────────────────────────────────────
   const audio    = useAudioFeedback(state)
   const detector = useWanderingDetector(state)
@@ -187,6 +197,7 @@ export default function App() {
   // Stage 3 artifact gate fields (default-safe when state is null)
   const artifactRejected = state?.artifact_rejected ?? false
   const artifactReasons  = state?.artifact_reasons  ?? []
+  const badChannels      = state?.bad_channels       ?? []
 
   // Shared derived data
   const eegSamples   = (state as any)?.eeg_samples ?? syntheticEEGSamples(state?.bands ?? null)
@@ -281,11 +292,13 @@ export default function App() {
               />
             </div>
 
+            {/* Contact Quality — upgraded with bad_channels */}
             <div style={S.card}>
               <div style={S.cardTitle}>Contact Quality</div>
               <ContactQuality
                 poorContact={state?.poor_contact ?? false}
                 contactQuality={state?.contact_quality ?? null}
+                badChannels={badChannels}
               />
             </div>
 
@@ -300,6 +313,7 @@ export default function App() {
               <BreathingPanel rrBpm={state?.rr_bpm ?? null} />
             </div>
 
+            {/* IMUPanel — upgraded with motion gate threshold */}
             <div style={S.card}>
               <div style={S.cardTitle}>Head Pose &amp; Motion</div>
               <IMUPanel
@@ -307,6 +321,12 @@ export default function App() {
                 rollDeg={state?.roll_deg ?? null}
                 motionRms={state?.motion_rms ?? null}
               />
+            </div>
+
+            {/* Stage 3 artifact stats */}
+            <div style={S.card}>
+              <div style={S.cardTitle}>🛡️ Artifact Stats · Stage 3</div>
+              <ArtifactStatsPanel stats={artifactStats} connected={connected} />
             </div>
 
             <div style={S.card}>
@@ -327,6 +347,49 @@ export default function App() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ═══════════════════════ PIPELINE TAB (new) ═══════════════════════ */}
+      {tab === 'pipeline' && (
+        <div style={S.grid}>
+          {/* Unified Stage 0-3 health panel */}
+          <div style={S.cardWide}>
+            <div style={S.cardTitle}>🔬 DSP Pipeline · Stage 0–3 Live Status</div>
+            <SignalPipelinePanel state={state} stats={artifactStats} />
+          </div>
+
+          {/* Bad channel detail */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>📡 Channel Health · Stage 0 / 2</div>
+            <BadChannelPanel badChannels={badChannels} />
+          </div>
+
+          {/* Artifact stats detail */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>🛡️ Artifact Rejection · Stage 3</div>
+            <ArtifactStatsPanel stats={artifactStats} connected={connected} />
+          </div>
+
+          {/* IMU full view */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>Head Pose &amp; Motion Gate</div>
+            <IMUPanel
+              pitchDeg={state?.pitch_deg ?? null}
+              rollDeg={state?.roll_deg ?? null}
+              motionRms={state?.motion_rms ?? null}
+            />
+          </div>
+
+          {/* Contact quality + channel pills */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>Electrode Contact</div>
+            <ContactQuality
+              poorContact={state?.poor_contact ?? false}
+              contactQuality={state?.contact_quality ?? null}
+              badChannels={badChannels}
+            />
+          </div>
+        </div>
       )}
 
       {/* ═══════════════════════ SPECTROGRAM TAB ═════════════════════════ */}
@@ -390,19 +453,14 @@ export default function App() {
       {/* ═══════════════════════ PRACTICE TAB ════════════════════════════ */}
       {tab === 'practice' && (
         <div style={S.grid}>
-          {/* Session Goals — top-of-practice */}
           <div style={S.cardWide}>
             <div style={S.cardTitle}>🏆 Session Goals &amp; Achievements</div>
             <SessionGoals goals={sessionGoals} />
           </div>
-
-          {/* Meditation Timer */}
           <div style={S.card}>
             <div style={S.cardTitle}>🕐 Guided Meditation Timer</div>
             <MeditationTimer />
           </div>
-
-          {/* HRV Coherence Trainer */}
           <div style={S.card}>
             <div style={S.cardTitle}>💓 HRV Coherence Trainer</div>
             <HRVCoherenceTrainer
@@ -411,8 +469,6 @@ export default function App() {
               hrv={state?.hrv_rmssd ?? null}
             />
           </div>
-
-          {/* Personal Baseline (full view on practice tab) */}
           <div style={S.card}>
             <div style={S.cardTitle}>📈 Personal Baseline Deviations</div>
             <PersonalBaseline result={baseline} />
