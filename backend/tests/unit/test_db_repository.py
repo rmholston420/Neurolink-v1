@@ -14,10 +14,19 @@ async def _make_factory(path: str = ":memory:"):
     Use a unique temp-file path (not `:memory:`) when the test needs a
     truly isolated database — SQLite `:memory:` databases share state for
     the lifetime of the cached engine object.
+
+    Also resets neurolink.config._settings so that get_settings() re-reads
+    the updated NEUROLINK_DB_PATH env var instead of returning a stale
+    cached Settings object with the old db_path.
     """
     os.environ["NEUROLINK_DB_PATH"] = path
+
+    # Reset both the settings singleton AND the engine singleton so that
+    # get_engine() → get_settings() picks up the new path.
+    import neurolink.config as config_module
     import neurolink.db.engine as engine_module
 
+    config_module._settings = None
     engine_module._engine = None
     engine_module._session_factory = None
     await engine_module.init_db()
