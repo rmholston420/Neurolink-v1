@@ -5,35 +5,28 @@ spline interpolation) and before band-power extraction.
 
 Three independent detection passes, each configurable:
 
-1. Amplitude threshold
+1. Amplitude threshold (device-aware)
    Any channel whose peak-to-peak amplitude exceeds ``pk2pk_uv``
-   (default 100 µV) flags the entire frame as contaminated.
-   Rationale: Lindsley 1944 / EEGLAB reject_threshold convention;
-   validated for Muse-class dry-electrode wearables.
+   flags the entire frame as contaminated.  When ``electrode_type`` is
+   not set explicitly in GateConfig, it is resolved at construction time
+   from the active adapter via adapter_factory so dry-electrode devices
+   (Muse) automatically receive a tighter threshold (75 µV) than
+   wet-electrode systems (100 µV).
 
 2. IMU motion gate
-   When an accelerometer RMS (across all axes, in *g*) exceeds
-   ``accel_rms_g`` (default 0.15 g) the frame is flagged as motion-
-   contaminated.  IMU-gated rejection is the recommended strategy for
-   wearable EEG (Lopes da Silva 2024; Blum et al. 2019).
+   Accelerometer RMS > ``accel_rms_g`` → frame flagged as motion-
+   contaminated.
 
 3. Kurtosis burst detection
-   Excess kurtosis > ``kurtosis_threshold`` (default 5) across any EEG
-   channel flags high-kurtosis bursts (muscle EMG / electrode pop).
-   Kurtosis is computed on the raw float64 channel vector; the
-   scipy.stats excess-kurtosis convention (Fisher, default) is used.
-
-The gate is *non-destructive*: it never modifies the EEG array.
-Instead it returns an ``ArtifactDecision`` that callers use to decide
-whether to forward the frame to downstream DSP.
+   Excess kurtosis > ``kurtosis_threshold`` (default 5) → EMG burst
+   or electrode-pop contamination.
 
 Threshold defaults
 ------------------
 All numeric defaults are sourced from
 ``neurolink.dsp.artifact_config`` so every module in the pipeline
 shares the same authoritative values.  Runtime overrides are applied
-via ``set_config()`` / ``get_config()`` without restarting the pump,
-enabling per-session adaptive tightening.
+via ``set_config()`` / ``get_config()`` without restarting the pump.
 
 Thread-safety
 -------------
@@ -46,7 +39,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Literal, Sequence
 
 import numpy as np
 import structlog
@@ -60,24 +53,91 @@ from neurolink.dsp.artifact_config import (
 
 log = structlog.get_logger(__name__)
 
-# EEG-only channel indices (AUX excluded)
+
 _EEG_IDX: list[int] = [0, 1, 2, 3]
+_CH_NAMES = ["TP9", "AF7", "AF8", "TP10"]
+
+ElectrodeType = Literal["dry", "wet", "semi"]
+
+# Per-electrode default amplitude thresholds (µV peak-to-peak).
+# Dry electrodes have higher contact impedance and produce more mechanical
+# noise, so a tighter gate reduces false-clean frames during sweat transients.
+_ELECTRODE_PK2PK_DEFAULTS: dict[str, float] = {
+    "dry":  75.0,            # Muse-class wearables — dry gel or foam contact
+    "semi": 90.0,            # hybrid (saline-tip); intermediate noise floor
+    "wet":  ARTIFACT_PK2PK_UV,  # 100 µV — traditional gel; EEGLAB default
+}
+
+
+def _default_pk2pk_for_electrode_type(electrode_type: ElectrodeType) -> float:
+    return _ELECTRODE_PK2PK_DEFAULTS.get(electrode_type, ARTIFACT_PK2PK_UV)
+
+
+def _detect_electrode_type() -> ElectrodeType:
+    """Infer electrode type from the active adapter via adapter_factory.
+    Falls back to 'dry' — safe default for Muse-class hardware.
+    """
+    try:
+        from neurolink.adapter_factory import create_adapter
+        from neurolink.config import get_settings
+
+        settings = get_settings()
+        adapter = create_adapter(
+            adapter_type=settings.adapter_type,
+            device_model=settings.device_model,
+        )
+        electrode_type: ElectrodeType = getattr(adapter, "electrode_type", "dry")
+        if electrode_type not in _ELECTRODE_PK2PK_DEFAULTS:
+            log.warning(
+                "unknown_electrode_type_fallback", electrode_type=electrode_type
+            )
+            return "dry"
+        return electrode_type  # type: ignore[return-value]
+    except Exception as exc:
+        log.warning("electrode_type_detection_failed", error=str(exc))
+        return "dry"
 
 
 @dataclass
 class GateConfig:
     """Tunable thresholds for ArtifactGate.
 
-    Defaults are sourced from ``neurolink.dsp.artifact_config`` so all
-    pipeline stages share the same authoritative baseline values.
+    Parameters
+    ----------
+    electrode_type:
+        'dry' | 'wet' | 'semi'.  When None (default), resolved from
+        adapter_factory at construction time so bare ``GateConfig()``
+        automatically applies the correct device-specific pk2pk threshold.
+        Muse S / Muse S Athena → 'dry' → 75 µV.
+    pk2pk_uv:
+        Peak-to-peak amplitude limit (µV).  When None (default), derived
+        from ``electrode_type``.  Pass explicit value to override at runtime.
+    accel_rms_g:
+        IMU RMS gate (g).
+    kurtosis_threshold:
+        Excess-kurtosis burst detection threshold (Fisher convention).
     """
 
-    pk2pk_uv: float = ARTIFACT_PK2PK_UV          # µV  — amplitude threshold
-    accel_rms_g: float = ARTIFACT_ACCEL_RMS_G    # g   — IMU motion threshold
-    kurtosis_threshold: float = ARTIFACT_KURTOSIS_THRESHOLD  # burst threshold
+    electrode_type: ElectrodeType | None = None
+    pk2pk_uv: float | None = None
+    accel_rms_g: float = ARTIFACT_ACCEL_RMS_G
+    kurtosis_threshold: float = ARTIFACT_KURTOSIS_THRESHOLD
     enable_amplitude: bool = True
     enable_imu: bool = True
     enable_kurtosis: bool = True
+
+    def __post_init__(self) -> None:
+        if self.electrode_type is None:
+            self.electrode_type = _detect_electrode_type()
+        if self.pk2pk_uv is None:
+            self.pk2pk_uv = _default_pk2pk_for_electrode_type(
+                self.electrode_type  # type: ignore[arg-type]
+            )
+        log.debug(
+            "gate_config_resolved",
+            electrode_type=self.electrode_type,
+            pk2pk_uv=self.pk2pk_uv,
+        )
 
 
 @dataclass
@@ -102,7 +162,7 @@ class ArtifactGate:
     Usage
     -----
     gate = ArtifactGate()
-    decision = gate.evaluate(eeg_arr, accel_arr)  # call each pump tick
+    decision = gate.evaluate(eeg_arr, accel_arr)
     if decision.clean:
         bands = compute_band_powers_from_buffer(eeg_arr)
     """
@@ -113,9 +173,7 @@ class ArtifactGate:
         self._total_frames: int = 0
         self._rejected_frames: int = 0
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
+    # ── Public API ────────────────────────────────────────────────────────────────
 
     def evaluate(
         self,
@@ -128,13 +186,14 @@ class ArtifactGate:
             eeg:   (n_channels, n_samples) float array.  Only the first
                    4 channels (TP9, AF7, AF8, TP10) are evaluated;
                    AUX (index 4) is ignored.
-            accel: (3, n_accel_samples) or (n_accel_samples,) float
-                   array of accelerometer readings in *g*.  Pass None
-                   to skip IMU gate.
+            accel: (3, n_accel_samples) or (n_accel_samples,) array in g.
+                   Pass None to skip IMU gate.
 
         Returns:
             ArtifactDecision with reject flag and list of reasons.
         """
+        # Snapshot config atomically — a concurrent set_config() on another
+        # thread must not split a pk2pk_uv read across two configs.
         with self._lock:
             cfg = self._cfg
 
@@ -146,20 +205,23 @@ class ArtifactGate:
         n_ch = eeg.shape[0]
         eeg_idx = [i for i in _EEG_IDX if i < n_ch]
 
-        # 1. Amplitude threshold
+        # 1. Amplitude threshold — device-aware via cfg.pk2pk_uv
         if cfg.enable_amplitude and eeg_idx:
             eeg_f64 = eeg[eeg_idx].astype(np.float64)
             pk2pk = np.ptp(eeg_f64, axis=1)  # per-channel range
             bad_mask = pk2pk > cfg.pk2pk_uv
             if bad_mask.any():
-                bad_names = [
-                    ["TP9", "AF7", "AF8", "TP10"][i] for i in np.where(bad_mask)[0]
-                ]
-                decision.add_reason(f"amplitude>{cfg.pk2pk_uv}uV ch={bad_names}")
+                bad_names = [_CH_NAMES[i] for i in np.where(bad_mask)[0]]
+                decision.add_reason(
+                    f"amplitude>{cfg.pk2pk_uv:.0f}uV "
+                    f"ch={bad_names} electrode={cfg.electrode_type}"
+                )
                 log.debug(
                     "stage3_amplitude_reject",
                     channels=bad_names,
                     pk2pk=pk2pk[bad_mask].tolist(),
+                    threshold_uv=cfg.pk2pk_uv,
+                    electrode_type=cfg.electrode_type,
                 )
 
         # 2. IMU motion gate
@@ -178,7 +240,7 @@ class ArtifactGate:
             for i, ch_idx in enumerate(eeg_idx):
                 kurt = float(sp_stats.kurtosis(eeg_f64[i], fisher=True))
                 if kurt > cfg.kurtosis_threshold:
-                    ch_name = ["TP9", "AF7", "AF8", "TP10"][ch_idx]
+                    ch_name = _CH_NAMES[ch_idx]
                     decision.add_reason(
                         f"kurtosis={kurt:.1f}>{cfg.kurtosis_threshold} ch={ch_name}"
                     )
@@ -196,7 +258,6 @@ class ArtifactGate:
         return decision
 
     def get_stats(self) -> dict:
-        """Return running frame counters and rejection rate."""
         with self._lock:
             total = self._total_frames
             rejected = self._rejected_frames
@@ -208,7 +269,6 @@ class ArtifactGate:
         }
 
     def reset_stats(self) -> None:
-        """Reset frame counters (call at session start)."""
         with self._lock:
             self._total_frames = 0
             self._rejected_frames = 0
@@ -222,4 +282,8 @@ class ArtifactGate:
     def set_config(self, config: GateConfig) -> None:
         with self._lock:
             self._cfg = config
-        log.info("stage3_config_updated", config=config)
+        log.info(
+            "stage3_config_updated",
+            electrode_type=config.electrode_type,
+            pk2pk_uv=config.pk2pk_uv,
+        )

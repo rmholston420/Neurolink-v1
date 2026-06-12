@@ -5,6 +5,8 @@ Design goals
 * Zero-phase filtering via ``scipy.signal.filtfilt`` — no group-delay
   distortion in event-locked signals (Muse alpha/theta peaks land at
   the correct sample).
+* Notch default 60 Hz (US mains); set ``NEUROLINK_LINE_FREQ_HZ=50`` env var
+  for EU/Asia deployments.  LP default 55 Hz preserves gamma band.
 * Kernels built **once** at construction time with
   ``scipy.signal.firwin`` and cached per (electrode_type, line_freq)
   combination so the hot path is pure NumPy array math.
@@ -21,8 +23,8 @@ Filter order
   default_filter_order = 128  (at 256 Hz → 0.5 s one-sided kernel)
   Transition bands (firwin Hamming window, Kaiser not needed):
     high-pass  0.5 Hz  → transition width ~0.4 Hz
-    notch      2 Hz BW (each) → sharp notch at 50/60 + 2nd harmonic
-    low-pass  45 Hz   → rejects muscle noise, keeps gamma edge
+    notch      2 Hz BW (each) → sharp notch at 60/120 Hz (US default)
+    low-pass  55 Hz   → preserves gamma band; raise to 65 Hz if needed
 
 Public API
 ----------
@@ -30,10 +32,12 @@ Public API
   OnlineFilterChain         — stateless filter operator
   FilterChainRegistry       — module-level singleton / cache
   apply_online_filters()    — one-call entry point used by eeg_pump
+  get_default_line_freq()   — locale-aware default (env var or 60 Hz)
 """
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -43,6 +47,41 @@ import structlog
 from scipy import signal as sp_signal
 
 log = structlog.get_logger(__name__)
+
+
+def get_default_line_freq() -> float:
+    """Return power-line frequency for the deployment locale.
+
+    Resolution order:
+    1. ``NEUROLINK_LINE_FREQ_HZ`` environment variable (e.g. "50" for EU/Asia)
+    2. ``artifact_config.ARTIFACT_LINE_FREQ_HZ`` constant (currently 60.0)
+    3. Hard-coded fallback: 60.0 Hz (US/Canada/Japan default)
+
+    Set ``NEUROLINK_LINE_FREQ_HZ=50`` at container startup for EU/Asia
+    deployments; no code change required.
+    """
+    env_val = os.environ.get("NEUROLINK_LINE_FREQ_HZ")
+    if env_val:
+        try:
+            freq = float(env_val)
+            if freq not in (50.0, 60.0):
+                log.warning(
+                    "unusual_line_freq_from_env",
+                    freq_hz=freq,
+                    expected="50 or 60",
+                )
+            return freq
+        except ValueError:
+            log.warning(
+                "invalid_NEUROLINK_LINE_FREQ_HZ",
+                raw=env_val,
+                fallback=60.0,
+            )
+    try:
+        from neurolink.dsp.artifact_config import ARTIFACT_LINE_FREQ_HZ
+        return float(ARTIFACT_LINE_FREQ_HZ)
+    except ImportError:
+        return 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -56,16 +95,22 @@ class FilterConfig:
     Attributes:
         hz_highpass:    High-pass cut-off (Hz).  0 or None → skip.
         hz_notch_freqs: List of notch centre frequencies (Hz).
-                        Typically [50, 100] (EU) or [60, 120] (US).
-        hz_lowpass:     Low-pass cut-off (Hz).  0 or None → skip.
+                        Default [60.0, 120.0] for US (60 Hz mains + 2nd harmonic).
+                        Set NEUROLINK_LINE_FREQ_HZ=50 env var for EU/Asia.
+                        Override explicitly: FilterConfig(hz_notch_freqs=[50.0, 100.0]).
+        hz_lowpass:     Low-pass cut-off (Hz).  Default 55 Hz to preserve the
+                        gamma band (30-50 Hz) used in Neurolink feature scoring.
+                        Lower to 45 Hz via set_config() if gamma features are inactive.
         notch_bw_hz:    Full bandwidth of each notch (Hz).
         fs:             Sampling rate (Hz).
         filter_order:   FIR filter order (must be even; padded if odd).
     """
 
     hz_highpass: float | None = 0.5
-    hz_notch_freqs: list[float] = field(default_factory=lambda: [50.0, 100.0])
-    hz_lowpass: float | None = 45.0
+    hz_notch_freqs: list[float] = field(
+        default_factory=lambda: [get_default_line_freq(), get_default_line_freq() * 2]
+    )
+    hz_lowpass: float | None = 55.0  # raised from 45 Hz to preserve gamma band
     notch_bw_hz: float = 2.0
     fs: float = 256.0
     filter_order: int = 128
@@ -206,7 +251,7 @@ class FilterChainRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._config: FilterConfig = FilterConfig()  # EU defaults
+        self._config: FilterConfig = FilterConfig()  # defaults: 60 Hz notch, LP 55 Hz
         self._chain: OnlineFilterChain = OnlineFilterChain(self._config)
 
     # ------------------------------------------------------------------ #
@@ -223,41 +268,29 @@ class FilterChainRegistry:
             return self._config
 
     def apply(self, eeg: np.ndarray) -> np.ndarray:
-        """Thread-safe single-call entry point for the pump."""
+        """Apply the currently active filter chain to an EEG array."""
         with self._lock:
             chain = self._chain
         return chain.apply(eeg)
 
-    def pre_warm(self, line_freq: float = 50.0, fs: float = 256.0) -> None:
-        """Build the default chain for a given region at startup.
 
-        Args:
-            line_freq: 50 (EU/Asia) or 60 (Americas)
-            fs:        EEG sampling rate
-        """
-        cfg = FilterConfig(fs=fs).with_line_freq(line_freq)
-        self.set_config(cfg)
-        log.info("stage1_pre_warmed", line_freq=line_freq, fs=fs)
+# ---------------------------------------------------------------------------
+# Module-level singleton + convenience entry point
+# ---------------------------------------------------------------------------
 
-
-# Module-level singleton — imported by eeg_pump and routers/stage1.py
-_registry = FilterChainRegistry()
+_registry: FilterChainRegistry | None = None
+_registry_lock = threading.Lock()
 
 
 def get_registry() -> FilterChainRegistry:
     """Return the module-level FilterChainRegistry singleton."""
+    global _registry
+    with _registry_lock:
+        if _registry is None:
+            _registry = FilterChainRegistry()
     return _registry
 
 
 def apply_online_filters(eeg: np.ndarray) -> np.ndarray:
-    """Convenience wrapper: apply the active filter chain to *eeg*.
-
-    Calls the module-level registry so eeg_pump needs only one import.
-
-    Args:
-        eeg: ndarray (n_channels, n_samples)
-
-    Returns:
-        Filtered ndarray, same shape.
-    """
-    return _registry.apply(eeg)
+    """Convenience wrapper: apply the active filter chain to an EEG array."""
+    return get_registry().apply(eeg)
