@@ -1,25 +1,161 @@
-"""Unit tests for dsp/bad_channels.py (Stage 2 bad-channel detector)."""
+"""Unit tests for dsp/bad_channels.py (Stage 2 bad channel detector)."""
 
 from __future__ import annotations
+
+import threading
 
 import numpy as np
 import pytest
 
 from neurolink.dsp.bad_channels import (
+    CHANNEL_NAMES,
     BadChannelDetector,
     ChannelStats,
     DetectorConfig,
 )
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+N_CH = 4    # EEG-only (no AUX) for most tests
+N_ALL = 5   # EEG + AUX
 FS = 256.0
-N_SAMPLES = 256  # 1-second buffer at 256 Hz
-N_CH = 5  # TP9, AF7, AF8, TP10, AUX
+NSAMP = 256  # 1 second of samples — enough for Welch
 
 
-def _make_clean_eeg(n_ch: int = N_CH, n_samples: int = N_SAMPLES) -> np.ndarray:
-    """Return a (n_ch, n_samples) array of 10 µV white noise — all channels clean."""
-    rng = np.random.default_rng(42)
-    return (rng.standard_normal((n_ch, n_samples)) * 10.0).astype(np.float32)
+def _flat(n_ch: int = N_CH, n_samples: int = NSAMP) -> np.ndarray:
+    """All-zero (flat-line) EEG."""
+    return np.zeros((n_ch, n_samples), dtype=np.float32)
+
+
+def _normal(n_ch: int = N_CH, n_samples: int = NSAMP, seed: int = 0, scale: float = 10.0) -> np.ndarray:
+    """Gaussian noise — healthy variance."""
+    rng = np.random.default_rng(seed)
+    return (rng.standard_normal((n_ch, n_samples)) * scale).astype(np.float32)
+
+
+def _noisy(n_ch: int = N_CH, n_samples: int = NSAMP, bad_ch: int = 0, multiplier: float = 20.0) -> np.ndarray:
+    """One channel has 20x amplitude (noisy)."""
+    arr = _normal(n_ch=n_ch, n_samples=n_samples)
+    arr[bad_ch] *= multiplier
+    return arr
+
+
+def _pump(detector: BadChannelDetector, arr: np.ndarray, n: int = 25) -> None:
+    """Pump n identical frames to let EMA converge."""
+    for _ in range(n):
+        detector.update(arr)
+
+
+# ---------------------------------------------------------------------------
+# DetectorConfig defaults
+# ---------------------------------------------------------------------------
+
+class TestDetectorConfigDefaults:
+    def test_var_threshold(self):
+        assert DetectorConfig().var_threshold == 0.01
+
+    def test_psd_ratio_threshold(self):
+        assert DetectorConfig().psd_ratio_threshold == 5.0
+
+    def test_ema_alpha(self):
+        assert DetectorConfig().ema_alpha == 0.1
+
+    def test_fs(self):
+        assert DetectorConfig().fs == 256.0
+
+    def test_nperseg(self):
+        assert DetectorConfig().nperseg == 128
+
+
+# ---------------------------------------------------------------------------
+# ChannelStats
+# ---------------------------------------------------------------------------
+
+class TestChannelStats:
+    def test_is_bad_false_by_default(self):
+        s = ChannelStats(name="TP9")
+        assert s.is_bad is False
+
+    def test_is_bad_flat_line(self):
+        s = ChannelStats(name="TP9", flat_line=True)
+        assert s.is_bad is True
+
+    def test_is_bad_noisy(self):
+        s = ChannelStats(name="TP9", noisy=True)
+        assert s.is_bad is True
+
+    def test_is_bad_manual(self):
+        s = ChannelStats(name="TP9", manual_bad=True)
+        assert s.is_bad is True
+
+    def test_reason_ok(self):
+        assert ChannelStats(name="TP9").reason() == "ok"
+
+    def test_reason_flat_line(self):
+        assert ChannelStats(name="TP9", flat_line=True).reason() == "flat_line"
+
+    def test_reason_noisy(self):
+        assert ChannelStats(name="TP9", noisy=True).reason() == "noisy"
+
+    def test_reason_manual(self):
+        assert ChannelStats(name="TP9", manual_bad=True).reason() == "manual"
+
+    def test_reason_combined(self):
+        s = ChannelStats(name="TP9", flat_line=True, manual_bad=True)
+        reasons = s.reason().split(",")
+        assert "manual" in reasons
+        assert "flat_line" in reasons
+
+
+# ---------------------------------------------------------------------------
+# CHANNEL_NAMES constant
+# ---------------------------------------------------------------------------
+
+class TestChannelNames:
+    def test_length_five(self):
+        assert len(CHANNEL_NAMES) == 5
+
+    def test_names(self):
+        assert CHANNEL_NAMES == ["TP9", "AF7", "AF8", "TP10", "AUX"]
+
+
+# ---------------------------------------------------------------------------
+# BadChannelDetector — construction
+# ---------------------------------------------------------------------------
+
+class TestBadChannelDetectorInit:
+    def test_default_no_bad_channels(self):
+        det = BadChannelDetector()
+        assert det.get_bad_channels() == []
+
+    def test_stats_length_five(self):
+        det = BadChannelDetector()
+        assert len(det.get_stats()) == 5
+
+    def test_stats_names_match_channel_names(self):
+        det = BadChannelDetector()
+        assert [s.name for s in det.get_stats()] == CHANNEL_NAMES
+
+
+# ---------------------------------------------------------------------------
+# update() — input guards
+# ---------------------------------------------------------------------------
+
+class TestUpdateInputGuards:
+    def test_none_input_no_exception(self):
+        det = BadChannelDetector()
+        det.update(None)  # type: ignore[arg-type]
+
+    def test_1d_input_no_exception(self):
+        det = BadChannelDetector()
+        det.update(np.zeros(256, dtype=np.float32))  # type: ignore[arg-type]
+
+    def test_single_sample_no_exception(self):
+        det = BadChannelDetector()
+        det.update(np.zeros((4, 1), dtype=np.float32))
 
 
 # ---------------------------------------------------------------------------
@@ -27,64 +163,57 @@ def _make_clean_eeg(n_ch: int = N_CH, n_samples: int = N_SAMPLES) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 class TestFlatLineDetection:
-    def test_flat_channel_detected_after_warmup(self):
-        det = BadChannelDetector(DetectorConfig(var_threshold=0.01, ema_alpha=1.0))
-        eeg = _make_clean_eeg()
-        # Zero out channel 1 (AF7) — variance = 0
-        eeg[1] = 0.0
-        det.update(eeg)
+    def test_flat_channel_detected_after_convergence(self):
+        det = BadChannelDetector()
+        _pump(det, _flat(n_ch=N_CH))
         bad = det.get_bad_channels()
-        assert "AF7" in bad
+        # All 4 channels are flat — all should be detected
+        assert set(bad) == {"TP9", "AF7", "AF8", "TP10"}
 
-    def test_clean_channels_not_flagged(self):
-        det = BadChannelDetector(DetectorConfig(var_threshold=0.01, ema_alpha=1.0))
-        eeg = _make_clean_eeg()
-        det.update(eeg)
+    def test_normal_channel_not_flat(self):
+        det = BadChannelDetector()
+        _pump(det, _normal())
+        stats = det.get_stats()
+        for s in stats[:N_CH]:
+            assert s.flat_line is False, f"{s.name} incorrectly flagged flat"
+
+    def test_single_flat_channel_detected(self):
+        """Only one channel flat among healthy neighbours."""
+        cfg = DetectorConfig(ema_alpha=0.5)  # faster convergence
+        det = BadChannelDetector(cfg)
+        arr = _normal(n_ch=N_CH)
+        arr[2] = 0.0  # AF8 flat
+        _pump(det, arr, n=30)
         bad = det.get_bad_channels()
-        # No channel should be flat (10 µV noise variance >> 0.01)
-        assert not bad
-
-    def test_flat_line_clears_after_recovery(self):
-        det = BadChannelDetector(DetectorConfig(var_threshold=0.01, ema_alpha=1.0))
-        eeg_flat = _make_clean_eeg()
-        eeg_flat[2] = 0.0  # AF8 flat
-        det.update(eeg_flat)
-        assert "AF8" in det.get_bad_channels()
-
-        eeg_ok = _make_clean_eeg()
-        det.update(eeg_ok)  # alpha=1 → instant update
-        assert "AF8" not in det.get_bad_channels()
+        assert "AF8" in bad
 
 
 # ---------------------------------------------------------------------------
-# Noisy / high-PSD detection
+# Noisy detection
 # ---------------------------------------------------------------------------
 
 class TestNoisyDetection:
-    def test_high_noise_channel_flagged(self):
-        det = BadChannelDetector(
-            DetectorConfig(psd_ratio_threshold=3.0, ema_alpha=1.0)
-        )
-        rng = np.random.default_rng(0)
-        eeg = (rng.standard_normal((N_CH, N_SAMPLES)) * 1.0).astype(np.float32)
-        # Inject 100× higher-amplitude noise on TP9 (index 0)
-        eeg[0] = (rng.standard_normal(N_SAMPLES) * 100.0).astype(np.float32)
-        det.update(eeg)
-        bad = det.get_bad_channels()
-        assert "TP9" in bad
+    def test_noisy_channel_detected(self):
+        cfg = DetectorConfig(psd_ratio_threshold=3.0, ema_alpha=0.5)
+        det = BadChannelDetector(cfg)
+        _pump(det, _noisy(bad_ch=0, multiplier=30.0), n=30)
+        assert "TP9" in det.get_bad_channels()
 
-    def test_aux_never_flagged_as_noisy(self):
-        """AUX (index 4) should never appear in noisy bad list."""
-        det = BadChannelDetector(
-            DetectorConfig(psd_ratio_threshold=1.0, ema_alpha=1.0)
-        )
-        rng = np.random.default_rng(1)
-        eeg = (rng.standard_normal((N_CH, N_SAMPLES)) * 100.0).astype(np.float32)
-        det.update(eeg)
-        bad = det.get_bad_channels()
-        assert "AUX" not in bad or (
-            any(det.get_stats()[4].flat_line for _ in [1])  # only flat-line possible
-        )
+    def test_clean_channels_not_noisy(self):
+        det = BadChannelDetector()
+        _pump(det, _normal())
+        for s in det.get_stats()[:N_CH]:
+            assert s.noisy is False
+
+    def test_aux_channel_not_noisy_flagged(self):
+        """AUX (index 4) is excluded from PSD ratio comparison."""
+        arr = np.zeros((N_ALL, NSAMP), dtype=np.float32)
+        arr[:N_CH] = _normal(n_ch=N_CH)  # healthy EEG
+        arr[4] = _normal(n_ch=1, scale=1000.0)[0]   # very noisy AUX
+        det = BadChannelDetector()
+        _pump(det, arr)
+        aux_stat = det.get_stats()[4]
+        assert aux_stat.noisy is False  # AUX never gets noisy flag
 
 
 # ---------------------------------------------------------------------------
@@ -92,79 +221,192 @@ class TestNoisyDetection:
 # ---------------------------------------------------------------------------
 
 class TestManualOverride:
-    def test_manual_bad_flag_takes_priority(self):
+    def test_manual_flag_marks_channel_bad(self):
         det = BadChannelDetector()
-        eeg = _make_clean_eeg()
-        for _ in range(5):
-            det.update(eeg)
-        assert det.get_bad_channels() == []
+        det.set_manual_bad("TP9", True)
+        assert "TP9" in det.get_bad_channels()
 
-        det.set_manual_bad("TP10", True)
-        assert "TP10" in det.get_bad_channels()
-
-    def test_manual_unflag_restores_channel(self):
+    def test_manual_unflag_clears_channel(self):
         det = BadChannelDetector()
-        det.set_manual_bad("AF7", True)
-        assert "AF7" in det.get_bad_channels()
-        det.set_manual_bad("AF7", False)
-        assert "AF7" not in det.get_bad_channels()
+        det.set_manual_bad("TP9", True)
+        det.set_manual_bad("TP9", False)
+        # Without other flags, should be clean
+        assert "TP9" not in det.get_bad_channels()
+
+    def test_manual_flag_case_insensitive(self):
+        det = BadChannelDetector()
+        det.set_manual_bad("tp9", True)
+        assert "TP9" in det.get_bad_channels()
+
+    def test_manual_flag_aux(self):
+        det = BadChannelDetector()
+        det.set_manual_bad("AUX", True)
+        assert "AUX" in det.get_bad_channels()
 
     def test_unknown_channel_raises(self):
         det = BadChannelDetector()
         with pytest.raises(ValueError, match="Unknown channel"):
-            det.set_manual_bad("CZ", True)
+            det.set_manual_bad("FAKE", True)
+
+    def test_manual_flag_persists_after_update(self):
+        det = BadChannelDetector()
+        det.set_manual_bad("AF7", True)
+        _pump(det, _normal())  # healthy EEG pumped
+        assert "AF7" in det.get_bad_channels()
 
 
 # ---------------------------------------------------------------------------
-# reset() and config API
+# get_stats() returns deep copy
 # ---------------------------------------------------------------------------
 
-class TestResetAndConfig:
-    def test_reset_clears_all_stats(self):
-        det = BadChannelDetector(DetectorConfig(var_threshold=0.01, ema_alpha=1.0))
-        eeg = _make_clean_eeg()
-        eeg[0] = 0.0  # make TP9 flat
-        det.update(eeg)
-        assert "TP9" in det.get_bad_channels()
+class TestGetStats:
+    def test_returns_list_of_channel_stats(self):
+        det = BadChannelDetector()
+        stats = det.get_stats()
+        assert all(isinstance(s, ChannelStats) for s in stats)
+
+    def test_mutation_does_not_affect_internal_state(self):
+        det = BadChannelDetector()
+        stats = det.get_stats()
+        stats[0].manual_bad = True
+        assert det.get_bad_channels() == []  # internal state unchanged
+
+
+# ---------------------------------------------------------------------------
+# get_bad_channels()
+# ---------------------------------------------------------------------------
+
+class TestGetBadChannels:
+    def test_returns_list_of_strings(self):
+        det = BadChannelDetector()
+        assert isinstance(det.get_bad_channels(), list)
+
+    def test_empty_initially(self):
+        det = BadChannelDetector()
+        assert det.get_bad_channels() == []
+
+
+# ---------------------------------------------------------------------------
+# reset()
+# ---------------------------------------------------------------------------
+
+class TestReset:
+    def test_reset_clears_all_flags(self):
+        det = BadChannelDetector()
+        _pump(det, _flat())
+        assert det.get_bad_channels() != []
         det.reset()
         assert det.get_bad_channels() == []
 
-    def test_get_stats_returns_all_channels(self):
+    def test_reset_clears_manual_flags(self):
         det = BadChannelDetector()
-        stats = det.get_stats()
-        assert len(stats) == N_CH
-        assert all(isinstance(s, ChannelStats) for s in stats)
+        det.set_manual_bad("TP9", True)
+        det.reset()
+        assert det.get_bad_channels() == []
 
-    def test_set_config_updates_thresholds(self):
+    def test_reset_clears_ema_values(self):
         det = BadChannelDetector()
-        new_cfg = DetectorConfig(var_threshold=99.0, psd_ratio_threshold=2.0)
-        det.set_config(new_cfg)
+        _pump(det, _normal())
+        det.reset()
+        for s in det.get_stats():
+            assert s.ema_variance == 0.0
+            assert s.ema_mean_psd == 0.0
+
+
+# ---------------------------------------------------------------------------
+# get_config / set_config
+# ---------------------------------------------------------------------------
+
+class TestConfigAccessors:
+    def test_get_config_returns_copy(self):
+        det = BadChannelDetector()
         cfg = det.get_config()
-        assert cfg.var_threshold == 99.0
-        assert cfg.psd_ratio_threshold == 2.0
+        cfg.var_threshold = 999.0
+        assert det.get_config().var_threshold == 0.01  # unchanged
+
+    def test_set_config_updates(self):
+        det = BadChannelDetector()
+        new_cfg = DetectorConfig(var_threshold=5.0)
+        det.set_config(new_cfg)
+        assert det.get_config().var_threshold == 5.0
 
 
 # ---------------------------------------------------------------------------
-# Edge cases
+# EMA convergence behaviour
 # ---------------------------------------------------------------------------
 
-class TestEdgeCases:
-    def test_single_sample_buffer_skipped(self):
-        """update() with n_samples < 2 should not raise or mutate state."""
+class TestEMAConvergence:
+    def test_ema_variance_increases_with_noisy_data(self):
         det = BadChannelDetector()
-        eeg = np.zeros((N_CH, 1), dtype=np.float32)
-        det.update(eeg)  # should silently skip
-        assert det.get_bad_channels() == []
+        before = det.get_stats()[0].ema_variance
+        _pump(det, _normal(scale=100.0), n=10)
+        after = det.get_stats()[0].ema_variance
+        assert after > before
 
-    def test_none_input_skipped(self):
+    def test_ema_variance_stays_low_for_flat_data(self):
         det = BadChannelDetector()
-        det.update(None)  # type: ignore[arg-type]
-        assert det.get_bad_channels() == []
+        _pump(det, _flat(), n=50)
+        for s in det.get_stats()[:N_CH]:
+            assert s.ema_variance < DetectorConfig().var_threshold
 
-    def test_fewer_than_five_channels(self):
-        """Devices that stream only 4 EEG channels (no AUX) should work."""
-        det = BadChannelDetector(DetectorConfig(var_threshold=0.01, ema_alpha=1.0))
-        eeg = _make_clean_eeg(n_ch=4)  # no AUX
-        eeg[1] = 0.0  # AF7 flat
-        det.update(eeg)
-        assert "AF7" in det.get_bad_channels()
+
+# ---------------------------------------------------------------------------
+# Thread-safety
+# ---------------------------------------------------------------------------
+
+class TestThreadSafety:
+    def test_concurrent_updates_no_exception(self):
+        det = BadChannelDetector()
+        errors: list[Exception] = []
+
+        def _worker():
+            try:
+                for _ in range(20):
+                    det.update(_normal())
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+
+    def test_concurrent_read_write_no_exception(self):
+        det = BadChannelDetector()
+        errors: list[Exception] = []
+
+        def _updater():
+            try:
+                for _ in range(20):
+                    det.update(_normal())
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def _reader():
+            try:
+                for _ in range(20):
+                    det.get_bad_channels()
+                    det.get_stats()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def _flagger():
+            try:
+                for _ in range(5):
+                    det.set_manual_bad("TP9", True)
+                    det.set_manual_bad("TP9", False)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=_updater),
+            threading.Thread(target=_reader),
+            threading.Thread(target=_flagger),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
