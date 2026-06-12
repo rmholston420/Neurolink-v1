@@ -1,67 +1,116 @@
-import { useEffect, useRef, useState } from 'react'
-import type { NeurolinkState } from '../types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { NeurolinkState, SettlingReason, SettlingSentinel, BaselineCompleteSentinel } from '../types'
 
-// ─── Sentinel shape emitted by the backend once baseline is ready ────────────
-export interface BaselineCompleteSentinel {
-  type:         'baseline_complete'
-  bands:        Record<string, number>   // mean band-powers captured during baseline
-  focus_score:  number
-  fatigue_score: number
-  sample_count: number
-  duration_s:   number
-}
+export type { SettlingReason, SettlingSentinel, BaselineCompleteSentinel }
 
-// ─── Union of everything the SSE stream can emit ────────────────────────────
-type SSEFrame = NeurolinkState | BaselineCompleteSentinel
+// ─── Type guards ─────────────────────────────────────────────────────────────
 
 /**
- * Type guard: true only for the baseline_complete sentinel dict.
- *
- * All normal NeurolinkState frames lack a `type` field, so checking for its
- * presence and value is the correct discriminator — no backend schema change
- * is required.
+ * True when the SSE data payload is a settling sentinel.
+ * Used internally and re-exported for consumers that subscribe via onmessage
+ * fallback paths.
  */
-export function isBaselineComplete(frame: SSEFrame): frame is BaselineCompleteSentinel {
+export function isSettling(data: unknown): data is SettlingSentinel {
   return (
-    typeof (frame as BaselineCompleteSentinel).type === 'string' &&
-    (frame as BaselineCompleteSentinel).type === 'baseline_complete'
+    typeof data === 'object' &&
+    data !== null &&
+    (data as SettlingSentinel).event === 'settling'
   )
 }
 
-export interface UseNeurolinkSSEOptions {
-  /**
-   * Called once, the first time a baseline_complete sentinel arrives.
-   * Subsequent sentinels (re-calibration) also fire this callback.
-   */
-  onBaselineComplete?: (sentinel: BaselineCompleteSentinel) => void
+/**
+ * True when the SSE data payload is a baseline_complete sentinel.
+ * Checks the 'event' field (backend shape) as primary discriminator.
+ * Also accepts the legacy 'type' field for backwards compatibility with
+ * clients that serialised the sentinel with a 'type' key.
+ */
+export function isBaselineComplete(data: unknown): data is BaselineCompleteSentinel {
+  if (typeof data !== 'object' || data === null) return false
+  const d = data as Record<string, unknown>
+  return d['event'] === 'baseline_complete' || d['type'] === 'baseline_complete'
 }
 
+// ─── Hook options ─────────────────────────────────────────────────────────────
+
+export interface UseNeurolinkSSEOptions {
+  /**
+   * Called once each time a baseline_complete sentinel arrives.
+   * Fired on the named 'baseline_complete' SSE event.
+   */
+  onBaselineComplete?: () => void
+  /**
+   * Called on every frame the Stage 0 acquisition guard holds.
+   * Reason codes:
+   *   'impedance_unstable'  — electrode contact not stable
+   *   'motion_settling'     — movement detected; waiting for rest
+   *   'env_not_ready'       — environment calibration pending
+   *   'settling'            — generic fallback
+   */
+  onSettling?: (reason: SettlingReason) => void
+}
+
+// ─── Return type ─────────────────────────────────────────────────────────────
+
+export interface UseNeurolinkSSEResult {
+  /** Latest NeurolinkState tick, or null before the first frame arrives. */
+  state: NeurolinkState | null
+  /**
+   * Most-recent settling reason if the device is currently in Stage 0
+   * acquisition hold, otherwise null.  Auto-clears 2 s after the last
+   * settling event so the indicator fades out once acquisition resumes.
+   */
+  settlingReason: SettlingReason | null
+}
+
+// How long to keep settlingReason non-null after the last settling event.
+const SETTLING_CLEAR_MS = 2_000
+
 /**
- * SSE consumer hook for Neurolink stream.
+ * SSE consumer hook for the Neurolink /neurolink/stream endpoint.
  *
- * The backend emits named SSE events:  event: state\ndata: <json>\n\n
- * EventSource.onmessage only fires for un-named events (event: message).
- * We must use addEventListener('state', handler) to receive named events.
+ * The backend emits three named SSE event types on the same stream:
  *
- * Frame taxonomy
- * ──────────────
- *   Normal frame  →  NeurolinkState  →  returned as hook state
- *   Sentinel      →  BaselineCompleteSentinel  →  onBaselineComplete() called,
- *                                                   hook state is NOT mutated
+ *   event: state             →  NeurolinkState JSON
+ *   event: baseline_complete →  {} (one-shot; bell + unlock UI)
+ *   event: settling          →  {"reason": "<SettlingReason>"}
  *
- * Auto-reconnects after disconnection with 3-second back-off.
+ * EventSource.onmessage only fires for un-named (event: message) events.
+ * This hook registers named listeners for all three types and falls back to
+ * onmessage (data-level 'event' key discrimination) for proxies that strip
+ * the SSE event field.
+ *
+ * Auto-reconnects after disconnection with a 3-second back-off.
+ *
+ * @param url     Full URL of the SSE stream endpoint.
+ * @param options Callbacks for sentinel events.
+ * @returns       { state, settlingReason }
  */
 export function useNeurolinkSSE(
   url: string,
   options?: UseNeurolinkSSEOptions,
-): NeurolinkState | null {
-  const [state, setState] = useState<NeurolinkState | null>(null)
-  const esRef        = useRef<EventSource | null>(null)
-  const cancelledRef = useRef(false)
-  // Stable ref so the SSE handler can call the latest callback without
+): UseNeurolinkSSEResult {
+  const [state, setState]                       = useState<NeurolinkState | null>(null)
+  const [settlingReason, setSettlingReason]     = useState<SettlingReason | null>(null)
+
+  const esRef             = useRef<EventSource | null>(null)
+  const cancelledRef      = useRef(false)
+  const clearTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Stable refs so event handlers always call the latest callbacks without
   // needing to be re-registered whenever the parent re-renders.
   const onBaselineRef = useRef(options?.onBaselineComplete)
+  const onSettlingRef = useRef(options?.onSettling)
   onBaselineRef.current = options?.onBaselineComplete
+  onSettlingRef.current = options?.onSettling
+
+  // Debounced settling-reason clear: resets the 2 s timer on each event.
+  const scheduleSettlingClear = useCallback(() => {
+    if (clearTimerRef.current !== null) clearTimeout(clearTimerRef.current)
+    clearTimerRef.current = setTimeout(() => {
+      setSettlingReason(null)
+      clearTimerRef.current = null
+    }, SETTLING_CLEAR_MS)
+  }, [])
 
   useEffect(() => {
     cancelledRef.current = false
@@ -72,29 +121,63 @@ export function useNeurolinkSSE(
       const es = new EventSource(url)
       esRef.current = es
 
-      const stateHandler = (event: MessageEvent) => {
-        let frame: SSEFrame
-        try {
-          frame = JSON.parse(event.data) as SSEFrame
-        } catch {
-          return // discard malformed JSON
-        }
+      // ── Named event handlers ─────────────────────────────────────────────
 
-        if (isBaselineComplete(frame)) {
-          // Route sentinel to the callback; never touch NeurolinkState atom.
-          onBaselineRef.current?.(frame)
-        } else {
-          // Normal frame — set app state as before.
-          setState(frame)
+      const stateHandler = (event: MessageEvent) => {
+        try {
+          setState(JSON.parse(event.data) as NeurolinkState)
+        } catch {
+          // discard malformed JSON
         }
       }
 
+      const baselineCompleteHandler = (_event: MessageEvent) => {
+        onBaselineRef.current?.()
+      }
+
+      const settlingHandler = (event: MessageEvent) => {
+        let reason: SettlingReason = 'settling'
+        try {
+          const parsed = JSON.parse(event.data) as { reason?: SettlingReason }
+          if (parsed.reason) reason = parsed.reason
+        } catch {
+          // use fallback reason
+        }
+        setSettlingReason(reason)
+        scheduleSettlingClear()
+        onSettlingRef.current?.(reason)
+      }
+
       es.addEventListener('state', stateHandler)
-      // Fallback: some SSE proxies strip the event: field
-      es.onmessage = stateHandler
+      es.addEventListener('baseline_complete', baselineCompleteHandler)
+      es.addEventListener('settling', settlingHandler)
+
+      // ── Fallback: proxies that strip the event: field ────────────────────
+      // Discriminate on the 'event' key in the data payload.
+      es.onmessage = (event: MessageEvent) => {
+        let parsed: Record<string, unknown>
+        try {
+          parsed = JSON.parse(event.data) as Record<string, unknown>
+        } catch {
+          return
+        }
+        if (parsed['event'] === 'baseline_complete') {
+          onBaselineRef.current?.()
+        } else if (parsed['event'] === 'settling') {
+          const reason = (parsed['reason'] as SettlingReason | undefined) ?? 'settling'
+          setSettlingReason(reason)
+          scheduleSettlingClear()
+          onSettlingRef.current?.(reason)
+        } else {
+          // Assume NeurolinkState (normal frame or proxy-stripped named event)
+          setState(parsed as unknown as NeurolinkState)
+        }
+      }
 
       es.onerror = () => {
         es.removeEventListener('state', stateHandler)
+        es.removeEventListener('baseline_complete', baselineCompleteHandler)
+        es.removeEventListener('settling', settlingHandler)
         es.close()
         esRef.current = null
         if (!cancelledRef.current) {
@@ -107,13 +190,17 @@ export function useNeurolinkSSE(
 
     return () => {
       cancelledRef.current = true
+      if (clearTimerRef.current !== null) {
+        clearTimeout(clearTimerRef.current)
+        clearTimerRef.current = null
+      }
       const es = esRef.current
       if (es) {
         es.close()
         esRef.current = null
       }
     }
-  }, [url]) // options object intentionally excluded — use the ref
+  }, [url, scheduleSettlingClear])
 
-  return state
+  return { state, settlingReason }
 }
