@@ -1,7 +1,7 @@
 """Neurolink REST + SSE endpoints.
 
 /api/v1/neurolink/* routes.
-Thin layer — delegates to NeuroLinkService.
+Thin layer - delegates to NeuroLinkService.
 """
 
 from __future__ import annotations
@@ -30,11 +30,11 @@ router = APIRouter(prefix="/neurolink", tags=["neurolink"])
 
 # How long to wait for the next hub frame before sending a keepalive comment.
 #
-# Must be LONGER than the pump interval (4 Hz → 250 ms) so the generator
-# does not time out between normal frames.  5 s gives 20× headroom and
+# Must be LONGER than the pump interval (4 Hz -> 250 ms) so the generator
+# does not time out between normal frames.  5 s gives 20x headroom and
 # matches common Nginx/proxy idle-connection defaults.
 #
-# Tests (ASGITransport): no pump runs — the queue stays empty.  We use a
+# Tests (ASGITransport): no pump runs - the queue stays empty.  We use a
 # separate _SSE_TEST_EXIT_TIMEOUT_S (50 ms) path so the generator exits
 # cleanly and flushes buffered frames to the reader via more_body=False.
 _SSE_IDLE_TIMEOUT_S: float = 5.0
@@ -92,7 +92,7 @@ async def get_sessions(
 
 @router.get("/stream")
 async def sse_stream(service: ServiceDep) -> StreamingResponse:
-    """SSE endpoint — streams NeurolinkState JSON as server-sent events.
+    """SSE endpoint - streams NeurolinkState JSON as server-sent events.
 
     Each event: event: state\\ndata: <NeurolinkState JSON>\\n\\n
 
@@ -117,12 +117,12 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Always emit current state immediately (guaranteed ≥1 frame).
+            # Always emit current state immediately (guaranteed >= 1 frame).
             yield _sse_frame(hub.get_state())
 
             while True:
                 try:
-                    # Primary wait — up to 5 s for the next pump frame.
+                    # Primary wait - up to 5 s for the next pump frame.
                     state = await asyncio.wait_for(q.get(), timeout=_SSE_IDLE_TIMEOUT_S)
                     yield _sse_frame(state)
                 except TimeoutError:
@@ -140,12 +140,12 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
                         )
                         yield _sse_frame(state)
                     except TimeoutError:
-                        # No pump running (test harness) → exit cleanly.
+                        # No pump running (test harness) -> exit cleanly.
                         # Under uvicorn the pump always fills the queue within
                         # 250 ms so this inner branch is never reached in prod.
                         if not hub.get_state().connected:
                             return
-                        # Still connected but genuinely idle — send keepalive
+                        # Still connected but genuinely idle - send keepalive
                         # comment and keep the loop alive.
                         yield b": keepalive\n\n"
 

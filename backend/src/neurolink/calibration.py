@@ -1,15 +1,15 @@
-"""Calibration session — 90-second baseline alpha capture.
+"""Calibration session - 90-second baseline alpha capture.
 
 Ported from Rigpa-v2 calibration_router.py + Rigpa-v3 calibration.py.
 
 Protocol
 --------
 * Total duration  : 90 s  (TOTAL_DURATION_SEC)
-* Warmup window   : 0–30 s (WARMUP_SEC)
+* Warmup window   : 0-30 s (WARMUP_SEC)
     EEG is sampled but ALL samples are discarded.  This purges movement
     artefacts from donning the headset and gives the ADS1299 front-end
     time to DC-stabilise on scalp impedance.
-* Baseline window : 30–90 s (BASELINE_SEC = 60 s)
+* Baseline window : 30-90 s (BASELINE_SEC = 60 s)
     Only samples collected in this window contribute to the mean alpha
     baseline stored on the hub.
 """
@@ -26,7 +26,7 @@ from neurolink.hardware.base import HardwareAdapter
 
 log = structlog.get_logger(__name__)
 
-WARMUP_SEC: float           = 30.0   # discard window — artefact purge + DC settle
+WARMUP_SEC: float           = 30.0   # discard window - artefact purge + DC settle
 BASELINE_SEC: float         = 60.0   # clean capture window
 TOTAL_DURATION_SEC: float   = WARMUP_SEC + BASELINE_SEC  # 90 s total
 _MIN_FRAMES: int             = 30     # minimum accepted baseline samples
@@ -35,11 +35,11 @@ _MIN_FRAMES: int             = 30     # minimum accepted baseline samples
 class CalibrationSession:
     """Runs a 90-second baseline alpha capture using the active adapter.
 
-    Phase 1 — Warmup (0–30 s)
+    Phase 1 - Warmup (0-30 s)
         Samples collected but discarded.  Clears movement and donning
         artefacts; allows the EEG front-end to DC-stabilise.
 
-    Phase 2 — Baseline capture (30–90 s)
+    Phase 2 - Baseline capture (30-90 s)
         Alpha band power accumulated into alpha_samples.  The mean of
         this 60-second window is written to hub.baseline_alpha.
 
@@ -59,7 +59,7 @@ class CalibrationSession:
         """Run the calibration session and return the baseline alpha value.
 
         Returns:
-            Mean alpha band power fraction (seconds 30–90), or None if
+            Mean alpha band power fraction (seconds 30-90), or None if
             insufficient data was collected.
         """
         if self._running:
@@ -108,12 +108,12 @@ class CalibrationSession:
                     await asyncio.sleep(0.1)
                     continue
 
-                # ── Warmup window: collect but discard ──────────────────────
+                # Warmup window: collect but discard
                 if self.elapsed < WARMUP_SEC:
                     await asyncio.sleep(0.05)
                     continue
 
-                # ── Baseline window: accumulate alpha samples ────────────────
+                # Baseline window: accumulate alpha samples
                 if sample.eeg_buffer:
                     eeg = np.array(sample.eeg_buffer, dtype=np.float32)
                     bands = compute_band_powers_from_buffer(eeg)

@@ -7,7 +7,7 @@ import sys
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy.ext.asyncio import async_engine_from_config, AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, async_engine_from_config
 from sqlalchemy.pool import NullPool
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))

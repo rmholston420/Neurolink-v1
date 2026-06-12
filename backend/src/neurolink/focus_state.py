@@ -86,7 +86,7 @@ def compute_focus_score(bands_alpha: float, bands_beta: float, baseline_alpha: f
       alpha_ratio_component = min(bands_alpha / baseline_alpha, 1.5) / 1.5
           (alpha relative to calibrated baseline, capped to avoid overflow)
       beta_engagement       = min(bands_beta, 0.5) / 0.5
-          (normalised beta, capped at 0.5 — above that is noise/artefact)
+          (normalised beta, capped at 0.5 - above that is noise/artefact)
 
     Args:
         bands_alpha: Current alpha band power fraction in [0, 1]
@@ -99,7 +99,7 @@ def compute_focus_score(bands_alpha: float, bands_beta: float, baseline_alpha: f
     if baseline_alpha <= 0:
         baseline_alpha = 0.3  # sensible fallback
 
-    # Alpha relative to subject baseline (capped at 1.5× to stay in [0, 1])
+    # Alpha relative to subject baseline (capped at 1.5x to stay in [0, 1])
     alpha_ratio = bands_alpha / (baseline_alpha + 1e-6)
     alpha_component = min(alpha_ratio, 1.5) / 1.5
 
