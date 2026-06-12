@@ -1,5 +1,5 @@
 """
-routers/ble.py — Path B: backend BLE scan + connection endpoints.
+routers/ble.py - Path B: backend BLE scan + connection endpoints.
 
 Exposes four terminal-free endpoints so the frontend ConnectionPanel
 (Backend BLE tab) can discover and connect to a Muse S headband without
@@ -43,24 +43,22 @@ Add to main.py::
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
 
 try:
-    import bleak
     from bleak import BleakScanner
     BLEAK_AVAILABLE = True
 except ImportError:
     BLEAK_AVAILABLE = False
 
+import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import structlog
 
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["ble"])
 
-# ── Muse device filter ───────────────────────────────────────────────────────────
+# -- Muse device filter ----------------------------------------------------------
 MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
 MUSE_NAME_PREFIX  = "Muse"
 DEFAULT_SCAN_SEC  = 5.0
@@ -78,14 +76,18 @@ def _is_muse(device) -> bool:
     )
 
 
-# ── Bridge state (module-level singleton) ───────────────────────────────────────────
+# -- Bridge state (module-level singleton) ---------------------------------------
 # We keep a single BLEBridge instance per process.  The frontend can only
 # have one Muse connected at a time anyway.
 class _BridgeState:
-    bridge  = None         # BLEBridge | None
-    adapter = None         # HardwareAdapter | None
-    address: Optional[str] = None
+    from neurolink.ble_bridge import BLEBridge as _BLEBridge
+    from neurolink.hardware.base import HardwareAdapter as _HardwareAdapter
+
+    bridge:  _BLEBridge | None = None
+    adapter: _HardwareAdapter | None = None
+    address: str | None = None
     device_model: str = "muse_s_gen1"
+
 
 bridge_state = _BridgeState()
 
@@ -94,17 +96,17 @@ async def _stop_existing_bridge() -> None:
     if bridge_state.bridge is not None:
         try:
             await bridge_state.bridge.stop()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("ble_router_stop_bridge_error", error=str(exc))
         bridge_state.bridge  = None
         bridge_state.adapter = None
 
 
-# ── Pydantic schemas ─────────────────────────────────────────────────────────────────
+# -- Pydantic schemas ------------------------------------------------------------
 class BLEDeviceOut(BaseModel):
     address: str
-    name:    Optional[str] = None
-    rssi:    Optional[int] = None
+    name:    str | None = None
+    rssi:    int | None = None
 
 
 class BLEScanResponse(BaseModel):
@@ -124,13 +126,13 @@ class BLEConnectResponse(BaseModel):
 
 
 class BLEStatusResponse(BaseModel):
-    running:     bool
-    connected:   bool
-    address:     Optional[str] = None
+    running:      bool
+    connected:    bool
+    address:      str | None = None
     device_model: str = ""
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────────
+# -- Endpoints -------------------------------------------------------------------
 
 @router.get("/ble/scan", response_model=BLEScanResponse)
 async def ble_scan(duration: float = DEFAULT_SCAN_SEC) -> BLEScanResponse:
@@ -230,7 +232,7 @@ async def ble_connect(req: BLEConnectRequest) -> BLEConnectResponse:
         return BLEConnectResponse(
             ok=True,
             source=f"ble:{req.device_model}",
-            message=f"Bridge started for {req.address}. {'Connected.' if connected else 'Connecting…'}",
+            message=f"Bridge started for {req.address}. {'Connected.' if connected else 'Connecting...'}",
         )
 
     except Exception as exc:
