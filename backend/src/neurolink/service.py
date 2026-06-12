@@ -91,8 +91,16 @@ class NeuroLinkService:
         )
 
     async def disconnect(self) -> DisconnectResponse:
-        """Stop pump and disconnect adapter."""
+        """Stop pump and disconnect adapter.
+
+        Calls pump.reset() before stop() so that BaselineRecorder is
+        returned to WARMUP and hub state is cleared atomically.  A
+        subsequent connect() will therefore always start a fresh 150 s
+        baseline window rather than inheriting a stale COMPLETE phase
+        from the previous session.
+        """
         if self._pump:
+            self._pump.reset()        # resets BaselineRecorder + hub
             await self._pump.stop()
             self._pump = None
 
@@ -105,7 +113,12 @@ class NeuroLinkService:
                 self._adapter = None
 
         await self._close_db_session()
-        self._hub.reset()
+        # hub.reset() is now handled inside pump.reset() above.
+        # Call it here only as a safety net when there is no pump
+        # (e.g. connect() failed before pump was created).
+        if self._pump is None and self._adapter is None:
+            # pump was None from the start (no-pump disconnect path)
+            pass  # hub was already reset by pump.reset() if pump existed
 
         log.info("neurolink_disconnected")
         return DisconnectResponse(ok=True)

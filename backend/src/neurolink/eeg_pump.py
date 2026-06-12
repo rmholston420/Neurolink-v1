@@ -299,6 +299,23 @@ class EEGPump:
             self._task = None
         log.info("eeg_pump_stopped")
 
+    def reset(self) -> None:
+        """Reset DSP sub-components to initial state.
+
+        Called by NeuroLinkService.disconnect() so that a subsequent
+        reconnect starts a fresh 150 s baseline window.  Resets the
+        BaselineRecorder first (restores WARMUP phase and restarts the
+        monotonic clock), then delegates to hub.reset() so all hub-owned
+        state (NeurolinkState, EA1, FatigueDetector, baseline_alpha) is
+        cleared in the same call.
+
+        Safe to call while the pump loop is still running — both
+        BaselineRecorder and EEGHub protect their state with locks.
+        """
+        self._baseline.reset()
+        self._hub.reset()
+        log.info("eeg_pump_reset")
+
     async def _pump_loop(self) -> None:
         interval = 1.0 / self._publish_hz
         while self._running:
