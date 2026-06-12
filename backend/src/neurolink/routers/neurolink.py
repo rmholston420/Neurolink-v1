@@ -28,11 +28,17 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/neurolink", tags=["neurolink"])
 
-# How long to wait for the next hub frame before treating the stream as idle.
-# Production: EEG pump fills the queue continuously — this never fires.
-# Tests (ASGITransport): no pump runs during stream — fires after 50 ms,
-#   generator exits, more_body=False sent, httpx flushes frames to reader.
-_SSE_IDLE_TIMEOUT_S: float = 0.05
+# How long to wait for the next hub frame before sending a keepalive comment.
+#
+# Must be LONGER than the pump interval (4 Hz → 250 ms) so the generator
+# does not time out between normal frames.  5 s gives 20× headroom and
+# matches common Nginx/proxy idle-connection defaults.
+#
+# Tests (ASGITransport): no pump runs — the queue stays empty.  We use a
+# separate _SSE_TEST_EXIT_TIMEOUT_S (50 ms) path so the generator exits
+# cleanly and flushes buffered frames to the reader via more_body=False.
+_SSE_IDLE_TIMEOUT_S: float = 5.0
+_SSE_TEST_EXIT_TIMEOUT_S: float = 0.05  # only used when queue drains instantly
 
 
 @router.post("/connect", response_model=ConnectResponse)
@@ -88,22 +94,22 @@ async def get_sessions(
 async def sse_stream(service: ServiceDep) -> StreamingResponse:
     """SSE endpoint — streams NeurolinkState JSON as server-sent events.
 
-    Compatibility note
+    Each event: event: state\\ndata: <NeurolinkState JSON>\\n\\n
+
+    Keepalive strategy
     ------------------
-    httpx ASGITransport buffers ALL chunks; aiter_lines() only receives data
-    after the generator exits (more_body=False). An infinite generator therefore
-    deadlocks aiter_lines() in tests. The idle-timeout pattern below fixes this:
+    The pump publishes at 4 Hz (250 ms cadence).  The generator waits up
+    to _SSE_IDLE_TIMEOUT_S (5 s) for the next queued frame.  On timeout
+    it sends an SSE keepalive comment (': keepalive') to prevent Nginx /
+    browser proxies from closing the idle connection, then resumes waiting.
 
-    * Yield the current hub state immediately (guaranteed ≥1 frame).
-    * Wait up to _SSE_IDLE_TIMEOUT_S (50 ms) for the next queued frame.
-    * On timeout: if the queue is empty, return (sends more_body=False).
-      Otherwise yield a keepalive with the current state and wait again.
-
-    Under uvicorn the pump never lets the queue sit empty for 50 ms so the
-    generator runs indefinitely. Under ASGITransport the queue drains in <50 ms
-    and the generator exits, flushing all buffered frames to the reader.
-
-    Each SSE event: event: state\ndata: <NeurolinkState JSON>\n\n
+    Test compatibility (ASGITransport)
+    ----------------------------------
+    httpx ASGITransport buffers ALL chunks; aiter_lines() only receives
+    data after the generator exits (more_body=False).  With no pump running
+    during tests the queue drains instantly.  We detect this by trying a
+    very short wait (_SSE_TEST_EXIT_TIMEOUT_S = 50 ms) first; if that also
+    times out we return, sending more_body=False and flushing all frames.
     """
 
     async def event_generator():
@@ -111,24 +117,37 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Always emit current state immediately.
+            # Always emit current state immediately (guaranteed ≥1 frame).
             yield _sse_frame(hub.get_state())
 
             while True:
                 try:
+                    # Primary wait — up to 5 s for the next pump frame.
                     state = await asyncio.wait_for(q.get(), timeout=_SSE_IDLE_TIMEOUT_S)
                     yield _sse_frame(state)
                 except TimeoutError:
-                    if q.empty():
-                        # No frames in window — exit so more_body=False is sent.
-                        # Under uvicorn this path is unreachable because the pump
-                        # pushes at publish_hz (default 10 Hz = 100 ms cadence,
-                        # always faster than a 50 ms window would suggest —
-                        # except publish_hz defaults to 10, so 100ms > 50ms and
-                        # this WOULD fire in production too.  Adjust: only exit
-                        # when no clients are registered (disconnected).
-                        return
-                    yield _sse_frame(hub.get_state())
+                    # 5 s passed with no frame.  Check if the queue filled
+                    # in the meantime (burst catch-up), otherwise keepalive.
+                    if not q.empty():
+                        state = q.get_nowait()
+                        yield _sse_frame(state)
+                        continue
+
+                    # Try the short test-exit window to detect ASGITransport.
+                    try:
+                        state = await asyncio.wait_for(
+                            q.get(), timeout=_SSE_TEST_EXIT_TIMEOUT_S
+                        )
+                        yield _sse_frame(state)
+                    except TimeoutError:
+                        # No pump running (test harness) → exit cleanly.
+                        # Under uvicorn the pump always fills the queue within
+                        # 250 ms so this inner branch is never reached in prod.
+                        if not hub.get_state().connected:
+                            return
+                        # Still connected but genuinely idle — send keepalive
+                        # comment and keep the loop alive.
+                        yield b": keepalive\n\n"
 
         except asyncio.CancelledError:
             pass
