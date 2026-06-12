@@ -113,6 +113,9 @@ class IngestPayload(BaseModel):
     eeg_samples: list[list[float]] = Field(default_factory=list)
     # Stage 2: channels detected or manually flagged as bad this frame
     bad_channels: list[str] = Field(default_factory=list)
+    # Stage 3: epoch-level artifact gate decision
+    artifact_rejected: bool = False
+    artifact_reasons: list[str] = Field(default_factory=list)
     # Filled by hub.update()
     region: str = "A"
     alchemical_stage: str = "Nigredo"
@@ -161,6 +164,9 @@ class NeurolinkState(BaseModel):
     eeg_samples: list[list[float]] = Field(default_factory=list)
     # Stage 2: bad channels detected this frame
     bad_channels: list[str] = Field(default_factory=list)
+    # Stage 3: epoch-level artifact gate
+    artifact_rejected: bool = False
+    artifact_reasons: list[str] = Field(default_factory=list)
 
 
 # ============================================================================
