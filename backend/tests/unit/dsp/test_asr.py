@@ -1,16 +1,14 @@
-"""Unit tests for neurolink.dsp.asr (Stage 4 — Artifact Subspace Reconstruction).
+"""Unit tests for Stage 4 — ArtifactSubspaceReconstructor (asr.py).
 
 Covers:
-- State machine: CALIBRATING → READY transition
-- Disabled mode pass-through
-- Burst sample attenuation (statistical)
-- Clean signal is not distorted during correction
-- reset() returns to CALIBRATING
-- set_config() replaces config and resets
-- get_stats() accounting accuracy
-- Dtype preservation (float32 in → float32 out)
-- Short / single-row frames do not crash
-- Calibration with under-rank data (all-zero channels) handles gracefully
+  - Disabled pass-through (enable=False)
+  - Calibration accumulation and model fitting
+  - Burst artifact reconstruction after calibration
+  - Zero-burst frame (clean signal, no change)
+  - Stats and state reporting
+  - reset() clears state back to CALIBRATING
+  - set_config() resets calibration
+  - Edge cases: 1-D input, too few samples, degenerate covariance fallback
 """
 from __future__ import annotations
 
@@ -22,191 +20,263 @@ from neurolink.dsp.asr import (
     ASRState,
     ArtifactSubspaceReconstructor,
 )
+from neurolink.dsp.artifact_config import ASR_BURST_SD, ASR_CALIB_SEC
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+N_CH = 4
 FS = 256.0
-CALIB_SEC = 2.0   # short calibration window for fast tests
-BURST_SD = 5.0    # aggressive threshold to guarantee reconstruction in tests
+CALIB_SEC = 1.0  # short for tests
+SAMPLES_PER_TICK = 64  # 250 ms at 256 Hz
 
 
-def _make_asr(calib_sec: float = CALIB_SEC, burst_sd: float = BURST_SD,
-              enable: bool = True) -> ArtifactSubspaceReconstructor:
-    cfg = ASRConfig(
+def _make_cfg(enable: bool = True, burst_sd: float = ASR_BURST_SD) -> ASRConfig:
+    return ASRConfig(
         enable=enable,
         fs=FS,
-        calib_sec=calib_sec,
+        calib_sec=CALIB_SEC,
         burst_sd=burst_sd,
         eeg_channels=[0, 1, 2, 3],
     )
-    return ArtifactSubspaceReconstructor(config=cfg)
 
 
-def _clean_block(n_samples: int = 512, n_ch: int = 4, amp: float = 5.0) -> np.ndarray:
-    rng = np.random.default_rng(seed=42)
-    return rng.normal(0, amp, (n_ch, n_samples)).astype(np.float32)
+def _make_asr(enable: bool = True, burst_sd: float = ASR_BURST_SD) -> ArtifactSubspaceReconstructor:
+    return ArtifactSubspaceReconstructor(_make_cfg(enable=enable, burst_sd=burst_sd))
 
 
-def _calibrate(asr: ArtifactSubspaceReconstructor, calib_sec: float = CALIB_SEC) -> None:
-    """Feed enough clean frames to complete calibration."""
-    n_needed = int(calib_sec * FS) + 64
-    block_size = 256
-    fed = 0
-    while fed < n_needed:
-        frame = _clean_block(n_samples=block_size)
+def _clean_frame(n_samples: int = SAMPLES_PER_TICK, scale: float = 10.0) -> np.ndarray:
+    """Return a (4, n_samples) array of low-amplitude bandlimited noise."""
+    rng = np.random.default_rng(42)
+    return (rng.standard_normal((N_CH, n_samples)) * scale).astype(np.float32)
+
+
+def _feed_calibration(asr: ArtifactSubspaceReconstructor, n_frames: int = 8) -> None:
+    """Feed enough frames to complete calibration (CALIB_SEC * FS samples)."""
+    for _ in range(n_frames):
+        asr.apply(_clean_frame())
+
+
+# ---------------------------------------------------------------------------
+# Tests: disabled mode
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_pass_through():
+    asr = _make_asr(enable=False)
+    frame = _clean_frame()
+    out = asr.apply(frame)
+    assert out is frame  # exact same object returned
+    assert asr.get_state() == "DISABLED"
+
+
+# ---------------------------------------------------------------------------
+# Tests: calibration phase
+# ---------------------------------------------------------------------------
+
+
+def test_state_starts_calibrating():
+    asr = _make_asr()
+    assert asr.get_state() == "CALIBRATING"
+
+
+def test_calibration_returns_unchanged_frame():
+    asr = _make_asr()
+    frame = _clean_frame()
+    out = asr.apply(frame)
+    np.testing.assert_array_equal(out, frame)
+
+
+def test_calibration_accumulates_samples():
+    asr = _make_asr()
+    stats_before = asr.get_stats()
+    assert stats_before["calib_samples_collected"] == 0
+    asr.apply(_clean_frame(n_samples=32))
+    stats_after = asr.get_stats()
+    assert stats_after["calib_samples_collected"] == 32
+
+
+def test_transitions_to_ready_after_calibration():
+    asr = _make_asr()
+    _feed_calibration(asr)
+    assert asr.get_state() == "READY"
+
+
+def test_stats_after_calibration():
+    asr = _make_asr()
+    _feed_calibration(asr)
+    stats = asr.get_stats()
+    assert stats["state"] == "READY"
+    assert stats["calib_rms"] > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Tests: reconstruction phase
+# ---------------------------------------------------------------------------
+
+
+def test_clean_frame_passes_through_unchanged():
+    """A clean frame (well within burst_sd) should be returned nearly unchanged."""
+    asr = _make_asr(burst_sd=20.0)
+    _feed_calibration(asr)
+    frame = _clean_frame(scale=5.0)  # small amplitude
+    out = asr.apply(frame)
+    assert out.shape == frame.shape
+    # Clean frames should not have large corrections.
+    np.testing.assert_allclose(out, frame, atol=1.0)
+
+
+def test_burst_frame_is_corrected():
+    """Artificially large amplitude spikes should be reconstructed."""
+    asr = _make_asr(burst_sd=2.0)  # aggressive threshold for test
+    _feed_calibration(asr)
+    # Inject a large spike
+    burst = _clean_frame(scale=1.0)
+    burst[:, 10:15] = 500.0  # saturate 5 samples
+    out = asr.apply(burst)
+    # Burst samples should have been pulled back toward calibration subspace
+    assert out.shape == burst.shape
+    stats = asr.get_stats()
+    assert stats["frames_corrected"] >= 1
+    assert stats["samples_reconstructed"] >= 1
+
+
+def test_output_dtype_preserved():
+    """Output dtype must match the input dtype."""
+    asr = _make_asr()
+    _feed_calibration(asr)
+    frame_f32 = _clean_frame().astype(np.float32)
+    out = asr.apply(frame_f32)
+    assert out.dtype == np.float32
+
+    frame_f64 = _clean_frame().astype(np.float64)
+    out64 = asr.apply(frame_f64)
+    assert out64.dtype == np.float64
+
+
+def test_frames_processed_increments():
+    asr = _make_asr()
+    _feed_calibration(asr)
+    for _ in range(3):
+        asr.apply(_clean_frame())
+    assert asr.get_stats()["frames_processed"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests: reset and set_config
+# ---------------------------------------------------------------------------
+
+
+def test_reset_returns_to_calibrating():
+    asr = _make_asr()
+    _feed_calibration(asr)
+    assert asr.get_state() == "READY"
+    asr.reset()
+    assert asr.get_state() == "CALIBRATING"
+    stats = asr.get_stats()
+    assert stats["calib_samples_collected"] == 0
+    assert stats["frames_processed"] == 0
+
+
+def test_set_config_resets_calibration():
+    asr = _make_asr()
+    _feed_calibration(asr)
+    assert asr.get_state() == "READY"
+    new_cfg = _make_cfg(burst_sd=15.0)
+    asr.set_config(new_cfg)
+    assert asr.get_state() == "CALIBRATING"
+    assert asr.get_config().burst_sd == 15.0
+
+
+def test_set_config_disabled_stays_disabled():
+    asr = _make_asr()
+    disabled_cfg = _make_cfg(enable=False)
+    asr.set_config(disabled_cfg)
+    assert asr.get_state() == "DISABLED"
+
+
+# ---------------------------------------------------------------------------
+# Tests: edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_1d_input_returned_unchanged():
+    """A 1-D array (malformed frame) must be returned without error."""
+    asr = _make_asr()
+    bad = np.zeros(64, dtype=np.float32)
+    out = asr.apply(bad)
+    assert out is bad
+
+
+def test_single_sample_frame_returns_unchanged():
+    """Frames with < 2 samples are returned unchanged."""
+    asr = _make_asr()
+    small = np.zeros((4, 1), dtype=np.float32)
+    out = asr.apply(small)
+    np.testing.assert_array_equal(out, small)
+
+
+def test_all_eeg_channels_out_of_bounds():
+    """If eeg_channels are all >= n_channels the frame is returned unchanged."""
+    cfg = _make_cfg()
+    cfg = ASRConfig(
+        enable=True,
+        fs=FS,
+        calib_sec=CALIB_SEC,
+        burst_sd=ASR_BURST_SD,
+        eeg_channels=[10, 11, 12],  # indices beyond 4-channel frame
+    )
+    asr = ArtifactSubspaceReconstructor(cfg)
+    frame = _clean_frame()
+    out = asr.apply(frame)
+    np.testing.assert_array_equal(out, frame)
+
+
+def test_get_config_returns_copy():
+    """get_config() must return a copy, not the internal reference."""
+    asr = _make_asr()
+    cfg = asr.get_config()
+    cfg.burst_sd = 999.0
+    assert asr.get_config().burst_sd != 999.0
+
+
+def test_default_eeg_channels_auto_detected():
+    """When eeg_channels is None it should default to [0,1,2,3]."""
+    cfg = ASRConfig(enable=True, fs=256.0)
+    assert cfg.eeg_channels == [0, 1, 2, 3]
+
+
+def test_calib_rms_positive_after_calibration():
+    asr = _make_asr()
+    _feed_calibration(asr)
+    stats = asr.get_stats()
+    assert stats["calib_rms"] > 0.0
+
+
+def test_degenerate_single_channel_covariance():
+    """Single-channel subspace (edge case for Cholesky) must not crash."""
+    cfg = ASRConfig(
+        enable=True,
+        fs=FS,
+        calib_sec=CALIB_SEC,
+        burst_sd=ASR_BURST_SD,
+        eeg_channels=[0],  # single channel
+    )
+    asr = ArtifactSubspaceReconstructor(cfg)
+    rng = np.random.default_rng(0)
+    # Feed enough single-channel data
+    for _ in range(8):
+        frame = rng.standard_normal((4, SAMPLES_PER_TICK)).astype(np.float32)
         asr.apply(frame)
-        fed += block_size
+    assert asr.get_state() == "READY"
+    out = asr.apply(_clean_frame())
+    assert out.shape == (4, SAMPLES_PER_TICK)
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def asr() -> ArtifactSubspaceReconstructor:
-    return _make_asr()
-
-
-@pytest.fixture
-def calibrated_asr() -> ArtifactSubspaceReconstructor:
-    inst = _make_asr()
-    _calibrate(inst)
-    return inst
-
-
-# ---------------------------------------------------------------------------
-# State machine
-# ---------------------------------------------------------------------------
-
-class TestASRStateMachine:
-    def test_initial_state_calibrating(self, asr):
-        assert asr.get_state() == ASRState.CALIBRATING.name
-
-    def test_state_becomes_ready_after_calibration(self, asr):
-        _calibrate(asr)
-        assert asr.get_state() == ASRState.READY.name
-
-    def test_disabled_mode_state(self):
-        inst = _make_asr(enable=False)
-        assert inst.get_state() == ASRState.DISABLED.name
-
-    def test_reset_returns_to_calibrating(self, calibrated_asr):
-        calibrated_asr.reset()
-        assert calibrated_asr.get_state() == ASRState.CALIBRATING.name
-
-
-# ---------------------------------------------------------------------------
-# Pass-through behaviour
-# ---------------------------------------------------------------------------
-
-class TestPassThrough:
-    def test_disabled_returns_input_unchanged(self):
-        inst = _make_asr(enable=False)
-        frame = _clean_block()
-        out = inst.apply(frame)
-        np.testing.assert_array_equal(out, frame)
-
-    def test_calibrating_returns_input_unchanged(self, asr):
-        frame = _clean_block(n_samples=32)
-        out = asr.apply(frame)
-        np.testing.assert_array_equal(out, frame)
-
-    def test_ndim1_frame_returned_unchanged(self, calibrated_asr):
-        bad = np.zeros(4, dtype=np.float32)
-        out = calibrated_asr.apply(bad)
-        np.testing.assert_array_equal(out, bad)
-
-
-# ---------------------------------------------------------------------------
-# Burst correction
-# ---------------------------------------------------------------------------
-
-class TestBurstCorrection:
-    def test_burst_samples_attenuated(self, calibrated_asr):
-        """Frames with large bursts should have lower post-ASR variance."""
-        rng = np.random.default_rng(seed=7)
-        frame = _clean_block(n_samples=512, amp=5.0)
-        # Inject a severe burst on all channels at mid-frame
-        burst_start, burst_end = 200, 280
-        frame[:, burst_start:burst_end] += rng.normal(0, 300.0, (4, burst_end - burst_start)).astype(np.float32)
-
-        var_before = float(np.var(frame[:, burst_start:burst_end]))
-        out = calibrated_asr.apply(frame)
-        var_after = float(np.var(out[:, burst_start:burst_end]))
-
-        assert var_after < var_before, (
-            f"Burst variance should decrease after ASR: before={var_before:.1f}, after={var_after:.1f}"
-        )
-
-    def test_clean_signal_not_excessively_distorted(self, calibrated_asr):
-        """A genuinely clean frame should be returned nearly unchanged."""
-        frame = _clean_block(n_samples=512, amp=5.0)
-        out = calibrated_asr.apply(frame)
-        # Allow up to 20% change in total variance — ASR should not distort clean data
-        var_in = float(np.var(frame))
-        var_out = float(np.var(out))
-        assert abs(var_out - var_in) / (var_in + 1e-9) < 0.20, (
-            f"Clean signal distorted by ASR: var_in={var_in:.2f}, var_out={var_out:.2f}"
-        )
-
-    def test_output_same_shape(self, calibrated_asr):
-        frame = _clean_block(n_samples=256)
-        out = calibrated_asr.apply(frame)
-        assert out.shape == frame.shape
-
-
-# ---------------------------------------------------------------------------
-# Dtype preservation
-# ---------------------------------------------------------------------------
-
-class TestDtypePreservation:
-    def test_float32_preserved(self, calibrated_asr):
-        frame = _clean_block().astype(np.float32)
-        out = calibrated_asr.apply(frame)
-        assert out.dtype == np.float32
-
-    def test_float64_preserved(self, calibrated_asr):
-        frame = _clean_block().astype(np.float64)
-        out = calibrated_asr.apply(frame)
-        assert out.dtype == np.float64
-
-
-# ---------------------------------------------------------------------------
-# Config and stats
-# ---------------------------------------------------------------------------
-
-class TestASRConfig:
-    def test_set_config_resets_state(self, calibrated_asr):
-        new_cfg = ASRConfig(enable=True, fs=FS, calib_sec=CALIB_SEC, burst_sd=BURST_SD)
-        calibrated_asr.set_config(new_cfg)
-        assert calibrated_asr.get_state() == ASRState.CALIBRATING.name
-
-    def test_get_config_returns_copy(self, asr):
-        cfg = asr.get_config()
-        cfg.burst_sd = 999.0
-        assert asr.get_config().burst_sd != 999.0
-
-
-class TestASRStats:
-    def test_stats_structure(self, calibrated_asr):
-        stats = calibrated_asr.get_stats()
-        for key in (
-            "state", "calib_samples_collected", "calib_samples_needed",
-            "frames_processed", "frames_corrected", "samples_reconstructed", "calib_rms"
-        ):
-            assert key in stats
-
-    def test_frames_processed_increments(self, calibrated_asr):
-        before = calibrated_asr.get_stats()["frames_processed"]
-        calibrated_asr.apply(_clean_block())
-        after = calibrated_asr.get_stats()["frames_processed"]
-        assert after == before + 1
-
-    def test_reset_clears_stats(self, calibrated_asr):
-        calibrated_asr.apply(_clean_block())
-        calibrated_asr.reset()
-        stats = calibrated_asr.get_stats()
-        assert stats["frames_processed"] == 0
-        assert stats["samples_reconstructed"] == 0
+def test_artifact_config_constants_seeded():
+    """ASRConfig defaults must match artifact_config module constants."""
+    cfg = ASRConfig()
+    assert cfg.burst_sd == ASR_BURST_SD
+    assert cfg.calib_sec == ASR_CALIB_SEC

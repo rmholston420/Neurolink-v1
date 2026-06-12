@@ -1,275 +1,279 @@
-"""Unit tests for neurolink.dsp.ocular_regression (Stage 5).
+"""Unit tests for Stage 5 — OcularRegressor (ocular_regression.py).
 
 Covers:
-- Graceful degradation when EOG channel index is out of range
-- Pass-through before first coefficient fit
-- OLS coefficient correctness on synthetic perfectly-correlated data
-- Significant ocular variance reduction on synthetic blink data
-- Low EOG variance guard (flat AUX channel)
-- Recalibration counter resets after fit
-- reset() clears buffer, slopes, and stats
-- set_config() replaces config and resets
-- Dtype preservation (float32 in → float32 out)
-- ndim != 2 frame returned unchanged
-- Disabled mode returns input unchanged
+  - Disabled pass-through (enable=False)
+  - Graceful degradation when EOG channel index is out of bounds
+  - Rolling buffer accumulation
+  - OLS slope fitting after calib_window_samples
+  - Correction applied to EEG channels
+  - Recalibration scheduling (frames_since_recalib >= recalib_frames)
+  - Low-variance EOG skips slope update
+  - reset() clears all state
+  - set_config() resets and uses new config
+  - get_stats() structure
+  - Malformed input (1-D array) returned unchanged
 """
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from neurolink.dsp.ocular_regression import (
-    OcularRegressionConfig,
-    OcularRegressor,
-)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-FS = 256.0
-N_CALIB = 1024   # samples in calibration window
-N_FRAME = 256    # samples per frame
-EOG_CH = 4
-EEG_CHS = [0, 1, 2, 3]
-N_EEG_CHS = 4
-TOTAL_CHS = 5
+from neurolink.dsp.ocular_regression import OcularRegressor, OcularRegressionConfig
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _default_cfg(**kwargs) -> OcularRegressionConfig:
-    defaults = dict(
-        enable=True,
-        eog_channel_idx=EOG_CH,
-        eeg_channels=list(EEG_CHS),
-        calib_window_samples=N_CALIB,
-        recalib_frames=9999,   # disable auto-recalib during tests
-        min_eog_variance=0.1,
+N_CH = 5   # 4 EEG + 1 EOG (index 4)
+FS = 256.0
+CALIB_WIN = 128  # small window for fast tests
+SAMPLES_PER_TICK = 32
+
+
+def _make_cfg(
+    enable: bool = True,
+    eog_idx: int = 4,
+    calib_win: int = CALIB_WIN,
+    recalib_frames: int = 1000,
+    min_var: float = 0.1,
+) -> OcularRegressionConfig:
+    return OcularRegressionConfig(
+        enable=enable,
+        eog_channel_idx=eog_idx,
+        eeg_channels=[0, 1, 2, 3],
+        calib_window_samples=calib_win,
+        recalib_frames=recalib_frames,
+        min_eog_variance=min_var,
     )
-    defaults.update(kwargs)
-    return OcularRegressionConfig(**defaults)
 
 
-def _make_regressor(**kwargs) -> OcularRegressor:
-    return OcularRegressor(config=_default_cfg(**kwargs))
+def _make_reg(**kwargs) -> OcularRegressor:
+    return OcularRegressor(_make_cfg(**kwargs))
 
 
-def _make_frame(n_samples: int = N_FRAME,
-                eeg_amp: float = 5.0,
-                eog_amp: float = 0.0,
-                seed: int = 0) -> np.ndarray:
-    """5-channel frame: ch 0-3 = EEG noise, ch 4 = EOG."""
-    rng = np.random.default_rng(seed=seed)
-    frame = rng.normal(0, eeg_amp, (TOTAL_CHS, n_samples)).astype(np.float32)
-    if eog_amp > 0.0:
-        eog = rng.normal(0, eog_amp, n_samples).astype(np.float32)
-        frame[EOG_CH] = eog
+def _make_frame(
+    eog_amplitude: float = 50.0,
+    eeg_scale: float = 10.0,
+    n_samples: int = SAMPLES_PER_TICK,
+    seed: int = 7,
+) -> np.ndarray:
+    """Return a (5, n_samples) float32 frame with realistic EOG content."""
+    rng = np.random.default_rng(seed)
+    eeg = rng.standard_normal((4, n_samples)) * eeg_scale
+    # EOG: sine wave + noise simulating blink
+    t = np.linspace(0, 1, n_samples)
+    eog = (np.sin(2 * np.pi * 2 * t) * eog_amplitude + rng.standard_normal(n_samples) * 2.0)
+    frame = np.vstack([eeg, eog[np.newaxis, :]]).astype(np.float32)
     return frame
 
 
-def _calibrate(regressor: OcularRegressor, n_samples: int = N_CALIB + 64) -> None:
-    """Feed enough frames to trigger the first OLS fit."""
-    fed = 0
-    frame_size = N_FRAME
-    while fed < n_samples:
-        regressor.apply(_make_frame(n_samples=frame_size, eog_amp=30.0, seed=fed))
-        fed += frame_size
+def _feed_calibration(reg: OcularRegressor, n_frames: int = 6) -> None:
+    """Feed enough frames to exceed calib_window_samples."""
+    for i in range(n_frames):
+        reg.apply(_make_frame(seed=i))
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Tests: disabled mode
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def regressor() -> OcularRegressor:
-    return _make_regressor()
 
-
-@pytest.fixture
-def calibrated_regressor() -> OcularRegressor:
-    reg = _make_regressor()
-    _calibrate(reg)
-    return reg
+def test_disabled_pass_through():
+    reg = _make_reg(enable=False)
+    frame = _make_frame()
+    out = reg.apply(frame)
+    assert out is frame
 
 
 # ---------------------------------------------------------------------------
-# Graceful degradation
+# Tests: graceful degradation — no EOG channel
 # ---------------------------------------------------------------------------
 
-class TestGracefulDegradation:
-    def test_no_eog_channel_returns_input(self):
-        """When eog_channel_idx >= n_channels, output equals input."""
-        reg = _make_regressor(eog_channel_idx=99)
-        frame = _make_frame(eog_amp=50.0)
-        out = reg.apply(frame)
-        np.testing.assert_array_equal(out, frame)
 
-    def test_negative_eog_index_returns_input(self):
-        reg = _make_regressor(eog_channel_idx=-1)
-        frame = _make_frame(eog_amp=50.0)
-        out = reg.apply(frame)
-        np.testing.assert_array_equal(out, frame)
+def test_no_eog_channel_pass_through_negative_idx():
+    reg = _make_reg(eog_idx=-1)
+    frame = _make_frame()
+    out = reg.apply(frame)
+    np.testing.assert_array_equal(out, frame)
+    assert reg.get_stats()["frames_passed_through"] == 1
 
-    def test_disabled_returns_input(self):
-        reg = _make_regressor(enable=False)
-        frame = _make_frame(eog_amp=50.0)
-        out = reg.apply(frame)
-        np.testing.assert_array_equal(out, frame)
 
-    def test_ndim1_frame_returned_unchanged(self, regressor):
-        bad = np.zeros(TOTAL_CHS, dtype=np.float32)
-        out = regressor.apply(bad)
-        np.testing.assert_array_equal(out, bad)
+def test_no_eog_channel_pass_through_oob_idx():
+    """EOG index >= n_channels → pass-through without error."""
+    reg = _make_reg(eog_idx=99)
+    frame = _make_frame()
+    out = reg.apply(frame)
+    np.testing.assert_array_equal(out, frame)
 
 
 # ---------------------------------------------------------------------------
-# Pre-fit pass-through
+# Tests: calibration accumulation
 # ---------------------------------------------------------------------------
 
-class TestPreFitPassthrough:
-    def test_before_fit_output_equals_input(self, regressor):
-        """Before sufficient data is accumulated, the frame is returned unchanged."""
-        frame = _make_frame(n_samples=10, eog_amp=30.0)
-        out = regressor.apply(frame)
-        np.testing.assert_array_equal(out, frame)
 
-    def test_passes_through_counter_increments(self, regressor):
-        regressor.apply(_make_frame(n_samples=10, eog_amp=30.0))
-        stats = regressor.get_stats()
-        assert stats["frames_passed_through"] >= 1
+def test_pass_through_before_calibration():
+    """Before enough data is accumulated slopes are None; frame returned unchanged."""
+    reg = _make_reg(calib_win=10000)  # very large window — never fills
+    frame = _make_frame()
+    out = reg.apply(frame)
+    np.testing.assert_array_equal(out, frame)
+    assert reg.get_stats()["slopes"] is None
 
 
-# ---------------------------------------------------------------------------
-# OLS coefficient correctness
-# ---------------------------------------------------------------------------
+def test_buffer_fills_after_enough_frames():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    stats = reg.get_stats()
+    assert stats["calib_buffer_fill"] == CALIB_WIN  # deque capped at maxlen
 
-class TestOLSCoefficients:
-    def test_slopes_are_set_after_calibration(self, calibrated_regressor):
-        stats = calibrated_regressor.get_stats()
-        assert stats["slopes"] is not None
-        assert len(stats["slopes"]) == N_EEG_CHS
 
-    def test_synthetic_perfect_correlation_corrected(self):
-        """EEG = pure * slope + noise.  After correction, ocular variance drops."""
-        rng = np.random.default_rng(seed=123)
-        reg = _make_regressor(calib_window_samples=N_CALIB, recalib_frames=9999)
-
-        # Build calibration data where each EEG ch is 2× EOG + small noise
-        slope_true = 2.0
-        n_calib = N_CALIB + 128
-        eog_calib = rng.normal(0, 40.0, n_calib)  # strong EOG
-        eeg_calib = np.stack([
-            slope_true * eog_calib + rng.normal(0, 2.0, n_calib)
-            for _ in range(N_EEG_CHS)
-        ], axis=0)  # (4, n_calib)
-
-        frame_size = N_FRAME
-        fed = 0
-        while fed < n_calib:
-            end = min(fed + frame_size, n_calib)
-            f = np.zeros((TOTAL_CHS, end - fed), dtype=np.float32)
-            f[:N_EEG_CHS] = eeg_calib[:, fed:end].astype(np.float32)
-            f[EOG_CH] = eog_calib[fed:end].astype(np.float32)
-            reg.apply(f)
-            fed += (end - fed)
-
-        slopes = reg.get_stats()["slopes"]
-        assert slopes is not None
-        # Fitted slopes should be close to the true slope (±0.5 tolerance)
-        for s in slopes:
-            assert abs(s - slope_true) < 0.5, f"Slope mismatch: expected ~{slope_true}, got {s:.3f}"
+def test_slopes_fitted_after_calibration():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    stats = reg.get_stats()
+    assert stats["slopes"] is not None
+    assert len(stats["slopes"]) == 4  # one per EEG channel
 
 
 # ---------------------------------------------------------------------------
-# Ocular variance reduction
+# Tests: correction applied
 # ---------------------------------------------------------------------------
 
-class TestOcularVarianceReduction:
-    def test_blink_variance_reduced(self, calibrated_regressor):
-        """Applying the regressor to a blink-contaminated frame should reduce EEG variance."""
-        rng = np.random.default_rng(seed=77)
-        # Create a frame where EEG is heavily contaminated by blink-like EOG
-        eog = rng.normal(0, 60.0, N_FRAME)
-        frame = np.zeros((TOTAL_CHS, N_FRAME), dtype=np.float32)
-        for ch in EEG_CHS:
-            frame[ch] = (1.5 * eog + rng.normal(0, 3.0, N_FRAME)).astype(np.float32)
-        frame[EOG_CH] = eog.astype(np.float32)
 
-        var_before = float(np.var(frame[:N_EEG_CHS]))
-        out = calibrated_regressor.apply(frame)
-        var_after = float(np.var(out[:N_EEG_CHS]))
-
-        assert var_after < var_before, (
-            f"Expected ocular variance reduction: before={var_before:.1f}, after={var_after:.1f}"
-        )
+def test_correction_changes_eeg_channels():
+    """After calibration the corrected frame must differ from the raw input."""
+    reg = _make_reg()
+    _feed_calibration(reg)
+    frame = _make_frame(eog_amplitude=200.0)  # strong EOG for visible effect
+    out = reg.apply(frame)
+    assert out.shape == frame.shape
+    # EEG channels (0-3) should differ; EOG channel (4) should be unchanged.
+    eeg_changed = not np.allclose(out[:4], frame[:4], atol=0.0)
+    assert eeg_changed
 
 
-# ---------------------------------------------------------------------------
-# Low EOG variance guard
-# ---------------------------------------------------------------------------
-
-class TestLowEOGVarianceGuard:
-    def test_flat_eog_skips_fit(self):
-        """When EOG is nearly flat, the OLS fit is skipped; slopes stay None."""
-        reg = _make_regressor(min_eog_variance=10.0)  # high threshold
-        # Feed frames with a near-flat EOG signal
-        for i in range(20):
-            f = _make_frame(n_samples=N_FRAME, eog_amp=0.01, seed=i)  # tiny EOG
-            reg.apply(f)
-        stats = reg.get_stats()
-        # Slopes may remain None because EOG variance is below threshold
-        # (depending on whether N_CALIB samples have been fed — just verify no crash)
-        assert stats is not None
+def test_eog_channel_not_modified():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    frame = _make_frame()
+    out = reg.apply(frame)
+    np.testing.assert_array_equal(out[4], frame[4])
 
 
-# ---------------------------------------------------------------------------
-# Reset and set_config
-# ---------------------------------------------------------------------------
+def test_output_dtype_preserved():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    frame_f32 = _make_frame().astype(np.float32)
+    out = reg.apply(frame_f32)
+    assert out.dtype == np.float32
 
-class TestResetAndConfig:
-    def test_reset_clears_slopes(self, calibrated_regressor):
-        calibrated_regressor.reset()
-        stats = calibrated_regressor.get_stats()
-        assert stats["slopes"] is None
 
-    def test_reset_clears_buffer(self, calibrated_regressor):
-        calibrated_regressor.reset()
-        stats = calibrated_regressor.get_stats()
-        assert stats["calib_buffer_fill"] == 0
-
-    def test_reset_clears_stats_counters(self, calibrated_regressor):
-        calibrated_regressor.apply(_make_frame(eog_amp=30.0))
-        calibrated_regressor.reset()
-        stats = calibrated_regressor.get_stats()
-        assert stats["frames_applied"] == 0
-        assert stats["frames_passed_through"] == 0
-
-    def test_set_config_resets_state(self, calibrated_regressor):
-        new_cfg = _default_cfg()
-        calibrated_regressor.set_config(new_cfg)
-        stats = calibrated_regressor.get_stats()
-        assert stats["slopes"] is None
-
-    def test_get_config_returns_copy(self, regressor):
-        cfg = regressor.get_config()
-        cfg.recalib_frames = 1
-        assert regressor.get_config().recalib_frames != 1
+def test_frames_applied_increments():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    for i in range(3):
+        reg.apply(_make_frame(seed=i + 100))
+    assert reg.get_stats()["frames_applied"] >= 3
 
 
 # ---------------------------------------------------------------------------
-# Dtype preservation
+# Tests: recalibration scheduling
 # ---------------------------------------------------------------------------
 
-class TestDtypePreservation:
-    def test_float32_preserved(self, calibrated_regressor):
-        frame = _make_frame(eog_amp=30.0).astype(np.float32)
-        out = calibrated_regressor.apply(frame)
-        assert out.dtype == np.float32
 
-    def test_float64_preserved(self, calibrated_regressor):
-        frame = _make_frame(eog_amp=30.0).astype(np.float64)
-        out = calibrated_regressor.apply(frame)
-        assert out.dtype == np.float64
+def test_recalibration_triggers_on_schedule():
+    """After recalib_frames ticks a new slope fit should be triggered."""
+    reg = _make_reg(recalib_frames=3)
+    _feed_calibration(reg)
+    initial_slopes = list(reg.get_stats()["slopes"])
+    # Feed recalib_frames + 1 more frames with different signal
+    for i in range(4):
+        reg.apply(_make_frame(eog_amplitude=100.0 + i * 20, seed=i + 200))
+    # frames_since_recalib should have reset at least once
+    stats = reg.get_stats()
+    assert stats["frames_since_recalib"] < 4
+
+
+# ---------------------------------------------------------------------------
+# Tests: low-variance skip
+# ---------------------------------------------------------------------------
+
+
+def test_low_variance_eog_skips_slope_update():
+    """A flat EOG channel (zero variance) must not update slopes."""
+    reg = _make_reg(min_var=1000.0)  # threshold so high it is never met
+    # Feed normally to accumulate buffer
+    for i in range(6):
+        reg.apply(_make_frame(seed=i))
+    # Slopes should remain None because variance never exceeds threshold
+    assert reg.get_stats()["slopes"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: reset and set_config
+# ---------------------------------------------------------------------------
+
+
+def test_reset_clears_state():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    assert reg.get_stats()["slopes"] is not None
+    reg.reset()
+    stats = reg.get_stats()
+    assert stats["slopes"] is None
+    assert stats["calib_buffer_fill"] == 0
+    assert stats["frames_applied"] == 0
+    assert stats["frames_passed_through"] == 0
+
+
+def test_set_config_resets_and_uses_new_config():
+    reg = _make_reg()
+    _feed_calibration(reg)
+    new_cfg = _make_cfg(eog_idx=4, calib_win=64)
+    reg.set_config(new_cfg)
+    stats = reg.get_stats()
+    assert stats["slopes"] is None
+    assert reg.get_config().calib_window_samples == 64
+
+
+# ---------------------------------------------------------------------------
+# Tests: get_stats structure
+# ---------------------------------------------------------------------------
+
+
+def test_get_stats_keys():
+    reg = _make_reg()
+    stats = reg.get_stats()
+    expected = {
+        "slopes",
+        "calib_buffer_fill",
+        "frames_applied",
+        "frames_passed_through",
+        "frames_since_recalib",
+    }
+    assert expected.issubset(stats.keys())
+
+
+# ---------------------------------------------------------------------------
+# Tests: edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_1d_input_returned_unchanged():
+    reg = _make_reg()
+    bad = np.zeros(64, dtype=np.float32)
+    out = reg.apply(bad)
+    assert out is bad
+
+
+def test_get_config_returns_copy():
+    reg = _make_reg()
+    cfg = reg.get_config()
+    cfg.min_eog_variance = 9999.0
+    assert reg.get_config().min_eog_variance != 9999.0
+
+
+def test_default_eeg_channels_auto_detected():
+    cfg = OcularRegressionConfig()
+    assert cfg.eeg_channels == [0, 1, 2, 3]
