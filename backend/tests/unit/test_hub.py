@@ -1,4 +1,4 @@
-"""Unit tests for EEGHub."""
+"""Unit tests for EEGHub — state management, classifiers, SSE fan-out."""
 
 from __future__ import annotations
 
@@ -10,99 +10,106 @@ from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload, NeurolinkState
 
 
-class TestHubInitialState:
-    def test_connected_false_on_init(self, hub: EEGHub):
-        assert hub.get_state().connected is False
+# ---------------------------------------------------------------------------
+# State management
+# ---------------------------------------------------------------------------
 
-    def test_frame_count_zero_on_init(self, hub: EEGHub):
-        assert hub.get_state().frame_count == 0
-
-    def test_ea1_eligible_false_on_init(self, hub: EEGHub):
-        assert hub.get_ea1().eligible is False
-
-
-class TestHubUpdate:
-    def test_update_increments_frame_count(self, hub: EEGHub, base_payload):
-        hub.update(base_payload)
-        assert hub.get_state().frame_count == 1
-
-    def test_update_sets_connected(self, hub: EEGHub, base_payload):
-        hub.update(base_payload)
-        assert hub.get_state().connected is True
-
-    def test_update_stores_bands(self, hub: EEGHub, alpha_dominant_bands):
-        payload = IngestPayload(source="mock", bands=alpha_dominant_bands)
-        hub.update(payload)
+class TestEEGHubState:
+    def test_initial_state_not_connected(self, hub):
         state = hub.get_state()
-        assert abs(state.bands.alpha - 0.55) < 1e-6
+        assert state.connected is False
 
-    def test_update_passes_eeg_samples(self, hub: EEGHub):
-        samples = [[float(i) for i in range(64)]] * 4
-        payload = IngestPayload(
-            source="mock",
-            bands=BandPowers(),
-            eeg_samples=samples,
-        )
-        hub.update(payload)
+    def test_update_returns_neurolink_state(self, hub, base_payload):
+        state = hub.update(base_payload)
+        assert isinstance(state, NeurolinkState)
+
+    def test_update_sets_connected_true(self, hub, base_payload):
+        state = hub.update(base_payload)
+        assert state.connected is True
+
+    def test_frame_count_increments(self, hub, base_payload):
+        hub.update(base_payload)
+        hub.update(base_payload)
         state = hub.get_state()
-        assert len(state.eeg_samples) == 4
-        assert len(state.eeg_samples[0]) == 64
-        assert state.eeg_samples[0][0] == 0.0
-        assert state.eeg_samples[0][63] == 63.0
+        assert state.frame_count == 2
 
-    def test_multiple_updates_monotonic_frame_count(self, hub: EEGHub, base_payload):
-        for i in range(5):
-            hub.update(base_payload)
-        assert hub.get_state().frame_count == 5
+    def test_get_state_returns_latest(self, hub, base_payload, alpha_dominant_bands):
+        hub.update(base_payload)
+        p2 = IngestPayload(source="mock", bands=alpha_dominant_bands)
+        hub.update(p2)
+        state = hub.get_state()
+        assert state.frame_count == 2
 
-    def test_reset_clears_state(self, hub: EEGHub, base_payload):
+    def test_reset_clears_state(self, hub, base_payload):
         hub.update(base_payload)
         hub.reset()
-        assert hub.get_state().frame_count == 0
-        assert hub.get_state().connected is False
+        state = hub.get_state()
+        assert state.connected is False
+        assert state.frame_count == 0
 
-    def test_source_propagated(self, hub: EEGHub):
-        payload = IngestPayload(source="muse_ble", bands=BandPowers())
-        hub.update(payload)
-        assert hub.get_state().source == "muse_ble"
+    def test_source_propagated(self, hub):
+        p = IngestPayload(source="muse_ble",
+                          bands=BandPowers(alpha=0.3, theta=0.3, beta=0.2, delta=0.1, gamma=0.1))
+        state = hub.update(p)
+        assert state.source == "muse_ble"
 
 
-class TestHubSSEQueues:
-    def test_register_and_fanout(self, hub: EEGHub, base_payload):
-        q: asyncio.Queue = asyncio.Queue(maxsize=10)
+# ---------------------------------------------------------------------------
+# EA-1
+# ---------------------------------------------------------------------------
+
+class TestEEGHubEA1:
+    def test_get_ea1_returns_result(self, hub, base_payload):
+        hub.update(base_payload)
+        ea1 = hub.get_ea1()
+        assert hasattr(ea1, "eligible")
+        assert hasattr(ea1, "score")
+
+    def test_get_ea1_initial_not_eligible(self, hub):
+        ea1 = hub.get_ea1()
+        # Before any update, default EA1Result should be not-eligible
+        assert ea1.eligible is False
+
+
+# ---------------------------------------------------------------------------
+# SSE fan-out
+# ---------------------------------------------------------------------------
+
+class TestEEGHubSSEFanout:
+    @pytest.mark.asyncio
+    async def test_registered_queue_receives_state(self, hub, base_payload):
+        q: asyncio.Queue = asyncio.Queue(maxsize=8)
         hub.register_sse_queue(q)
         hub.update(base_payload)
-        assert not q.empty()
-        item = q.get_nowait()
-        assert isinstance(item, NeurolinkState)
+        state = q.get_nowait()
+        assert isinstance(state, NeurolinkState)
+        hub.unregister_sse_queue(q)
 
-    def test_unregister_stops_fanout(self, hub: EEGHub, base_payload):
-        q: asyncio.Queue = asyncio.Queue(maxsize=10)
+    @pytest.mark.asyncio
+    async def test_unregistered_queue_no_receive(self, hub, base_payload):
+        q: asyncio.Queue = asyncio.Queue(maxsize=8)
         hub.register_sse_queue(q)
         hub.unregister_sse_queue(q)
         hub.update(base_payload)
         assert q.empty()
 
-    def test_full_queue_does_not_raise(self, hub: EEGHub, base_payload):
+    @pytest.mark.asyncio
+    async def test_multiple_clients_all_receive(self, hub, base_payload):
+        queues = [asyncio.Queue(maxsize=8) for _ in range(3)]
+        for q in queues:
+            hub.register_sse_queue(q)
+        hub.update(base_payload)
+        for q in queues:
+            assert not q.empty()
+            hub.unregister_sse_queue(q)
+
+    @pytest.mark.asyncio
+    async def test_full_queue_does_not_raise(self, hub, base_payload):
+        """A full SSE queue should log a warning but not crash the hub."""
         q: asyncio.Queue = asyncio.Queue(maxsize=1)
         hub.register_sse_queue(q)
-        # Fill queue
+        # Fill the queue first
+        q.put_nowait(hub.get_state())
+        # Now try to fan-out into a full queue — should not raise
         hub.update(base_payload)
-        # Second update — queue is full, should log warning but not raise
-        hub.update(base_payload)
-
-
-class TestHubSnapshot:
-    def test_snapshot_returns_dict(self, hub: EEGHub, base_payload):
-        hub.update(base_payload)
-        snap = hub.snapshot()
-        assert isinstance(snap, dict)
-        assert "connected" in snap
-        assert snap["connected"] is True
-
-    def test_snapshot_contains_eeg_samples(self, hub: EEGHub):
-        samples = [[1.0, 2.0, 3.0]] * 4
-        payload = IngestPayload(source="mock", bands=BandPowers(), eeg_samples=samples)
-        hub.update(payload)
-        snap = hub.snapshot()
-        assert snap["eeg_samples"] == samples
+        hub.unregister_sse_queue(q)

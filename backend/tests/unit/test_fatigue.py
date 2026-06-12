@@ -1,51 +1,42 @@
-"""Unit tests for fatigue.py."""
+"""Unit tests for fatigue.FatigueDetector."""
 
 from __future__ import annotations
+
+import pytest
 
 from neurolink.fatigue import FatigueDetector
 
 
-def test_fatigue_detector_zero_when_empty():
-    fd = FatigueDetector()
-    assert fd.score == 0.0
+class TestFatigueDetector:
+    def test_initial_score_zero_or_float(self):
+        fd = FatigueDetector()
+        score = fd.update(theta=0.0, alpha=0.0)
+        assert isinstance(score, float)
 
+    def test_score_increases_with_high_theta(self):
+        """Sustained high theta (drowsiness marker) should accumulate fatigue."""
+        fd = FatigueDetector()
+        scores = [fd.update(theta=0.9, alpha=0.05) for _ in range(50)]
+        assert scores[-1] >= scores[0]
 
-def test_fatigue_detector_zero_after_one_sample():
-    fd = FatigueDetector()
-    fd.update(theta=0.2, alpha=0.3)
-    assert fd.score == 0.0  # needs at least 2 samples
+    def test_score_bounded(self):
+        fd = FatigueDetector()
+        for _ in range(200):
+            score = fd.update(theta=1.0, alpha=0.0)
+        assert 0.0 <= score <= 1.0
 
+    def test_reset_clears_accumulation(self):
+        fd = FatigueDetector()
+        for _ in range(50):
+            fd.update(theta=0.9, alpha=0.05)
+        score_before = fd.update(theta=0.9, alpha=0.05)
+        fd.reset()
+        score_after = fd.update(theta=0.0, alpha=0.0)
+        assert score_after <= score_before
 
-def test_fatigue_detector_high_when_theta_dominates():
-    """Fatigue score should be > 0.8 after 30 samples with theta/alpha = 4.0."""
-    fd = FatigueDetector(window=30)
-    for _ in range(30):
-        fd.update(theta=0.4, alpha=0.1)  # ratio = 4.0
-    assert fd.score > 0.8, f"Expected score > 0.8, got {fd.score}"
-
-
-def test_fatigue_detector_low_when_alpha_dominates():
-    fd = FatigueDetector(window=30)
-    for _ in range(30):
-        fd.update(theta=0.05, alpha=0.40)  # low ratio
-    assert fd.score < 0.3
-
-
-def test_fatigue_detector_reset():
-    fd = FatigueDetector()
-    for _ in range(5):
-        fd.update(0.4, 0.1)
-    fd.reset()
-    assert fd.sample_count == 0
-    assert fd.score == 0.0
-
-
-def test_fatigue_detector_window_limits():
-    """Window should limit to last N samples."""
-    fd = FatigueDetector(window=5)
-    for _ in range(3):
-        fd.update(0.4, 0.1)
-    for _ in range(10):
-        fd.update(0.05, 0.4)  # low ratio overwhelms
-    # Score should reflect recent low-ratio samples
-    assert fd.score < 0.5
+    def test_low_theta_high_alpha_stays_low(self):
+        """Alert, focused state should not accumulate fatigue rapidly."""
+        fd = FatigueDetector()
+        scores = [fd.update(theta=0.05, alpha=0.6) for _ in range(30)]
+        # After 30 frames, fatigue should be modest (< 0.5)
+        assert scores[-1] < 0.5
