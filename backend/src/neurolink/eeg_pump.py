@@ -2,18 +2,30 @@
 
 Builds IngestPayload from EEGSample and calls hub.update().
 Ported from Rigpa-v2 eeg_pump.py + Rigpa-v3 eeg_pump.py.
+
+Stage 0 integration
+-------------------
+When a Stage0Guard is supplied:
+  1. gate_sample() is called on every raw EEGSample to annotate motion flags.
+  2. acquisition_ready is checked before hub.update(); if not ready the frame
+     is dropped silently (except in mock mode where we always forward so that
+     tests and demos keep producing state updates).
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
 import structlog
 
 from neurolink.hardware.base import EEGSample, HardwareAdapter
 from neurolink.models.eeg import BandPowers, BreathingPayload, IMUPayload, IngestPayload
+
+if TYPE_CHECKING:
+    from neurolink.stage0 import Stage0Guard
 
 log = structlog.get_logger(__name__)
 
@@ -31,19 +43,28 @@ class EEGPump:
 
     At each tick (1/publish_hz seconds):
     1. Read EEGSample from adapter
-    2. Compute band powers from EEG buffer
-    3. Compute derived EEG (FAA, FMt)
-    4. Compute PPG HRV if buffer available
-    5. Compute breathing rate if IMU available
-    6. Compute head orientation
-    7. Build IngestPayload (including raw eeg_samples window)
-    8. Call hub.update()
+    2. [Stage 0] Apply IMU motion gate (flag_segment)
+    3. [Stage 0] Check acquisition_ready gate
+    4. Compute band powers from EEG buffer
+    5. Compute derived EEG (FAA, FMt)
+    6. Compute PPG HRV if buffer available
+    7. Compute breathing rate if IMU available
+    8. Compute head orientation
+    9. Build IngestPayload (including raw eeg_samples window)
+    10. Call hub.update()
     """
 
-    def __init__(self, adapter: HardwareAdapter, hub, publish_hz: float = 4.0) -> None:
+    def __init__(
+        self,
+        adapter: HardwareAdapter,
+        hub,
+        publish_hz: float = 4.0,
+        stage0_guard: "Stage0Guard | None" = None,
+    ) -> None:
         self._adapter = adapter
         self._hub = hub
         self._publish_hz = publish_hz
+        self._stage0 = stage0_guard
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
@@ -82,9 +103,36 @@ class EEGPump:
             await asyncio.sleep(sleep_time)
 
     async def _tick(self) -> None:
-        """Single pump tick: read sample, process, update hub."""
+        """Single pump tick: read sample, apply Stage-0 gates, process, update hub."""
         sample = await self._adapter.read_sample()
         if sample is None:
+            return
+
+        # ── Stage 0 — IMU motion gate (mutates sample.extra in-place) ────────
+        if self._stage0 is not None:
+            sample = self._stage0.gate_sample(sample)
+
+        # ── Stage 0 — impedance update from poor_contact flag ──────────────
+        if self._stage0 is not None:
+            self._stage0.impedance.update_from_sample(
+                poor_contact=sample.poor_contact,
+                channels=sample.channels,
+            )
+
+        # ── Stage 0 — acquisition readiness gate ──────────────────────────
+        # In mock mode we always forward frames so tests & demos work without
+        # going through the setup wizard.
+        if (
+            self._stage0 is not None
+            and not self._stage0.acquisition_ready
+            and sample.source != "mock"
+        ):
+            log.debug(
+                "stage0_frame_held",
+                impedance_ok=self._stage0.impedance.all_channels_ok,
+                env_ready=self._stage0.environment.is_ready,
+                motion_flagged=sample.extra.get("motion_flagged", False),
+            )
             return
 
         self._last_frame_ts = time.time()
@@ -118,16 +166,14 @@ class EEGPump:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # ── Raw EEG sample window for spectrogram / topo ─────────────────────
-        # Forward the most recent _EEG_SAMPLES_WINDOW samples per channel.
-        # Shape: [n_channels][n_samples]  — serialised as nested JSON array.
+        # ── Raw EEG sample window for spectrogram / topo ──────────────────────
         eeg_samples: list[list[float]] = []
         if eeg_arr is not None and eeg_arr.ndim == 2:
             n_samples = eeg_arr.shape[1]
             start = max(0, n_samples - _EEG_SAMPLES_WINDOW)
             eeg_samples = eeg_arr[:, start:].tolist()
 
-        # ── Derived EEG (FAA, FMt) ───────────────────────────────────────────
+        # ── Derived EEG (FAA, FMt) ─────────────────────────────────────────
         faa: float | None = None
         fmt: float | None = None
         derived: dict = {}
@@ -139,13 +185,13 @@ class EEGPump:
             faa = derived.get("faa")
             fmt = derived.get("fmt")
 
-        # ── PPG HRV ──────────────────────────────────────────────────────────
+        # ── PPG HRV ─────────────────────────────────────────────────────────
         ppg_payload = None
         if sample.ppg_buffer:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
-        # ── Breathing ────────────────────────────────────────────────────────
+        # ── Breathing ─────────────────────────────────────────────────────────
         breathing_payload: BreathingPayload | None = None
         accel_z: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
@@ -154,7 +200,7 @@ class EEGPump:
         ibis: list[float] = ppg_payload.ibi_ms if ppg_payload else []
         breathing_payload = compute_breathing(ibis, accel_z=accel_z)
 
-        # ── IMU head orientation ─────────────────────────────────────────────
+        # ── IMU head orientation ───────────────────────────────────────────────
         imu_payload: IMUPayload | None = None
         if sample.accel_buffer and sample.gyro_buffer:
             accel_arr = np.array(sample.accel_buffer, dtype=np.float32)
