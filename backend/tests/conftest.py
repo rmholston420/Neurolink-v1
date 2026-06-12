@@ -30,7 +30,7 @@ def flat_bands() -> BandPowers:
 
 @pytest.fixture()
 def alpha_dominant_bands() -> BandPowers:
-    """Alpha-dominant band powers — typical relaxed-focus state."""
+    """Alpha-dominant band powers -- typical relaxed-focus state."""
     return BandPowers(alpha=0.55, theta=0.15, beta=0.15, delta=0.10, gamma=0.05)
 
 
@@ -42,7 +42,7 @@ def base_payload(flat_bands) -> IngestPayload:
 
 @pytest.fixture()
 def eeg_buffer_256hz() -> list[list[float]]:
-    """4-channel × 256-sample synthetic EEG buffer (1 second at 256 Hz)."""
+    """4-channel x 256-sample synthetic EEG buffer (1 second at 256 Hz)."""
     rng = np.random.default_rng(42)
     t = np.linspace(0, 1, 256)
     channels = [
@@ -55,7 +55,7 @@ def eeg_buffer_256hz() -> list[list[float]]:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI / httpx fixtures — needed by test_main.py and integration tests
+# FastAPI / httpx fixtures -- needed by test_main.py and integration tests
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
