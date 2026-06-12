@@ -12,7 +12,7 @@ from sqlalchemy.pool import NullPool
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from neurolink.db.models import Base  # noqa: E402
+from neurolink.db.models import Base
 
 config = context.config
 
