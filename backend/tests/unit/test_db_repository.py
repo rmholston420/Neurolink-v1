@@ -1,107 +1,72 @@
-"""Unit tests for db.repository using an in-memory SQLite database."""
+"""Unit tests for DB repository layer.
+
+Each test uses its own isolated in-memory SQLite engine so that rows
+written by other tests (or by the lifespan startup) cannot leak in.
+"""
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from neurolink.db.models import Base
+from neurolink.db.repository import SessionLogRepository
 
 
-async def _make_factory(path: str = ":memory:"):
-    """Create a fresh db engine at *path* and return the session factory.
+# ---------------------------------------------------------------------------
+# Isolated engine fixture — prevents cross-test pollution
+# ---------------------------------------------------------------------------
 
-    Use a unique temp-file path (not `:memory:`) when the test needs a
-    truly isolated database — SQLite `:memory:` databases share state for
-    the lifetime of the cached engine object.
-    """
-    os.environ["NEUROLINK_DB_PATH"] = path
-    import neurolink.db.engine as engine_module
-
-    engine_module._engine = None
-    engine_module._session_factory = None
-    await engine_module.init_db()
-    return engine_module.get_session_factory()
-
-
-async def test_create_session_returns_entry():
-    factory = await _make_factory()
-    from neurolink.db.repository import SessionLogRepository
-
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        entry = await repo.create_session(
-            device_model="muse_s_gen1",
-            adapter_type="mock",
-            address=None,
-        )
-    assert entry.id is not None
-    assert entry.device_model == "muse_s_gen1"
+@pytest.fixture()
+async def isolated_session() -> AsyncSession:
+    """Fresh in-memory SQLite engine + session scoped to one test."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
 
 
-async def test_end_session_updates_frame_count():
-    factory = await _make_factory()
-    from neurolink.db.repository import SessionLogRepository
+# ---------------------------------------------------------------------------
+# Repository tests
+# ---------------------------------------------------------------------------
 
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        entry = await repo.create_session(device_model="mock", adapter_type="mock")
-        session_id = entry.id
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        await repo.end_session(
-            session_id=session_id,
-            frame_count=42,
-            final_region="E",
-            final_stage="Rubedo",
-            final_ea1_eligible=True,
-        )
+async def test_create_session_log(isolated_session):
+    repo = SessionLogRepository(isolated_session)
+    log = await repo.create(device_model="muse-s", adapter_type="ble")
+    assert log.id is not None
+    assert log.device_model == "muse-s"
 
 
-async def test_list_recent_returns_entries():
-    factory = await _make_factory()
-    from neurolink.db.repository import SessionLogRepository
-
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        await repo.create_session(device_model="mock", adapter_type="mock")
-        await repo.create_session(device_model="muse", adapter_type="lsl")
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        sessions = await repo.list_recent(limit=10)
-    assert len(sessions) >= 2
+async def test_update_session_log(isolated_session):
+    repo = SessionLogRepository(isolated_session)
+    log = await repo.create(device_model="muse-s", adapter_type="ble")
+    updated = await repo.update(log.id, duration_sec=120.0, notes="test note")
+    assert updated is not None
+    assert updated.duration_sec == 120.0
+    assert updated.notes == "test note"
 
 
-async def test_list_recent_empty_db_returns_empty():
-    """Use a unique temp file so we get a truly empty database."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        tmp_path = f.name
-    os.unlink(tmp_path)  # remove file so SQLAlchemy creates a fresh one
-
-    factory = await _make_factory(path=tmp_path)
-    from neurolink.db.repository import SessionLogRepository
-
-    try:
-        async with factory() as db:
-            repo = SessionLogRepository(db)
-            sessions = await repo.list_recent(limit=10)
-        assert sessions == []
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except FileNotFoundError:
-            pass
+async def test_get_session_log(isolated_session):
+    repo = SessionLogRepository(isolated_session)
+    log = await repo.create(device_model="muse-s", adapter_type="ble")
+    fetched = await repo.get(log.id)
+    assert fetched is not None
+    assert fetched.id == log.id
 
 
-async def test_create_session_no_address():
-    factory = await _make_factory()
-    from neurolink.db.repository import SessionLogRepository
+async def test_list_recent_sessions(isolated_session):
+    repo = SessionLogRepository(isolated_session)
+    for i in range(3):
+        await repo.create(device_model=f"device-{i}", adapter_type="mock")
+    sessions = await repo.list_recent(limit=10)
+    assert len(sessions) == 3
 
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        entry = await repo.create_session(
-            device_model="muse_athena",
-            adapter_type="lsl",
-            address=None,
-        )
-    assert entry.adapter_type == "lsl"
+
+async def test_list_recent_empty_db_returns_empty(isolated_session):
+    """An empty DB returns an empty list."""
+    repo = SessionLogRepository(isolated_session)
+    sessions = await repo.list_recent(limit=10)
+    assert sessions == []

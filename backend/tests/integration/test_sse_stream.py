@@ -2,13 +2,21 @@
 
 AC13: SSE stream must emit at least one named 'state' event.
 
-Strategy: the app fixture lifespan auto-connects the mock adapter and
-starts the EEG pump.  Open /stream immediately and wait for the first
-frame.  The event_generator yields the current hub state on the first
-tick (~250 ms at 4 Hz), so a 5-second timeout is generous.
+Note on ASGITransport + lifespan
+---------------------------------
+httpx ASGITransport does NOT call the FastAPI lifespan, so the mock
+adapter and EEG pump are NOT auto-started.  We must explicitly POST
+/connect to initialise the service.
 
-Do NOT call POST /connect here — the lifespan already connected; a
-second connect call would return 409 and abort the test.
+The router emits ``hub.get_state()`` immediately on stream open
+(guaranteed ≥1 frame) before entering the queue-wait loop, so we
+receive at least one frame even without a running pump.
+
+ASGITransport also buffers ALL chunks and only delivers them once the
+generator exits (more_body=False).  The router has a built-in
+test-exit path: after the primary 5s timeout and a 50ms short timeout
+both expire with no new frame AND connected==False, it returns —
+which flushes all buffered frames to the client.
 """
 
 from __future__ import annotations
@@ -27,7 +35,16 @@ async def test_sse_stream_emits_at_least_one_frame(app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as c:
-        # Give the pump one tick to push at least one frame (4 Hz → 250 ms)
+        # Explicitly connect: ASGITransport skips lifespan startup.
+        connect_r = await c.post(
+            "/api/v1/neurolink/connect",
+            json={"adapter_type": "mock", "device_model": "mock"},
+        )
+        assert connect_r.status_code == 200, (
+            f"Expected 200 from /connect, got {connect_r.status_code}: {connect_r.text}"
+        )
+
+        # Give the pump at least one tick (4 Hz → 250 ms cadence)
         await asyncio.sleep(0.35)
 
         async def collect_sse() -> None:
@@ -49,13 +66,13 @@ async def test_sse_stream_emits_at_least_one_frame(app):
                             return
 
         try:
-            await asyncio.wait_for(collect_sse(), timeout=5.0)
+            await asyncio.wait_for(collect_sse(), timeout=10.0)
         except (TimeoutError, asyncio.TimeoutError):
             pass
 
     assert len(received_frames) >= 1, (
-        "SSE stream emitted no frames within 5 seconds. "
-        "Check that EEGPump is running and hub.get_state() is non-empty."
+        "SSE stream emitted no frames. The router should emit hub.get_state() "
+        "immediately on stream open."
     )
     frame = received_frames[0]
     assert "connected" in frame
