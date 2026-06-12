@@ -12,8 +12,8 @@ When a Stage0Guard is supplied:
 Stage 1 integration
 -------------------
 After eeg_arr is assembled, apply_online_filters() runs the zero-phase
-FIR chain (HP + notch(es) + LP) on the buffer.  The filtered array
-flows into all downstream DSP.
+FIR chain (HP 0.5 Hz + notch(s) + LP 45 Hz) on the buffer.  The
+filtered array flows into all downstream DSP.
 
 Stage 2 integration
 -------------------
@@ -34,11 +34,53 @@ After Stage 2 interpolation:
        b. IMU motion gate (0.15 g RMS default) — from accel_buffer
        c. Kurtosis burst detection (excess kurtosis > 5.0 default)
   2. If decision.reject is True:
-       - Band powers, derived EEG (FAA/FMt) are zeroed / skipped
-       - artifact_rejected=True and artifact_reasons are set
-       - PPG, breathing, IMU orientation still computed (unaffected)
+       - Band powers, derived EEG (FAA/FMt), ASR, and regression are
+         skipped entirely.
+       - artifact_rejected=True and artifact_reasons are set.
+       - PPG, breathing, IMU orientation still computed (unaffected).
   3. decision is carried through IngestPayload → NeurolinkState →
      SSE stream so the frontend can show a per-frame quality indicator.
+
+Stage 4 integration — Artifact Subspace Reconstruction (ASR)
+-------------------------------------------------------------
+ASR runs on clean frames only (after Stage 3 passes the frame).
+  - Prioritised over pure ICA for low-channel-count wearable EEG;
+    ICA source separation degrades below ~64 channels.
+  - Calibration phase (first calib_sec s, default 30 s) accumulates
+    data silently; the frame is returned unchanged during this period.
+  - After calibration, burst samples (> burst_sd × calib_rms in the
+    whitened subspace) are reconstructed from the calibration
+    covariance projection.
+
+Stage 5 integration — Gratton-Coles Ocular Regression
+-------------------------------------------------------
+Ocular regression runs on clean frames only (after Stage 4).
+  - Gratton-Coles temporal regression is used in preference to ICA
+    for the same reason as Stage 4.
+  - Requires an EOG/AUX reference channel (default: channel 4, Muse
+    AUX jack).  Falls back to a pass-through when no AUX is present.
+  - OLS slope coefficients are refitted every recalib_frames ticks
+    (default 512 ≈ 2 min at 4 Hz) to track slow skin-potential drift.
+
+Pipeline per tick
+-----------------
+ 1.  Read EEGSample from adapter
+ 2.  [Stage 0] IMU motion gate
+ 3.  [Stage 0] Impedance update
+ 4.  [Stage 0] Acquisition readiness gate
+ 5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP)
+ 6.  [Stage 2] Bad channel detection (EMA update)
+ 7.  [Stage 2] Spherical spline interpolation of bad channels
+ 8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
+ 9.  [Stage 4] ASR burst reconstruction          (clean frames only)
+10.  [Stage 5] Gratton-Coles ocular regression   (clean frames only)
+11.  Band powers from corrected+filtered buffer  (clean frames only)
+12.  Derived EEG (FAA, FMt)                      (clean frames only)
+13.  PPG HRV
+14.  Breathing
+15.  IMU head orientation
+16.  Build IngestPayload
+17.  hub.update()
 """
 
 from __future__ import annotations
@@ -51,7 +93,9 @@ import numpy as np
 import structlog
 
 from neurolink.dsp.artifact_gate import ArtifactGate
+from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
+from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
 from neurolink.hardware.base import EEGSample, HardwareAdapter
@@ -72,23 +116,34 @@ _EEG_SAMPLES_WINDOW: int = 64
 class EEGPump:
     """Background asyncio task that drives the EEG processing pipeline.
 
+    Artifact strategy
+    -----------------
+    ASR (Stage 4) + temporal filtering (Stage 1) + Gratton-Coles
+    regression (Stage 5) are prioritised over pure ICA.  ICA source
+    separation degrades significantly at the 4-channel density of
+    Muse-class hardware; the temporal/regression stack achieves
+    equivalent or better correction with lower compute cost and no
+    minimum-channel requirement.
+
     Pipeline per tick
     -----------------
     1.  Read EEGSample from adapter
     2.  [Stage 0] IMU motion gate
     3.  [Stage 0] Impedance update
     4.  [Stage 0] Acquisition readiness gate
-    5.  [Stage 1] Zero-phase FIR filter chain
+    5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP)
     6.  [Stage 2] Bad channel detection (EMA update)
     7.  [Stage 2] Spherical spline interpolation of bad channels
     8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
-    9.  Band powers from interpolated+filtered buffer (clean frames only)
-    10. Derived EEG (FAA, FMt)  (clean frames only)
-    11. PPG HRV
-    12. Breathing
-    13. IMU head orientation
-    14. Build IngestPayload (bad_channels, artifact_rejected, artifact_reasons)
-    15. hub.update()
+    9.  [Stage 4] ASR burst reconstruction          (clean frames only)
+    10. [Stage 5] Gratton-Coles ocular regression   (clean frames only)
+    11. Band powers from corrected+filtered buffer  (clean frames only)
+    12. Derived EEG (FAA, FMt)                      (clean frames only)
+    13. PPG HRV
+    14. Breathing
+    15. IMU head orientation
+    16. Build IngestPayload
+    17. hub.update()
     """
 
     def __init__(
@@ -100,6 +155,8 @@ class EEGPump:
         stage1_registry: FilterChainRegistry | None = None,
         bad_channel_detector: BadChannelDetector | None = None,
         artifact_gate: ArtifactGate | None = None,
+        asr: ArtifactSubspaceReconstructor | None = None,
+        ocular_regressor: OcularRegressor | None = None,
     ) -> None:
         self._adapter = adapter
         self._hub = hub
@@ -108,6 +165,8 @@ class EEGPump:
         self._stage1: FilterChainRegistry = stage1_registry or get_registry()
         self._stage2: BadChannelDetector = bad_channel_detector or BadChannelDetector()
         self._stage3: ArtifactGate = artifact_gate or ArtifactGate()
+        self._stage4: ArtifactSubspaceReconstructor = asr or ArtifactSubspaceReconstructor()
+        self._stage5: OcularRegressor = ocular_regressor or OcularRegressor()
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
@@ -210,7 +269,6 @@ class EEGPump:
         artifact_rejected: bool = False
         artifact_reasons: list[str] = []
         if eeg_arr is not None:
-            # Build accel array for IMU gate (same buffer used by IMU orientation)
             accel_arr: np.ndarray | None = None
             if sample.accel_buffer and len(sample.accel_buffer) >= 3:
                 try:
@@ -228,6 +286,20 @@ class EEGPump:
                     n_bad_ch=len(bad_channels),
                 )
 
+        # ── Stage 4 — ASR burst reconstruction (clean frames only) ─────
+        # Prioritised over pure ICA for low-channel-count wearable EEG.
+        # Calibrates automatically on the first calib_sec seconds of
+        # clean data; passes frames through unchanged during calibration.
+        if eeg_arr is not None and not artifact_rejected:
+            eeg_arr = self._stage4.apply(eeg_arr)
+
+        # ── Stage 5 — Gratton-Coles ocular regression (clean frames) ───
+        # Temporal regression is preferred over ICA ocular removal for
+        # low-channel hardware.  Falls back to pass-through when no
+        # EOG/AUX channel is present.
+        if eeg_arr is not None and not artifact_rejected:
+            eeg_arr = self._stage5.apply(eeg_arr)
+
         # ── Band powers (clean frames only) ─────────────────────────────
         bands_dict: dict[str, float] = {}
         if eeg_arr is not None and not artifact_rejected:
@@ -241,7 +313,7 @@ class EEGPump:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # ── Raw EEG sample window (filtered + interpolated) ───────────────
+        # ── Raw EEG sample window (filtered + corrected) ─────────────────
         eeg_samples: list[list[float]] = []
         if eeg_arr is not None and eeg_arr.ndim == 2:
             n_samples = eeg_arr.shape[1]
