@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -16,6 +17,7 @@ env/
 .env
 .env.*
 !.env.example
+uv.lock
 
 # Node / Frontend
 node_modules/
@@ -24,6 +26,11 @@ dist/
 frontend/dist/
 .pnp
 .pnp.js
+
+# Vitest / coverage artifacts
+frontend/coverage/
+frontend/src/tests/__snapshots__/
+frontend/node_modules/.vite/
 
 # Testing
 .coverage
@@ -46,3 +53,7 @@ Thumbs.db
 
 # Docker
 *.log
+
+# Runtime data
+data/
+*.db
