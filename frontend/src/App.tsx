@@ -21,6 +21,9 @@ import ArtifactStatsPanel  from './components/ArtifactStatsPanel'
 import SignalPipelinePanel from './components/SignalPipelinePanel'
 import ImpedancePanel      from './components/ImpedancePanel'
 
+// Stage 3 config panel
+import ArtifactConfigPanel from './components/ArtifactConfigPanel'
+
 // Visualisation components
 import RollingSpectrogram  from './components/RollingSpectrogram'
 import TopoMap             from './components/TopoMap'
@@ -99,6 +102,18 @@ const S: Record<string, React.CSSProperties> = {
   },
   frameCount: {
     fontSize: 11, color: '#484f58', marginTop: 14, textAlign: 'center' as const,
+  },
+  // Divider between FiltersPage sections
+  divider: {
+    display: 'flex', alignItems: 'center', gap: 12,
+    margin: '8px 0',
+  },
+  dividerLine: {
+    flex: 1, height: 1, background: '#21262d',
+  },
+  dividerLabel: {
+    fontSize: 10, fontWeight: 700, color: '#484f58',
+    textTransform: 'uppercase' as const, letterSpacing: 1, flexShrink: 0,
   },
 }
 
@@ -516,7 +531,22 @@ export default function App() {
 
       {/* ═══════════════════════ FILTERS TAB ═════════════════════════════ */}
       {tab === 'filters' && (
-        <FiltersPage apiUrl={API_URL} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* ── Section 1: Pipeline stage on/off toggles ── */}
+          <FiltersPage apiUrl={API_URL} />
+
+          {/* ── Divider ── */}
+          <div style={S.divider}>
+            <div style={S.dividerLine} />
+            <span style={S.dividerLabel}>Stage 3 Thresholds</span>
+            <div style={S.dividerLine} />
+          </div>
+
+          {/* ── Section 2: Stage 3 numeric threshold editor ── */}
+          <ArtifactConfigPanel apiUrl={API_URL} />
+
+        </div>
       )}
 
       {state && (
