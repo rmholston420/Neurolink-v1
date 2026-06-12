@@ -17,7 +17,6 @@ import datetime
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import numpy as np
 import pytest
 
 from neurolink.dsp.classifiers import classify_v01, classify_v2
@@ -261,6 +260,7 @@ async def test_build_payload_accel_no_gyro_no_imu():
     """accel_buffer (3,N) present but gyro_buffer=None → imu_payload is None."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hardware.base import EEGSample
+    import numpy as np
 
     hub = EEGHub()
     pump = EEGPump(adapter=AsyncMock(), hub=hub)
