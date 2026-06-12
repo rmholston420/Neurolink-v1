@@ -3,6 +3,26 @@
 Process-global, thread-safe singleton hub.
 Dual classifier: v2 always runs; v0.1 runs only when source == 'muse_ble'.
 Ported from Rigpa-v2 hub.py + Rigpa-v3 hub.py.
+
+SSE event types
+---------------
+The hub pushes three kinds of objects onto registered SSE queues:
+
+  NeurolinkState        — normal per-frame data tick (every ~250 ms at 4 Hz)
+  _BASELINE_COMPLETE_EVENT  — fired once when the 150 s baseline finishes;
+                              clients play a bell and unlock the session UI
+  _SETTLING_EVENT       — fired on every frame held by Stage 0 acquisition
+                          guard; carries a structured reason code so the
+                          frontend can show a contextual waiting message:
+                            'impedance_unstable' — electrode contact not stable
+                            'motion_settling'    — movement; waiting for rest
+                            'env_not_ready'      — environment not ready
+                            'settling'           — generic fallback
+
+SSE consumers distinguish the three types by checking for 'event' key:
+  if isinstance(item, dict) and item.get('event') == 'baseline_complete': ...
+  if isinstance(item, dict) and item.get('event') == 'settling': ...
+  else:  # NeurolinkState
 """
 
 from __future__ import annotations
@@ -31,9 +51,13 @@ log = structlog.get_logger(__name__)
 
 _DEFAULT_BASELINE_ALPHA: float = 0.30
 
-# Sentinel object pushed to SSE queues when the baseline completes.
+# Sentinel pushed to SSE queues when the 150 s baseline completes.
 # Clients receive event type "baseline_complete" carrying this dict.
 _BASELINE_COMPLETE_EVENT: dict = {"event": "baseline_complete"}
+
+# Settling sentinel template — cloned per call with the reason injected.
+# Clients receive event type "settling" while Stage 0 holds frames.
+_SETTLING_EVENT_TYPE: str = "settling"
 
 
 class EEGHub:
@@ -44,6 +68,13 @@ class EEGHub:
     SSE fan-out uses per-client asyncio.Queue populated in update().
     Redis write-through (Task 7.2): hub.update() calls cache.push_state() after
     every state update when NEUROLINK_REDIS_ENABLED=true.
+
+    SSE queue item types
+    --------------------
+    Queues carry three distinct item types (see module docstring for details):
+      NeurolinkState            — normal data tick
+      _BASELINE_COMPLETE_EVENT  — one-shot bell event
+      settling dict             — emitted by emit_settling() on held frames
     """
 
     def __init__(self) -> None:
@@ -56,6 +87,11 @@ class EEGHub:
         # SSE fan-out queues: one per connected SSE client
         self._sse_queues: list[asyncio.Queue] = []
         self._sse_lock = threading.Lock()
+        # Diagnostic counters
+        self._settling_events_emitted: int = 0
+        self._frames_processed: int = 0
+
+    # ── Core update ────────────────────────────────────────────────────────────
 
     def update(self, payload: IngestPayload) -> NeurolinkState:
         """Ingest a new payload, run classifiers, update state, fan-out to SSE."""
@@ -131,16 +167,21 @@ class EEGHub:
                 bad_channels=payload.bad_channels,
                 artifact_rejected=payload.artifact_rejected,
                 artifact_reasons=payload.artifact_reasons,
+                artifact_annotations=payload.artifact_annotations,
+                artifact_correction_plan=payload.artifact_correction_plan,
                 channel_impedances=payload.channel_impedances,
                 baseline_phase=payload.baseline_phase,
             )
             self._state = new_state
             self._ea1 = ea1_result
+            self._frames_processed += 1
 
         self._fanout(new_state)
         self._schedule_redis_push(new_state)
 
         return new_state
+
+    # ── SSE sentinel events ────────────────────────────────────────────────────
 
     def notify_baseline_complete(self) -> None:
         """Push a baseline_complete sentinel to all SSE queues.
@@ -160,6 +201,79 @@ class EEGHub:
             except asyncio.QueueFull:
                 log.warning("sse_queue_full_dropping_baseline_event")
 
+    def emit_settling(self, reason: str = "settling") -> None:
+        """Push a settling sentinel to all SSE queues.
+
+        Called by EEGPump._tick() on every frame held by the Stage 0
+        acquisition guard (impedance not stable, motion detected, or
+        environment not ready).  The frontend uses the reason code to
+        display a contextual waiting indicator:
+
+          'impedance_unstable'  — "Adjusting headband / electrode contact"
+          'motion_settling'     — "Keep still"
+          'env_not_ready'       — "Calibrating sensors"
+          'settling'            — generic spinner
+
+        Emitting a settling event does NOT update NeurolinkState — the
+        frame was dropped before any DSP processing.  The SSE stream
+        therefore carries both normal ticks (NeurolinkState) and
+        out-of-band sentinel dicts; consumers must branch on type.
+
+        Parameters
+        ----------
+        reason:
+            One of the four reason codes above.  Unknown values are
+            forwarded as-is so future codes are forwards-compatible.
+        """
+        event = {"event": _SETTLING_EVENT_TYPE, "reason": reason}
+        with self._sse_lock:
+            queues = list(self._sse_queues)
+        for q in queues:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                log.warning(
+                    "sse_queue_full_dropping_settling_event",
+                    reason=reason,
+                )
+        with self._lock:
+            self._settling_events_emitted += 1
+        log.debug("hub_settling_emitted", reason=reason)
+
+    # ── Diagnostics ────────────────────────────────────────────────────────────
+
+    def get_stats(self) -> dict:
+        """Return lightweight diagnostic counters.
+
+        Safe to call from any thread at any time.  Values are best-effort
+        snapshots — they may be slightly stale under concurrent writes.
+
+        Returns
+        -------
+        dict with keys:
+          frames_processed        — total update() calls since construction/reset
+          settling_events_emitted — total emit_settling() calls
+          sse_client_count        — number of currently registered SSE queues
+          frame_count             — NeurolinkState.frame_count of current state
+          baseline_phase          — current baseline phase string
+        """
+        with self._lock:
+            frame_count = self._state.frame_count
+            baseline_phase = self._state.baseline_phase
+            frames_processed = self._frames_processed
+            settling_events_emitted = self._settling_events_emitted
+        with self._sse_lock:
+            sse_client_count = len(self._sse_queues)
+        return {
+            "frames_processed": frames_processed,
+            "settling_events_emitted": settling_events_emitted,
+            "sse_client_count": sse_client_count,
+            "frame_count": frame_count,
+            "baseline_phase": baseline_phase,
+        }
+
+    # ── Redis write-through ────────────────────────────────────────────────────
+
     def _schedule_redis_push(self, state: NeurolinkState) -> None:
         """Schedule a non-blocking Redis write-through for the new state."""
         try:
@@ -171,6 +285,8 @@ class EEGHub:
                 )
         except RuntimeError:
             pass
+
+    # ── State accessors ────────────────────────────────────────────────────────
 
     def get_state(self) -> NeurolinkState:
         """Return the current NeurolinkState snapshot."""
@@ -204,6 +320,10 @@ class EEGHub:
             self._latest_sample = None
             self._fatigue.reset()
             self.baseline_alpha = _DEFAULT_BASELINE_ALPHA
+            self._frames_processed = 0
+            self._settling_events_emitted = 0
+
+    # ── SSE queue management ───────────────────────────────────────────────────
 
     def register_sse_queue(self, q: asyncio.Queue) -> None:
         """Register a per-client SSE asyncio queue for fan-out."""
@@ -269,3 +389,13 @@ def snapshot() -> dict:
 def reset() -> None:
     """Module-level reset delegate."""
     _hub.reset()
+
+
+def emit_settling(reason: str = "settling") -> None:
+    """Module-level emit_settling delegate."""
+    _hub.emit_settling(reason=reason)
+
+
+def get_stats() -> dict:
+    """Module-level get_stats delegate."""
+    return _hub.get_stats()
