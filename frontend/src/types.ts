@@ -70,4 +70,9 @@ export interface NeurolinkState {
   artifact_rejected: boolean;
   /** Stage 3: human-readable list of rejection causes, e.g. ["amplitude", "kurtosis"]. */
   artifact_reasons: string[];
+  /**
+   * Per-channel impedance in kΩ.
+   * Empty object when the adapter does not expose per-channel impedance.
+   */
+  channel_impedances: Record<string, number>;
 }

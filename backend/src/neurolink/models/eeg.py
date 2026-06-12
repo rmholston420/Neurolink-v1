@@ -116,6 +116,9 @@ class IngestPayload(BaseModel):
     # Stage 3: epoch-level artifact gate decision
     artifact_rejected: bool = False
     artifact_reasons: list[str] = Field(default_factory=list)
+    # Per-channel impedance in kΩ. Only hardware adapters that expose electrode
+    # impedance need to populate this; defaults to empty dict.
+    channel_impedances: dict[str, float] = Field(default_factory=dict)
     # Filled by hub.update()
     region: str = "A"
     alchemical_stage: str = "Nigredo"
@@ -167,6 +170,8 @@ class NeurolinkState(BaseModel):
     # Stage 3: epoch-level artifact gate
     artifact_rejected: bool = False
     artifact_reasons: list[str] = Field(default_factory=list)
+    # Per-channel impedance in kΩ, forwarded verbatim from IngestPayload.
+    channel_impedances: dict[str, float] = Field(default_factory=dict)
 
 
 # ============================================================================

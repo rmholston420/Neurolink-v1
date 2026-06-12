@@ -124,6 +124,10 @@ class EEGHub:
                 fnirs_oxy=payload.fnirs_oxy,
                 fnirs_deoxy=payload.fnirs_deoxy,
                 eeg_samples=payload.eeg_samples,
+                bad_channels=payload.bad_channels,
+                artifact_rejected=payload.artifact_rejected,
+                artifact_reasons=payload.artifact_reasons,
+                channel_impedances=payload.channel_impedances,
             )
             self._state = new_state
             self._ea1 = ea1_result

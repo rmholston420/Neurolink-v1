@@ -19,6 +19,7 @@ import DeviceStatusBar  from './components/DeviceStatusBar'
 import BadChannelPanel     from './components/BadChannelPanel'
 import ArtifactStatsPanel  from './components/ArtifactStatsPanel'
 import SignalPipelinePanel from './components/SignalPipelinePanel'
+import ImpedancePanel      from './components/ImpedancePanel'
 
 // Visualisation components
 import RollingSpectrogram  from './components/RollingSpectrogram'
@@ -198,6 +199,7 @@ export default function App() {
   const artifactRejected = state?.artifact_rejected ?? false
   const artifactReasons  = state?.artifact_reasons  ?? []
   const badChannels      = state?.bad_channels       ?? []
+  const channelImpedances = state?.channel_impedances ?? {}
 
   // Shared derived data
   const eegSamples   = (state as any)?.eeg_samples ?? syntheticEEGSamples(state?.bands ?? null)
@@ -302,6 +304,12 @@ export default function App() {
               />
             </div>
 
+            {/* Electrode Impedance */}
+            <div style={S.card}>
+              <div style={S.cardTitle}>⚡ Electrode Impedance</div>
+              <ImpedancePanel impedances={channelImpedances} />
+            </div>
+
             {/* ── Mind-Wandering Detector ──────────────────────────────── */}
             <div style={S.card}>
               <div style={S.cardTitle}>🧠 Mind-Wandering Log</div>
@@ -349,7 +357,7 @@ export default function App() {
         </>
       )}
 
-      {/* ═══════════════════════ PIPELINE TAB (new) ═══════════════════════ */}
+      {/* ═══════════════════════ PIPELINE TAB ════════════════════════════ */}
       {tab === 'pipeline' && (
         <div style={S.grid}>
           {/* Unified Stage 0-3 health panel */}
@@ -388,6 +396,12 @@ export default function App() {
               contactQuality={state?.contact_quality ?? null}
               badChannels={badChannels}
             />
+          </div>
+
+          {/* Per-channel impedance */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>⚡ Electrode Impedance · Per Channel</div>
+            <ImpedancePanel impedances={channelImpedances} />
           </div>
         </div>
       )}
