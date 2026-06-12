@@ -2,35 +2,42 @@
  * DeviceStatusBar
  *
  * Compact always-visible strip showing:
- *   • Battery level  — segmented bar + numeric %
- *   • Signal quality — 4-bar icon derived from contact_quality (0–1)
- *   • Source badge   — adapter name when connected
+ *   • Battery level     — segmented bar + numeric %
+ *   • Signal quality    — 4-bar icon derived from contact_quality (0–1)
+ *   • Artifact badge    — Stage 3 per-frame quality indicator
+ *                          (green dot = clean; amber shield = rejected)
+ *   • Source badge      — adapter name when connected
  *
  * Works for both Path A (Web Bluetooth — battery from useMuseBLE) and
- * Path B (Backend BLE — contact_quality from NeurolinkState SSE stream).
+ * Path B (Backend BLE — contact_quality + artifact state from NeurolinkState SSE).
  *
  * Props:
- *   battery        number | null   0-100 from useMuseBLE; null on Path B
- *   contactQuality number | null   0-1 from NeurolinkState; null until first frame
- *   poorContact    boolean         fallback binary flag when contactQuality is null
- *   source         string | null   state.source, e.g. "muse_s" / "mock"
- *   connected      boolean
+ *   battery           number | null   0-100 from useMuseBLE; null on Path B
+ *   contactQuality    number | null   0-1 from NeurolinkState; null until first frame
+ *   poorContact       boolean         fallback binary flag when contactQuality is null
+ *   artifactRejected  boolean         Stage 3: true when the current frame was rejected
+ *   artifactReasons   string[]        Stage 3: list of rejection cause strings
+ *   source            string | null   state.source, e.g. "muse_s" / "mock"
+ *   connected         boolean
  */
 import React from 'react'
+import ArtifactBadge from './ArtifactBadge'
 
 interface Props {
-  battery:        number | null
-  contactQuality: number | null
-  poorContact:    boolean
-  source:         string | null
-  connected:      boolean
+  battery:           number | null
+  contactQuality:    number | null
+  poorContact:       boolean
+  artifactRejected:  boolean
+  artifactReasons:   string[]
+  source:            string | null
+  connected:         boolean
 }
 
-// ── Colour helpers ────────────────────────────────────────────────────────────
+// ── Colour helpers ───────────────────────────────────────────────────────────────────
 function batteryColour(pct: number): string {
-  if (pct <= 15) return '#f85149'   // red
-  if (pct <= 35) return '#e3b341'   // amber
-  return '#3fb950'                  // green
+  if (pct <= 15) return '#f85149'
+  if (pct <= 35) return '#e3b341'
+  return '#3fb950'
 }
 
 function signalColour(q: number): string {
@@ -39,14 +46,13 @@ function signalColour(q: number): string {
   return '#f85149'
 }
 
-// Resolve a 0–1 quality score from whichever signal we have
 function resolveQuality(contactQuality: number | null, poorContact: boolean): number | null {
   if (contactQuality !== null) return contactQuality
-  if (poorContact) return 0.1   // binary "bad"
-  return null                   // no data yet
+  if (poorContact) return 0.1
+  return null
 }
 
-// ── Battery bar ──────────────────────────────────────────────────────────────
+// ── Battery bar ───────────────────────────────────────────────────────────────────────
 function BatteryBar({ pct }: { pct: number | null }) {
   const SEGMENTS = 5
   const critical = pct !== null && pct <= 15
@@ -67,7 +73,6 @@ function BatteryBar({ pct }: { pct: number | null }) {
     position: 'relative',
   }
 
-  // Battery tip
   const tipStyle: React.CSSProperties = {
     width: 3,
     height: 6,
@@ -112,10 +117,9 @@ function BatteryBar({ pct }: { pct: number | null }) {
   )
 }
 
-// ── Signal bars ───────────────────────────────────────────────────────────────
+// ── Signal bars ────────────────────────────────────────────────────────────────────────
 function SignalBars({ quality }: { quality: number | null }) {
   const BARS = 4
-  // Map 0–1 quality to filled bars count (0–4)
   const filled = quality === null ? 0 : Math.max(1, Math.round(quality * BARS))
   const colour = quality !== null ? signalColour(quality) : '#484f58'
   const label  = quality !== null
@@ -146,7 +150,7 @@ function SignalBars({ quality }: { quality: number | null }) {
     >
       <div style={containerStyle}>
         {Array.from({ length: BARS }, (_, i) => {
-          const barH = 5 + i * 3   // 5px, 8px, 11px, 14px
+          const barH = 5 + i * 3
           const active = quality !== null && i < filled
           return (
             <div
@@ -168,7 +172,7 @@ function SignalBars({ quality }: { quality: number | null }) {
   )
 }
 
-// ── Source badge ──────────────────────────────────────────────────────────────
+// ── Source badge ────────────────────────────────────────────────────────────────────────
 function SourceBadge({ source, connected }: { source: string | null; connected: boolean }) {
   if (!connected || !source) return null
   return (
@@ -190,9 +194,11 @@ function SourceBadge({ source, connected }: { source: string | null; connected: 
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Main component ───────────────────────────────────────────────────────────────────────
 export default function DeviceStatusBar({
-  battery, contactQuality, poorContact, source, connected,
+  battery, contactQuality, poorContact,
+  artifactRejected, artifactReasons,
+  source, connected,
 }: Props) {
   const quality = resolveQuality(contactQuality, poorContact)
 
@@ -216,7 +222,7 @@ export default function DeviceStatusBar({
 
   return (
     <>
-      {/* Keyframe for critical battery pulse */}
+      {/* Keyframes for battery critical pulse */}
       <style>{`
         @keyframes nlPulse {
           0%, 100% { opacity: 1; }
@@ -228,6 +234,12 @@ export default function DeviceStatusBar({
         <BatteryBar pct={battery} />
         <div style={dividerStyle} />
         <SignalBars quality={quality} />
+        <div style={dividerStyle} />
+        <ArtifactBadge
+          connected={connected}
+          artifactRejected={artifactRejected}
+          artifactReasons={artifactReasons}
+        />
         {source && connected && (
           <>
             <div style={dividerStyle} />

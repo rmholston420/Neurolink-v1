@@ -64,4 +64,10 @@ export interface NeurolinkState {
    * Empty array when the adapter does not provide raw buffers.
    */
   eeg_samples: number[][];
+  /** Stage 2: channel names flagged as bad this frame. */
+  bad_channels: string[];
+  /** Stage 3: true when the epoch-level artifact gate rejected this frame. */
+  artifact_rejected: boolean;
+  /** Stage 3: human-readable list of rejection causes, e.g. ["amplitude", "kurtosis"]. */
+  artifact_reasons: string[];
 }
