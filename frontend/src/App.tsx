@@ -184,6 +184,10 @@ export default function App() {
         ? bleContactToQuality(ble.contact)
         : null
 
+  // Stage 3 artifact gate fields (default-safe when state is null)
+  const artifactRejected = state?.artifact_rejected ?? false
+  const artifactReasons  = state?.artifact_reasons  ?? []
+
   // Shared derived data
   const eegSamples   = (state as any)?.eeg_samples ?? syntheticEEGSamples(state?.bands ?? null)
   const channelBands = syntheticChannelBands(state?.bands ?? null, 'alpha')
@@ -198,6 +202,8 @@ export default function App() {
             battery={battery}
             contactQuality={contactQuality}
             poorContact={state?.poor_contact ?? false}
+            artifactRejected={artifactRejected}
+            artifactReasons={artifactReasons}
             source={connected ? (state?.source ?? null) : null}
             connected={connected}
           />
