@@ -104,6 +104,13 @@ class MuseSBleAdapter(HardwareAdapter):
         self._supervisor_task: asyncio.Task | None = None
         # Set by supervisor when it decides to give up permanently
         self._give_up: bool = False
+        # Gate flag: ensures _on_ble_disconnect executes its side-effects only
+        # once per physical disconnect event. bleak fires the disconnected_callback
+        # repeatedly on weak-RSSI links (once per BLE supervision timeout packet),
+        # which would otherwise spam logs and trigger the reconnect supervisor
+        # multiple times per drop. Cleared at the top of connect() so each new
+        # session starts clean.
+        self._disconnecting: bool = False
 
     # ───────────────────────────────────────────────────────────────────────────
     # Public HardwareAdapter interface
@@ -122,6 +129,10 @@ class MuseSBleAdapter(HardwareAdapter):
         """
         if self._connected:
             return
+
+        # Reset disconnect gate for this new session so _on_ble_disconnect
+        # will fire correctly if this connection subsequently drops.
+        self._disconnecting = False
 
         from bleak import BleakClient
 
@@ -382,14 +393,27 @@ class MuseSBleAdapter(HardwareAdapter):
         and schedules a reconnect after RECONNECT_WAIT_SEC.  Also cancels
         the keepalive task immediately so it does not attempt writes on a
         dead handle while the supervisor waits.
+
+        Guard: on weak-RSSI links bleak fires this callback repeatedly (once
+        per BLE supervision timeout packet — typically 5–20 times per physical
+        disconnect).  The _disconnecting flag ensures the side-effects below
+        execute exactly once per physical disconnect.  The flag is cleared at
+        the top of connect() so each new session starts fresh.
         """
-        if not self._give_up:
-            log.warning("muse_ble_unexpected_disconnect", address=self._address)
-            self._connected = False
-            # Cancel keepalive immediately — writing on a dead handle causes
-            # bleak to raise and can mask the real disconnect in logs.
-            if self._keepalive_task and not self._keepalive_task.done():
-                self._keepalive_task.cancel()
+        if self._give_up:
+            return
+
+        # Atomically claim the first callback; all subsequent ones are no-ops.
+        if self._disconnecting:
+            return
+        self._disconnecting = True
+
+        log.warning("muse_ble_unexpected_disconnect", address=self._address)
+        self._connected = False
+        # Cancel keepalive immediately — writing on a dead handle causes
+        # bleak to raise and can mask the real disconnect in logs.
+        if self._keepalive_task and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
 
     async def _keepalive_loop(self) -> None:
         """Send periodic keepalive commands to prevent firmware timeout."""
