@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { useNeurolinkSSE } from './hooks/useNeurolinkSSE'
 import { useMuseBLE } from './hooks/useMuseBLE'
 
-// Components
+// Core components
 import BandPowerChart    from './components/BandPowerChart'
 import SSpaceDisplay    from './components/SSpaceDisplay'
 import EA1Score         from './components/EA1Score'
@@ -14,12 +14,22 @@ import CalibrationPanel from './components/CalibrationPanel'
 import ConnectionPanel  from './components/ConnectionPanel'
 import DeviceStatusBar  from './components/DeviceStatusBar'
 
-// New visualisation components
+// Visualisation components
 import RollingSpectrogram  from './components/RollingSpectrogram'
 import TopoMap             from './components/TopoMap'
 import BandTrend           from './components/BandTrend'
 import ConnectivityArc     from './components/ConnectivityArc'
 import NeurofeedbackGauge  from './components/NeurofeedbackGauge'
+
+// ── New feature components ────────────────────────────────────────────────────
+import AudioFeedbackPanel  from './components/AudioFeedbackPanel'
+import WanderingLog        from './components/WanderingLog'
+import SessionHistoryPanel from './components/SessionHistoryPanel'
+
+// ── New feature hooks ─────────────────────────────────────────────────────────
+import { useAudioFeedback }     from './hooks/useAudioFeedback'
+import { useWanderingDetector } from './hooks/useWanderingDetector'
+import { useSessionHistory }    from './hooks/useSessionHistory'
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000'
 
@@ -44,6 +54,7 @@ const S: Record<string, React.CSSProperties> = {
   tabBar: {
     display: 'flex', gap: 2, marginBottom: 18,
     borderBottom: '1px solid #30363d', paddingBottom: 0,
+    flexWrap: 'wrap' as const,
   },
   grid: {
     display: 'grid',
@@ -85,12 +96,13 @@ const dot = (connected: boolean): React.CSSProperties => ({
   background: connected ? '#3fb950' : '#f85149',
 })
 
-type Tab = 'live' | 'spectrogram' | 'topo' | 'connectivity'
+type Tab = 'live' | 'spectrogram' | 'topo' | 'connectivity' | 'history'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'live',          label: '⚡ Live' },
   { id: 'spectrogram',   label: '🌊 Spectrogram' },
   { id: 'topo',          label: '🧠 Topo Map' },
   { id: 'connectivity',  label: '🔗 Connectivity' },
+  { id: 'history',       label: '📊 History' },
 ]
 
 function tabBtn(id: Tab, active: Tab): React.CSSProperties {
@@ -128,7 +140,6 @@ function syntheticEEGSamples(
   })
 }
 
-// Convert useMuseBLE ContactQuality (4 booleans) to a 0-1 fraction
 function bleContactToQuality(contact: { tp9: boolean; af7: boolean; af8: boolean; tp10: boolean }): number {
   const goods = [contact.tp9, contact.af7, contact.af8, contact.tp10].filter(Boolean).length
   return goods / 4
@@ -139,6 +150,11 @@ export default function App() {
   const ble        = useMuseBLE(API_URL)
   const connected  = state?.connected ?? false
   const [tab, setTab] = useState<Tab>('live')
+
+  // ── New feature hooks (all derive from `state`) ───────────────────────────
+  const audio    = useAudioFeedback(state)
+  const detector = useWanderingDetector(state)
+  const history  = useSessionHistory(state)
 
   // Battery: Path A (Web BT) has numeric %; Path B has nothing.
   const battery = ble.battery
@@ -250,6 +266,12 @@ export default function App() {
               />
             </div>
 
+            {/* ── Mind-Wandering Detector ──────────────────────────────── */}
+            <div style={S.card}>
+              <div style={S.cardTitle}>🧠 Mind-Wandering Log</div>
+              <WanderingLog detector={detector} />
+            </div>
+
             <div style={S.card}>
               <div style={S.cardTitle}>Breathing</div>
               <BreathingPanel rrBpm={state?.rr_bpm ?? null} />
@@ -267,6 +289,12 @@ export default function App() {
             <div style={S.card}>
               <div style={S.cardTitle}>Calibration</div>
               <CalibrationPanel apiUrl={API_URL} />
+            </div>
+
+            {/* ── Adaptive Audio Neurofeedback ─────────────────────────── */}
+            <div style={S.card}>
+              <div style={S.cardTitle}>🔔 Audio Neurofeedback</div>
+              <AudioFeedbackPanel audio={audio} />
             </div>
           </div>
         </>
@@ -326,6 +354,16 @@ export default function App() {
           <div style={S.card}>
             <div style={S.cardTitle}>Band Trends · 60 s</div>
             <BandTrend bands={state?.bands ?? null} baselineAlpha={null} />
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════ HISTORY TAB ═════════════════════════════ */}
+      {tab === 'history' && (
+        <div style={S.grid}>
+          <div style={S.cardWide}>
+            <div style={S.cardTitle}>📊 Session History</div>
+            <SessionHistoryPanel history={history} />
           </div>
         </div>
       )}
