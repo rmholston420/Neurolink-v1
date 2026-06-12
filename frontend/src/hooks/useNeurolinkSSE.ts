@@ -1,6 +1,41 @@
 import { useEffect, useRef, useState } from 'react'
 import type { NeurolinkState } from '../types'
 
+// ─── Sentinel shape emitted by the backend once baseline is ready ────────────
+export interface BaselineCompleteSentinel {
+  type:         'baseline_complete'
+  bands:        Record<string, number>   // mean band-powers captured during baseline
+  focus_score:  number
+  fatigue_score: number
+  sample_count: number
+  duration_s:   number
+}
+
+// ─── Union of everything the SSE stream can emit ────────────────────────────
+type SSEFrame = NeurolinkState | BaselineCompleteSentinel
+
+/**
+ * Type guard: true only for the baseline_complete sentinel dict.
+ *
+ * All normal NeurolinkState frames lack a `type` field, so checking for its
+ * presence and value is the correct discriminator — no backend schema change
+ * is required.
+ */
+export function isBaselineComplete(frame: SSEFrame): frame is BaselineCompleteSentinel {
+  return (
+    typeof (frame as BaselineCompleteSentinel).type === 'string' &&
+    (frame as BaselineCompleteSentinel).type === 'baseline_complete'
+  )
+}
+
+export interface UseNeurolinkSSEOptions {
+  /**
+   * Called once, the first time a baseline_complete sentinel arrives.
+   * Subsequent sentinels (re-calibration) also fire this callback.
+   */
+  onBaselineComplete?: (sentinel: BaselineCompleteSentinel) => void
+}
+
 /**
  * SSE consumer hook for Neurolink stream.
  *
@@ -8,12 +43,25 @@ import type { NeurolinkState } from '../types'
  * EventSource.onmessage only fires for un-named events (event: message).
  * We must use addEventListener('state', handler) to receive named events.
  *
+ * Frame taxonomy
+ * ──────────────
+ *   Normal frame  →  NeurolinkState  →  returned as hook state
+ *   Sentinel      →  BaselineCompleteSentinel  →  onBaselineComplete() called,
+ *                                                   hook state is NOT mutated
+ *
  * Auto-reconnects after disconnection with 3-second back-off.
  */
-export function useNeurolinkSSE(url: string): NeurolinkState | null {
+export function useNeurolinkSSE(
+  url: string,
+  options?: UseNeurolinkSSEOptions,
+): NeurolinkState | null {
   const [state, setState] = useState<NeurolinkState | null>(null)
-  const esRef = useRef<EventSource | null>(null)
+  const esRef        = useRef<EventSource | null>(null)
   const cancelledRef = useRef(false)
+  // Stable ref so the SSE handler can call the latest callback without
+  // needing to be re-registered whenever the parent re-renders.
+  const onBaselineRef = useRef(options?.onBaselineComplete)
+  onBaselineRef.current = options?.onBaselineComplete
 
   useEffect(() => {
     cancelledRef.current = false
@@ -24,19 +72,25 @@ export function useNeurolinkSSE(url: string): NeurolinkState | null {
       const es = new EventSource(url)
       esRef.current = es
 
-      // Handle named 'state' events from the backend SSE stream
       const stateHandler = (event: MessageEvent) => {
+        let frame: SSEFrame
         try {
-          const data: NeurolinkState = JSON.parse(event.data)
-          setState(data)
+          frame = JSON.parse(event.data) as SSEFrame
         } catch {
-          // Ignore malformed JSON frames
+          return // discard malformed JSON
+        }
+
+        if (isBaselineComplete(frame)) {
+          // Route sentinel to the callback; never touch NeurolinkState atom.
+          onBaselineRef.current?.(frame)
+        } else {
+          // Normal frame — set app state as before.
+          setState(frame)
         }
       }
 
-      // Also handle generic message events as a fallback
-      // (some SSE proxies strip the event: field)
       es.addEventListener('state', stateHandler)
+      // Fallback: some SSE proxies strip the event: field
       es.onmessage = stateHandler
 
       es.onerror = () => {
@@ -44,7 +98,6 @@ export function useNeurolinkSSE(url: string): NeurolinkState | null {
         es.close()
         esRef.current = null
         if (!cancelledRef.current) {
-          // Exponential-ish back-off capped at 3 s
           setTimeout(connect, 3000)
         }
       }
@@ -60,7 +113,7 @@ export function useNeurolinkSSE(url: string): NeurolinkState | null {
         esRef.current = null
       }
     }
-  }, [url])
+  }, [url]) // options object intentionally excluded — use the ref
 
   return state
 }
