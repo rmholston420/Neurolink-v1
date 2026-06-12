@@ -13,11 +13,11 @@ from neurolink.hub import EEGHub
 from neurolink.models.eeg import NeurolinkState
 
 
-def _make_mock_adapter(n_channels: int = 4, n_samples: int = 256) -> MagicMock:
-    """Adapter that returns one synthetic EEGSample then None."""
+def _make_mock_adapter(n_channels: int = 4, n_samples: int = 256):
+    """Return a minimal mock hardware adapter producing one EEGSample."""
     t = np.linspace(0, 1, n_samples)
     eeg_buffer = [
-        (np.sin(2 * np.pi * (10 + i * 2) * t)).tolist()
+        (np.sin(2 * np.pi * 10 * t) + 0.1 * np.random.default_rng(i).standard_normal(n_samples)).tolist()
         for i in range(n_channels)
     ]
     sample = MagicMock()
@@ -29,7 +29,6 @@ def _make_mock_adapter(n_channels: int = 4, n_samples: int = 256) -> MagicMock:
     sample.accel_buffer = []
     sample.gyro_buffer = []
     sample.poor_contact = False
-    sample.extra = {}
 
     adapter = MagicMock()
     adapter.read_sample = AsyncMock(side_effect=[sample, None])
@@ -42,7 +41,7 @@ class TestHubPipeline:
         adapter = _make_mock_adapter()
         pump = EEGPump(adapter=adapter, hub=hub)
 
-        asyncio.get_event_loop().run_until_complete(pump._tick())
+        asyncio.run(pump._tick())
 
         state = hub.get_state()
         assert state.connected is True
@@ -53,7 +52,7 @@ class TestHubPipeline:
         adapter = _make_mock_adapter(n_channels=4, n_samples=256)
         pump = EEGPump(adapter=adapter, hub=hub)
 
-        asyncio.get_event_loop().run_until_complete(pump._tick())
+        asyncio.run(pump._tick())
 
         state = hub.get_state()
         assert len(state.eeg_samples) == 4
@@ -68,7 +67,7 @@ class TestHubPipeline:
         adapter = _make_mock_adapter(n_channels=4, n_samples=256)
         pump = EEGPump(adapter=adapter, hub=hub)
 
-        asyncio.get_event_loop().run_until_complete(pump._tick())
+        asyncio.run(pump._tick())
 
         assert not q.empty()
         state: NeurolinkState = q.get_nowait()
@@ -80,7 +79,7 @@ class TestHubPipeline:
         adapter = _make_mock_adapter()
         pump = EEGPump(adapter=adapter, hub=hub)
 
-        asyncio.get_event_loop().run_until_complete(pump._tick())
+        asyncio.run(pump._tick())
 
         snap = hub.snapshot()
         assert "eeg_samples" in snap
@@ -91,7 +90,7 @@ class TestHubPipeline:
         adapter = _make_mock_adapter(n_channels=4, n_samples=512)
         pump = EEGPump(adapter=adapter, hub=hub)
 
-        asyncio.get_event_loop().run_until_complete(pump._tick())
+        asyncio.run(pump._tick())
 
         state = hub.get_state()
         total = (
@@ -118,18 +117,19 @@ class TestHubPipeline:
             s.accel_buffer = []
             s.gyro_buffer = []
             s.poor_contact = False
-            s.extra = {}
             return s
 
         adapter = MagicMock()
         adapter.read_sample = AsyncMock(
-            side_effect=[_make_sample() for _ in range(3)]
+            side_effect=[_make_sample(), _make_sample(), _make_sample(), None]
         )
         pump = EEGPump(adapter=adapter, hub=hub)
 
-        async def _run():
+        async def _run_ticks():
             for _ in range(3):
                 await pump._tick()
 
-        asyncio.get_event_loop().run_until_complete(_run())
-        assert hub.get_state().frame_count == 3
+        asyncio.run(_run_ticks())
+
+        state = hub.get_state()
+        assert state.frame_count == 3
