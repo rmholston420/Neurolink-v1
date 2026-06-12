@@ -8,6 +8,8 @@ All functions are pure; no side effects.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy import signal as sp_signal
 
@@ -29,6 +31,17 @@ _N_PPG: int = int(64.0 * 30.0)
 _N_IMU: int = int(52.0 * 4.0 * 3)  # 3 axes * 4 seconds * 52 Hz
 
 
+@dataclass
+class BandPowers:
+    """Normalised EEG band power fractions."""
+
+    delta: float = 0.0
+    theta: float = 0.0
+    alpha: float = 0.0
+    beta: float = 0.0
+    gamma: float = 0.0
+
+
 def bandpower(sig: np.ndarray, lo: float, hi: float, fs: float = _EEG_FS) -> float:
     """Compute absolute band power in [lo, hi] Hz using Welch PSD.
 
@@ -48,6 +61,56 @@ def bandpower(sig: np.ndarray, lo: float, hi: float, fs: float = _EEG_FS) -> flo
     freqs, psd = sp_signal.welch(sig, fs=fs, nperseg=nperseg)
     freq_mask = (freqs >= lo) & (freqs <= hi)
     return float(np.sum(psd[freq_mask]))
+
+
+def compute_band_powers(
+    channels: list[list[float]] | np.ndarray,
+    fs: float = _EEG_FS,
+) -> BandPowers:
+    """Compute normalised band power fractions from a list of channel arrays.
+
+    Each channel is a 1D sequence of float samples. The powers are averaged
+    across channels and then normalised so all bands sum to 1.  When the
+    signal is all-zeros the result is a BandPowers with every field 0.0.
+
+    Args:
+        channels: Sequence of 1D channel arrays, shape (n_channels, n_samples),
+                  or a 2D numpy array with the same layout.
+        fs: Sampling rate (Hz).
+
+    Returns:
+        BandPowers dataclass with .delta, .theta, .alpha, .beta, .gamma.
+    """
+    zero = BandPowers()
+
+    if channels is None:
+        return zero
+
+    arr = np.asarray(channels, dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr[np.newaxis, :]  # treat as single channel
+
+    n_channels, n_samples = arr.shape
+    if n_samples < 2:
+        return zero
+
+    abs_powers: dict[str, float] = {}
+    for band, (lo, hi) in _BANDS.items():
+        ch_powers = [bandpower(arr[ch], lo, hi, fs) for ch in range(n_channels)]
+        abs_powers[band] = float(np.mean(ch_powers))
+
+    total = sum(abs_powers.values())
+    if total <= 0:
+        return zero
+
+    normed = {band: abs_powers[band] / total for band in _BANDS}
+    return BandPowers(
+        delta=normed["delta"],
+        theta=normed["theta"],
+        alpha=normed["alpha"],
+        beta=normed["beta"],
+        gamma=normed["gamma"],
+    )
 
 
 def compute_band_powers_from_buffer(eeg: np.ndarray, fs: float = _EEG_FS) -> dict[str, float]:
@@ -75,7 +138,6 @@ def compute_band_powers_from_buffer(eeg: np.ndarray, fs: float = _EEG_FS) -> dic
     if n_samples < 2:
         return result
 
-    # Mean band powers across all channels
     abs_powers: dict[str, float] = {}
     for band, (lo, hi) in _BANDS.items():
         ch_powers = [bandpower(eeg[ch], lo, hi, fs) for ch in range(n_channels)]
