@@ -10,13 +10,14 @@ from collections.abc import AsyncGenerator
 
 import structlog
 
-from neurolink.calibration import CalibrationSession
+from neurolink.calibration import TOTAL_DURATION_SEC, CalibrationSession
 from neurolink.eeg_pump import EEGPump
 from neurolink.exceptions import AdapterAlreadyConnectedError, AdapterNotConnectedError
 from neurolink.hardware.base import HardwareAdapter
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import (
     BandPowerResponse,
+    BaselineProgressResponse,
     CalibrateResponse,
     ConnectResponse,
     DisconnectResponse,
@@ -36,6 +37,9 @@ class NeuroLinkService:
         self._adapter: HardwareAdapter | None = None
         self._pump: EEGPump | None = None
         self._calibration_task: asyncio.Task | None = None
+        # Kept alive so get_baseline_progress() can read phase/elapsed after
+        # start_calibration() returns.
+        self._calibration_session: CalibrationSession | None = None
         self._db_session_id: int | None = None
         self._db_session_factory = None
         self._adapter_type: str = "mock"
@@ -128,7 +132,7 @@ class NeuroLinkService:
         return self._hub.get_ea1()
 
     async def start_calibration(self) -> CalibrateResponse:
-        """Start a 30-second alpha baseline calibration session."""
+        """Start a 90-second alpha baseline calibration session."""
         if self._adapter is None or not self._adapter.is_connected:
             raise AdapterNotConnectedError("Cannot calibrate: no adapter connected.")
 
@@ -137,6 +141,8 @@ class NeuroLinkService:
             return CalibrateResponse(status="started", baseline_alpha=None)
 
         cal_session = CalibrationSession(self._adapter, self._hub)
+        # Store on self so get_baseline_progress() can read phase/elapsed.
+        self._calibration_session = cal_session
 
         async def _run_calibration():
             await cal_session.run()
@@ -144,6 +150,48 @@ class NeuroLinkService:
         self._calibration_task = asyncio.create_task(_run_calibration())
         log.info("calibration_task_started")
         return CalibrateResponse(status="started", baseline_alpha=None)
+
+    def get_baseline_progress(self) -> BaselineProgressResponse:
+        """Return the current calibration progress without opening a stream.
+
+        Designed for clients that poll rather than consume SSE.  Reads
+        ``phase`` and ``elapsed`` directly from the live
+        ``CalibrationSession`` instance (updated every loop tick by
+        ``CalibrationSession.run()``).
+
+        Returns a snapshot with ``phase="idle"`` and zero timings when
+        no session has been started yet, or ``phase="complete"`` once the
+        background task has finished.
+        """
+        sess = self._calibration_session
+
+        if sess is None:
+            return BaselineProgressResponse(
+                phase="idle",
+                elapsed_s=0.0,
+                remaining_s=0.0,
+                total_s=TOTAL_DURATION_SEC,
+            )
+
+        elapsed = sess.elapsed
+        remaining = max(0.0, TOTAL_DURATION_SEC - elapsed)
+
+        # If the task finished and the session's own phase hasn't been
+        # set to "complete" yet (race between task completion and the
+        # loop's last tick), clamp remaining to 0 and reflect completion.
+        task = self._calibration_task
+        if task is not None and task.done():
+            remaining = 0.0
+            phase = "complete"
+        else:
+            phase = sess.phase
+
+        return BaselineProgressResponse(
+            phase=phase,
+            elapsed_s=round(elapsed, 2),
+            remaining_s=round(remaining, 2),
+            total_s=TOTAL_DURATION_SEC,
+        )
 
     async def stream_state(self) -> AsyncGenerator[NeurolinkState]:
         """Async generator that yields NeurolinkState at hub fan-out events."""

@@ -262,6 +262,36 @@ class CalibrateResponse(BaseModel):
     baseline_alpha: float | None = None
 
 
+class BaselineProgressResponse(BaseModel):
+    """Response for GET /api/v1/neurolink/baseline.
+
+    Lightweight polling alternative to the SSE stream for clients that
+    cannot use server-sent events (e.g. simple HTTP clients, React Native
+    fetch pollers, CLI tools).
+
+    Fields
+    ------
+    phase
+        Current phase of the baseline calibration session.
+        One of: ``"idle"`` | ``"warmup"`` | ``"baseline"`` | ``"complete"``.
+        ``"idle"`` means no session has been started yet.
+    elapsed_s
+        Seconds elapsed since the session started.
+        0.0 when phase is ``"idle"``.
+    remaining_s
+        Seconds remaining until the session completes.
+        Computed as ``max(0, TOTAL_DURATION_SEC - elapsed_s)``.
+        0.0 when phase is ``"idle"`` or ``"complete"``.
+    total_s
+        Total session duration in seconds (always 90.0).
+    """
+
+    phase: str
+    elapsed_s: float
+    remaining_s: float
+    total_s: float
+
+
 class HealthResponse(BaseModel):
     status: str  # "ok" | "degraded"
     adapter_type: str
