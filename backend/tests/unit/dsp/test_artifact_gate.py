@@ -1,48 +1,130 @@
-"""Unit tests for dsp/artifact_gate.py (Stage 3 epoch-level artifact gate)."""
+"""Unit tests for dsp/artifact_gate.py — Stage 3 artifact gate."""
 
 from __future__ import annotations
+
+import threading
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-from neurolink.dsp.artifact_gate import ArtifactGate, ArtifactDecision, GateConfig
+from neurolink.dsp.artifact_config import (
+    ARTIFACT_ACCEL_RMS_G,
+    ARTIFACT_KURTOSIS_THRESHOLD,
+    ARTIFACT_PK2PK_UV,
+)
+from neurolink.dsp.artifact_gate import (
+    ArtifactDecision,
+    ArtifactGate,
+    GateConfig,
+    _ELECTRODE_PK2PK_DEFAULTS,
+)
 
-FS = 256.0
-N_SAMPLES = 256
-N_CH = 5
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def _clean_eeg(amplitude_uv: float = 20.0, seed: int = 0) -> np.ndarray:
+def _clean_eeg(
+    n_ch: int = 4,
+    n_samples: int = 256,
+    amplitude: float = 5.0,
+    seed: int = 0,
+) -> np.ndarray:
+    """Return low-amplitude Gaussian EEG unlikely to trigger any gate."""
     rng = np.random.default_rng(seed)
-    return (rng.standard_normal((N_CH, N_SAMPLES)) * amplitude_uv).astype(np.float32)
+    return (rng.standard_normal((n_ch, n_samples)) * amplitude).astype(np.float32)
 
 
-def _clean_accel(rms_g: float = 0.02) -> np.ndarray:
-    """Stationary accel — tiny constant gravity-aligned vector."""
-    rng = np.random.default_rng(99)
-    a = rng.standard_normal((3, 20)) * rms_g
-    return a.astype(np.float32)
+def _gate_with_explicit_config(
+    pk2pk_uv: float = ARTIFACT_PK2PK_UV,
+    accel_rms_g: float = ARTIFACT_ACCEL_RMS_G,
+    kurtosis_threshold: float = ARTIFACT_KURTOSIS_THRESHOLD,
+    electrode_type: str = "wet",
+) -> ArtifactGate:
+    """Bypass adapter_factory auto-detection by injecting an explicit config."""
+    cfg = GateConfig(
+        electrode_type=electrode_type,
+        pk2pk_uv=pk2pk_uv,
+        accel_rms_g=accel_rms_g,
+        kurtosis_threshold=kurtosis_threshold,
+    )
+    return ArtifactGate(config=cfg)
 
 
 # ---------------------------------------------------------------------------
-# Clean frame — all gates pass
+# GateConfig
 # ---------------------------------------------------------------------------
 
-class TestCleanFrame:
-    def test_clean_eeg_no_reject(self):
-        gate = ArtifactGate(GateConfig(pk2pk_uv=100.0, accel_rms_g=0.15))
-        eeg = _clean_eeg(amplitude_uv=10.0)  # ±10 µV noise → pk2pk ~40 µV
-        decision = gate.evaluate(eeg, _clean_accel())
-        assert decision.clean
-        assert decision.reasons == []
+class TestGateConfig:
+    def test_explicit_electrode_type_preserved(self):
+        cfg = GateConfig(electrode_type="wet", pk2pk_uv=100.0)
+        assert cfg.electrode_type == "wet"
+        assert cfg.pk2pk_uv == pytest.approx(100.0)
 
-    def test_clean_frame_counted_in_stats(self):
-        gate = ArtifactGate()
-        eeg = _clean_eeg(amplitude_uv=5.0)
-        gate.evaluate(eeg, _clean_accel())
-        stats = gate.get_stats()
-        assert stats["total_frames"] == 1
-        assert stats["rejected_frames"] == 0
+    def test_dry_pk2pk_tighter_than_wet(self):
+        assert _ELECTRODE_PK2PK_DEFAULTS["dry"] < _ELECTRODE_PK2PK_DEFAULTS["wet"]
+
+    def test_semi_pk2pk_between_dry_and_wet(self):
+        assert _ELECTRODE_PK2PK_DEFAULTS["dry"] < _ELECTRODE_PK2PK_DEFAULTS["semi"] < _ELECTRODE_PK2PK_DEFAULTS["wet"]
+
+    def test_defaults_from_artifact_config(self):
+        cfg = GateConfig(electrode_type="wet", pk2pk_uv=None)
+        assert cfg.pk2pk_uv == pytest.approx(ARTIFACT_PK2PK_UV)
+
+
+# ---------------------------------------------------------------------------
+# ArtifactDecision
+# ---------------------------------------------------------------------------
+
+class TestArtifactDecision:
+    def test_default_is_clean(self):
+        d = ArtifactDecision()
+        assert d.clean is True
+        assert d.reject is False
+        assert d.reasons == []
+
+    def test_add_reason_sets_reject(self):
+        d = ArtifactDecision()
+        d.add_reason("test_reason")
+        assert d.reject is True
+        assert d.clean is False
+        assert "test_reason" in d.reasons
+
+    def test_multiple_reasons(self):
+        d = ArtifactDecision()
+        d.add_reason("a")
+        d.add_reason("b")
+        assert len(d.reasons) == 2
+
+
+# ---------------------------------------------------------------------------
+# ArtifactGate.evaluate() — guards
+# ---------------------------------------------------------------------------
+
+class TestArtifactGateGuards:
+    def test_none_eeg_returns_clean(self):
+        gate = _gate_with_explicit_config()
+        result = gate.evaluate(None)
+        assert result.clean is True
+
+    def test_1d_eeg_returns_clean(self):
+        gate = _gate_with_explicit_config()
+        result = gate.evaluate(np.zeros(256, dtype=np.float32))
+        assert result.clean is True
+
+    def test_single_sample_returns_clean(self):
+        gate = _gate_with_explicit_config()
+        result = gate.evaluate(np.zeros((4, 1), dtype=np.float32))
+        assert result.clean is True
+
+    def test_5ch_eeg_only_evaluates_first_4(self):
+        """AUX channel (index 4) must not trigger amplitude gate."""
+        gate = _gate_with_explicit_config(pk2pk_uv=10.0)
+        eeg = np.zeros((5, 256), dtype=np.float32)
+        eeg[4, :] = 500.0  # AUX — extreme but should be ignored
+        result = gate.evaluate(eeg)
+        assert result.clean is True
 
 
 # ---------------------------------------------------------------------------
@@ -50,32 +132,42 @@ class TestCleanFrame:
 # ---------------------------------------------------------------------------
 
 class TestAmplitudeGate:
-    def test_high_amplitude_rejected(self):
-        gate = ArtifactGate(GateConfig(pk2pk_uv=100.0, enable_imu=False, enable_kurtosis=False))
-        eeg = _clean_eeg()
-        # Inject a large spike on AF7 (index 1)
-        eeg[1, 100] = 200.0
-        eeg[1, 101] = -200.0  # peak-to-peak = 400 µV
-        decision = gate.evaluate(eeg)
-        assert decision.reject
-        assert any("amplitude" in r for r in decision.reasons)
+    def test_clean_signal_passes(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=100.0)
+        eeg = _clean_eeg(amplitude=5.0)
+        result = gate.evaluate(eeg)
+        assert result.clean is True
 
-    def test_amplitude_gate_disabled(self):
-        gate = ArtifactGate(
-            GateConfig(pk2pk_uv=1.0, enable_amplitude=False, enable_imu=False, enable_kurtosis=False)
-        )
-        eeg = _clean_eeg(amplitude_uv=50.0)  # big but gate disabled
-        decision = gate.evaluate(eeg)
-        assert decision.clean
+    def test_over_threshold_rejected(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=50.0)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 0] = 200.0  # ch0 pk2pk = 200 µV > 50
+        result = gate.evaluate(eeg)
+        assert result.reject is True
+        assert any("amplitude" in r for r in result.reasons)
 
-    def test_aux_channel_ignored_by_amplitude_gate(self):
-        gate = ArtifactGate(GateConfig(pk2pk_uv=100.0, enable_imu=False, enable_kurtosis=False))
-        eeg = _clean_eeg(amplitude_uv=5.0)
-        # Only AUX (index 4) has high amplitude
-        eeg[4, :] = 500.0
-        eeg[4, 0] = -500.0
-        decision = gate.evaluate(eeg)
-        assert decision.clean  # AUX excluded from EEG checks
+    def test_reason_contains_electrode_type(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=50.0, electrode_type="dry")
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[1, 0] = 300.0
+        result = gate.evaluate(eeg)
+        assert any("dry" in r for r in result.reasons)
+
+    def test_exactly_at_threshold_passes(self):
+        """pk2pk == threshold is not > threshold; should pass."""
+        gate = _gate_with_explicit_config(pk2pk_uv=100.0)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 0] = 100.0   # pk2pk = 100.0 == threshold → passes
+        result = gate.evaluate(eeg)
+        assert result.clean is True
+
+    def test_disabled_amplitude_gate_passes_large_signal(self):
+        cfg = GateConfig(electrode_type="wet", pk2pk_uv=10.0, enable_amplitude=False)
+        gate = ArtifactGate(config=cfg)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 0] = 9999.0
+        result = gate.evaluate(eeg)
+        assert result.clean is True
 
 
 # ---------------------------------------------------------------------------
@@ -83,42 +175,36 @@ class TestAmplitudeGate:
 # ---------------------------------------------------------------------------
 
 class TestIMUGate:
-    def test_motion_rejected(self):
-        gate = ArtifactGate(
-            GateConfig(accel_rms_g=0.15, enable_amplitude=False, enable_kurtosis=False)
-        )
-        # 1 g RMS — vigorous movement
-        accel = np.ones((3, 20), dtype=np.float32)
-        eeg = _clean_eeg()
-        decision = gate.evaluate(eeg, accel)
-        assert decision.reject
-        assert any("imu" in r for r in decision.reasons)
+    def test_low_accel_passes(self):
+        gate = _gate_with_explicit_config(accel_rms_g=0.15)
+        accel = np.ones((3, 64), dtype=np.float32) * 0.05
+        result = gate.evaluate(_clean_eeg(), accel=accel)
+        assert result.clean is True
+
+    def test_high_accel_rejected(self):
+        gate = _gate_with_explicit_config(accel_rms_g=0.15)
+        accel = np.ones((3, 64), dtype=np.float32) * 5.0  # way above threshold
+        result = gate.evaluate(_clean_eeg(), accel=accel)
+        assert result.reject is True
+        assert any("imu" in r for r in result.reasons)
 
     def test_no_accel_skips_imu_gate(self):
-        gate = ArtifactGate(
-            GateConfig(enable_amplitude=False, enable_kurtosis=False)
-        )
-        eeg = _clean_eeg()
-        decision = gate.evaluate(eeg, accel=None)
-        assert decision.clean
+        gate = _gate_with_explicit_config()
+        result = gate.evaluate(_clean_eeg(), accel=None)
+        assert not any("imu" in r for r in result.reasons)
 
-    def test_imu_gate_disabled(self):
-        gate = ArtifactGate(
-            GateConfig(accel_rms_g=0.0001, enable_imu=False, enable_amplitude=False, enable_kurtosis=False)
-        )
-        accel = np.ones((3, 20), dtype=np.float32) * 2.0
-        eeg = _clean_eeg()
-        decision = gate.evaluate(eeg, accel)
-        assert decision.clean
+    def test_1d_accel_accepted(self):
+        gate = _gate_with_explicit_config(accel_rms_g=0.15)
+        accel = np.ones(64, dtype=np.float32) * 0.05
+        result = gate.evaluate(_clean_eeg(), accel=accel)
+        assert result.clean is True
 
-    def test_1d_accel_handled(self):
-        gate = ArtifactGate(
-            GateConfig(accel_rms_g=0.15, enable_amplitude=False, enable_kurtosis=False)
-        )
-        accel_1d = np.ones(20, dtype=np.float32) * 0.01  # low — should pass
-        eeg = _clean_eeg()
-        decision = gate.evaluate(eeg, accel_1d)
-        assert decision.clean
+    def test_disabled_imu_gate_ignores_motion(self):
+        cfg = GateConfig(electrode_type="wet", pk2pk_uv=100.0, accel_rms_g=0.01, enable_imu=False)
+        gate = ArtifactGate(config=cfg)
+        accel = np.ones((3, 64), dtype=np.float32) * 10.0
+        result = gate.evaluate(_clean_eeg(), accel=accel)
+        assert not any("imu" in r for r in result.reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -126,90 +212,174 @@ class TestIMUGate:
 # ---------------------------------------------------------------------------
 
 class TestKurtosisGate:
-    def test_high_kurtosis_burst_rejected(self):
-        gate = ArtifactGate(
-            GateConfig(kurtosis_threshold=5.0, enable_amplitude=False, enable_imu=False)
-        )
-        eeg = _clean_eeg(amplitude_uv=5.0)  # baseline: near-Gaussian
-        # Inject sharp burst on TP9 (index 0) — creates high kurtosis
-        eeg[0] = 0.0
-        eeg[0, 50] = 300.0   # single spike on flat background
-        decision = gate.evaluate(eeg)
-        assert decision.reject
-        assert any("kurtosis" in r for r in decision.reasons)
+    def test_gaussian_signal_passes(self):
+        """Gaussian noise has kurtosis ≈ 0 (Fisher), well below threshold 5."""
+        gate = _gate_with_explicit_config(kurtosis_threshold=5.0)
+        rng = np.random.default_rng(42)
+        eeg = rng.standard_normal((4, 512)).astype(np.float32)
+        result = gate.evaluate(eeg)
+        # Gaussian kurtosis ≈ 0 — should pass
+        assert not any("kurtosis" in r for r in result.reasons)
 
-    def test_gaussian_noise_passes_kurtosis(self):
-        gate = ArtifactGate(
-            GateConfig(kurtosis_threshold=5.0, enable_amplitude=False, enable_imu=False)
-        )
-        rng = np.random.default_rng(7)
-        eeg = (rng.standard_normal((N_CH, 1024)) * 10.0).astype(np.float32)
-        decision = gate.evaluate(eeg)
-        # Gaussian kurtosis ≈ 0 (Fisher); should not exceed threshold of 5
-        assert decision.clean
+    def test_spike_causes_high_kurtosis(self):
+        gate = _gate_with_explicit_config(kurtosis_threshold=3.0)
+        eeg = np.zeros((4, 512), dtype=np.float32)
+        eeg[0, 256] = 1000.0  # single spike → very high kurtosis
+        result = gate.evaluate(eeg)
+        assert any("kurtosis" in r for r in result.reasons)
 
-    def test_kurtosis_gate_disabled(self):
-        gate = ArtifactGate(
-            GateConfig(kurtosis_threshold=0.0, enable_kurtosis=False,
-                       enable_amplitude=False, enable_imu=False)
-        )
-        eeg = _clean_eeg()
-        decision = gate.evaluate(eeg)
-        assert decision.clean
+    def test_disabled_kurtosis_gate(self):
+        cfg = GateConfig(electrode_type="wet", pk2pk_uv=500.0, kurtosis_threshold=0.0001, enable_kurtosis=False)
+        gate = ArtifactGate(config=cfg)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 128] = 9999.0
+        result = gate.evaluate(eeg)
+        assert not any("kurtosis" in r for r in result.reasons)
 
 
 # ---------------------------------------------------------------------------
-# Stats and config API
+# Multiple simultaneous flags
 # ---------------------------------------------------------------------------
 
-class TestStatsAndConfig:
-    def test_rejection_rate_computed(self):
-        gate = ArtifactGate(GateConfig(pk2pk_uv=1.0, enable_imu=False, enable_kurtosis=False))
-        eeg_bad = _clean_eeg(amplitude_uv=50.0)  # will be rejected
-        eeg_clean = np.zeros((N_CH, N_SAMPLES), dtype=np.float32)  # pk2pk=0
-        gate.evaluate(eeg_bad)
-        gate.evaluate(eeg_clean)
-        stats = gate.get_stats()
-        assert stats["total_frames"] == 2
-        assert stats["rejected_frames"] == 1
-        assert stats["rejection_rate"] == 0.5
+class TestMultipleReasons:
+    def test_amplitude_and_imu_both_flagged(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=10.0, accel_rms_g=0.01)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 0] = 500.0
+        accel = np.ones((3, 64), dtype=np.float32) * 5.0
+        result = gate.evaluate(eeg, accel=accel)
+        assert result.reject is True
+        assert any("amplitude" in r for r in result.reasons)
+        assert any("imu" in r for r in result.reasons)
 
-    def test_reset_stats_clears_counters(self):
-        gate = ArtifactGate(GateConfig(pk2pk_uv=1.0, enable_imu=False, enable_kurtosis=False))
-        eeg = _clean_eeg(amplitude_uv=50.0)
+
+# ---------------------------------------------------------------------------
+# get_stats / reset_stats
+# ---------------------------------------------------------------------------
+
+class TestArtifactGateStats:
+    def test_initial_stats_zero(self):
+        gate = _gate_with_explicit_config()
+        s = gate.get_stats()
+        assert s["total_frames"] == 0
+        assert s["rejected_frames"] == 0
+        assert s["rejection_rate"] == 0.0
+
+    def test_clean_frame_increments_total(self):
+        gate = _gate_with_explicit_config()
+        gate.evaluate(_clean_eeg())
+        assert gate.get_stats()["total_frames"] == 1
+        assert gate.get_stats()["rejected_frames"] == 0
+
+    def test_rejected_frame_increments_both(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=10.0)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 0] = 500.0
         gate.evaluate(eeg)
+        s = gate.get_stats()
+        assert s["total_frames"] == 1
+        assert s["rejected_frames"] == 1
+        assert s["rejection_rate"] == pytest.approx(1.0)
+
+    def test_rejection_rate_fraction(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=10.0)
+        clean = _clean_eeg(amplitude=1.0)
+        dirty = np.zeros((4, 256), dtype=np.float32)
+        dirty[0, 0] = 500.0
+        gate.evaluate(clean)
+        gate.evaluate(dirty)
+        s = gate.get_stats()
+        assert s["rejection_rate"] == pytest.approx(0.5)
+
+    def test_reset_stats_clears_counts(self):
+        gate = _gate_with_explicit_config()
+        gate.evaluate(_clean_eeg())
         gate.reset_stats()
-        stats = gate.get_stats()
-        assert stats["total_frames"] == 0
-        assert stats["rejected_frames"] == 0
+        s = gate.get_stats()
+        assert s["total_frames"] == 0
+        assert s["rejected_frames"] == 0
 
-    def test_set_config_updates_thresholds(self):
-        gate = ArtifactGate()
-        gate.set_config(GateConfig(pk2pk_uv=200.0, accel_rms_g=0.5))
-        cfg = gate.get_config()
-        assert cfg.pk2pk_uv == 200.0
-        assert cfg.accel_rms_g == 0.5
+    def test_none_eeg_does_not_increment_total(self):
+        """Guard return before the counter increment — None skips counting."""
+        gate = _gate_with_explicit_config()
+        gate.evaluate(None)
+        assert gate.get_stats()["total_frames"] == 0
 
 
 # ---------------------------------------------------------------------------
-# Edge cases
+# get_config / set_config
 # ---------------------------------------------------------------------------
 
-class TestEdgeCases:
-    def test_none_eeg_returns_clean_decision(self):
-        gate = ArtifactGate()
-        decision = gate.evaluate(None)  # type: ignore[arg-type]
-        assert decision.clean
+class TestArtifactGateConfig:
+    def test_get_config_returns_copy(self):
+        gate = _gate_with_explicit_config()
+        c1 = gate.get_config()
+        c2 = gate.get_config()
+        assert c1 is not c2
 
-    def test_single_sample_buffer_returns_clean(self):
-        gate = ArtifactGate()
-        eeg = np.zeros((N_CH, 1), dtype=np.float32)
-        decision = gate.evaluate(eeg)
-        assert decision.clean
+    def test_set_config_updates_pk2pk(self):
+        gate = _gate_with_explicit_config(pk2pk_uv=100.0)
+        gate.set_config(GateConfig(electrode_type="wet", pk2pk_uv=50.0))
+        assert gate.get_config().pk2pk_uv == pytest.approx(50.0)
 
-    def test_1d_eeg_returns_clean(self):
-        """1-D input is rejected early (requires ndim==2)."""
-        gate = ArtifactGate()
-        eeg = np.zeros(N_SAMPLES, dtype=np.float32)
-        decision = gate.evaluate(eeg)  # type: ignore[arg-type]
-        assert decision.clean
+    def test_set_config_live_effect(self):
+        """Frame that was clean under old config is rejected after set_config."""
+        gate = _gate_with_explicit_config(pk2pk_uv=200.0)
+        eeg = np.zeros((4, 256), dtype=np.float32)
+        eeg[0, 0] = 120.0  # pk2pk=120, clean under 200 threshold
+        assert gate.evaluate(eeg).clean is True
+
+        gate.set_config(GateConfig(electrode_type="wet", pk2pk_uv=80.0))
+        assert gate.evaluate(eeg).reject is True
+
+
+# ---------------------------------------------------------------------------
+# Thread safety
+# ---------------------------------------------------------------------------
+
+class TestArtifactGateThreadSafety:
+    def test_concurrent_evaluate_does_not_raise(self):
+        gate = _gate_with_explicit_config()
+        errors: list[Exception] = []
+
+        def worker():
+            try:
+                for _ in range(30):
+                    gate.evaluate(_clean_eeg())
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+
+    def test_concurrent_set_config_and_evaluate(self):
+        gate = _gate_with_explicit_config()
+        errors: list[Exception] = []
+
+        def evaluator():
+            try:
+                for _ in range(30):
+                    gate.evaluate(_clean_eeg())
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def configurator():
+            try:
+                for _ in range(10):
+                    gate.set_config(GateConfig(electrode_type="wet", pk2pk_uv=100.0))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = (
+            [threading.Thread(target=evaluator) for _ in range(3)]
+            + [threading.Thread(target=configurator)]
+        )
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
