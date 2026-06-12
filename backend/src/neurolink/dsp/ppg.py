@@ -7,6 +7,7 @@ Uses neurokit2 for R-peak detection and HRV metrics.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,7 +18,11 @@ from neurolink.models.eeg import PPGPayload
 log = structlog.get_logger(__name__)
 
 _PPG_FS: float = 64.0
-_MIN_SAMPLES: int = int(_PPG_FS * 10)  # 10 seconds minimum
+# 15 s minimum — neurokit2 needs at least ~15 s of clean PPG signal to
+# reliably detect R-peaks at rest.  The previous 10 s threshold was too
+# short and caused 'index 0 is out of bounds' crashes on real hardware
+# while the ring buffer was still filling up.
+_MIN_SAMPLES: int = int(_PPG_FS * 15)  # 960 samples
 _HR_VALID_MIN: float = 30.0
 _HR_VALID_MAX: float = 200.0
 
@@ -49,14 +54,29 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
     try:
         import neurokit2 as nk
 
-        _processed, info = nk.ppg_process(ppg_arr, sampling_rate=int(fs))
-        peaks = info.get("PPG_Peaks", [])
+        # Suppress the "Too few peaks" NeuroKitWarning — it floods stderr on
+        # real hardware during the first few seconds after connect when the
+        # signal quality is still settling.  We already handle the empty-peaks
+        # case below; the warning adds no actionable information.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=nk.misc.NeuroKitWarning)
+            warnings.filterwarnings("ignore", message="Too few peaks")
+            _processed, info = nk.ppg_process(ppg_arr, sampling_rate=int(fs))
 
-        if len(peaks) < 3:
+        peaks = info.get("PPG_Peaks", np.array([]))
+
+        # Guard: neurokit2 can return an empty peaks array on short/noisy signal
+        if peaks is None or len(peaks) < 3:
             return empty
 
         # Compute IBI in ms
-        ibi_ms = list((np.diff(peaks) / fs * 1000).astype(float))
+        ibi_raw = np.diff(peaks) / fs * 1000
+
+        # Guard: np.diff on a 1-element array returns empty
+        if len(ibi_raw) == 0:
+            return empty
+
+        ibi_ms = list(ibi_raw.astype(float))
 
         # Filter physiologically valid IBIs
         ibi_ms = [ibi for ibi in ibi_ms if 300 <= ibi <= 2000]
@@ -64,7 +84,13 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
         if not ibi_ms:
             return empty
 
-        hr_bpm = 60000.0 / float(np.mean(ibi_ms))
+        mean_ibi = float(np.mean(ibi_ms))
+
+        # Guard: protect against NaN/Inf/zero before division
+        if not math.isfinite(mean_ibi) or mean_ibi <= 0:
+            return empty
+
+        hr_bpm = 60000.0 / mean_ibi
         if not (_HR_VALID_MIN <= hr_bpm <= _HR_VALID_MAX):
             return empty
 
