@@ -1,15 +1,21 @@
 """EEGPump — background asyncio task that reads from the adapter at 4 Hz.
 
 Builds IngestPayload from EEGSample and calls hub.update().
-Ported from Rigpa-v2 eeg_pump.py + Rigpa-v3 eeg_pump.py.
 
 Stage 0 integration
 -------------------
 When a Stage0Guard is supplied:
   1. gate_sample() is called on every raw EEGSample to annotate motion flags.
   2. acquisition_ready is checked before hub.update(); if not ready the frame
-     is dropped silently (except in mock mode where we always forward so that
-     tests and demos keep producing state updates).
+     is dropped silently (except in mock mode).
+
+Stage 1 integration
+-------------------
+After eeg_arr is assembled from eeg_buffer, apply_online_filters() is called.
+The cleaned array flows into band powers, derived EEG, and the raw
+eeg_samples window sent to the front-end.  The filter registry is module-level
+(FilterChainRegistry singleton) so no constructor injection is required;
+an optional stage1_registry kwarg is accepted for testing.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import structlog
 
+from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.hardware.base import EEGSample, HardwareAdapter
 from neurolink.models.eeg import BandPowers, BreathingPayload, IMUPayload, IngestPayload
 
@@ -42,16 +49,18 @@ class EEGPump:
     """Background asyncio task that drives the EEG processing pipeline.
 
     At each tick (1/publish_hz seconds):
-    1. Read EEGSample from adapter
-    2. [Stage 0] Apply IMU motion gate (flag_segment)
-    3. [Stage 0] Check acquisition_ready gate
-    4. Compute band powers from EEG buffer
-    5. Compute derived EEG (FAA, FMt)
-    6. Compute PPG HRV if buffer available
-    7. Compute breathing rate if IMU available
-    8. Compute head orientation
-    9. Build IngestPayload (including raw eeg_samples window)
-    10. Call hub.update()
+    1.  Read EEGSample from adapter
+    2.  [Stage 0] Apply IMU motion gate (flag_segment)
+    3.  [Stage 0] Update impedance from poor_contact flag
+    4.  [Stage 0] Check acquisition_ready gate
+    5.  [Stage 1] Apply zero-phase FIR filter chain (HP + notch(es) + LP)
+    6.  Compute band powers from filtered EEG buffer
+    7.  Compute derived EEG (FAA, FMt)
+    8.  Compute PPG HRV if buffer available
+    9.  Compute breathing rate if IMU available
+    10. Compute head orientation
+    11. Build IngestPayload (including filtered raw eeg_samples window)
+    12. Call hub.update()
     """
 
     def __init__(
@@ -60,11 +69,13 @@ class EEGPump:
         hub,
         publish_hz: float = 4.0,
         stage0_guard: "Stage0Guard | None" = None,
+        stage1_registry: FilterChainRegistry | None = None,
     ) -> None:
         self._adapter = adapter
         self._hub = hub
         self._publish_hz = publish_hz
         self._stage0 = stage0_guard
+        self._stage1: FilterChainRegistry = stage1_registry or get_registry()
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
@@ -120,8 +131,6 @@ class EEGPump:
             )
 
         # ── Stage 0 — acquisition readiness gate ──────────────────────────
-        # In mock mode we always forward frames so tests & demos work without
-        # going through the setup wizard.
         if (
             self._stage0 is not None
             and not self._stage0.acquisition_ready
@@ -149,14 +158,25 @@ class EEGPump:
         from neurolink.dsp.imu import head_orientation
         from neurolink.dsp.ppg import compute_ppg
 
-        # ── Band powers ──────────────────────────────────────────────────────
-        bands_dict: dict[str, float] = {}
+        # ── Assemble raw EEG array ───────────────────────────────────────────
         eeg_arr: np.ndarray | None = None
         if sample.eeg_buffer:
             _min_len = min(len(b) for b in sample.eeg_buffer)
             if _min_len >= 2:
-                eeg_arr = np.array([b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32)
-                bands_dict = compute_band_powers_from_buffer(eeg_arr, fs=_EEG_FS)
+                eeg_arr = np.array(
+                    [b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32
+                )
+
+        # ── Stage 1 — zero-phase FIR filter chain ──────────────────────────
+        # Applies HP(0.5 Hz) + notch(50/100 or 60/120 Hz) + LP(45 Hz)
+        # via filtfilt.  Falls back gracefully if buffer is too short.
+        if eeg_arr is not None:
+            eeg_arr = self._stage1.apply(eeg_arr)
+
+        # ── Band powers ──────────────────────────────────────────────────────
+        bands_dict: dict[str, float] = {}
+        if eeg_arr is not None:
+            bands_dict = compute_band_powers_from_buffer(eeg_arr, fs=_EEG_FS)
 
         bands = BandPowers(
             alpha=bands_dict.get("alpha", 0.0),
@@ -167,6 +187,8 @@ class EEGPump:
         )
 
         # ── Raw EEG sample window for spectrogram / topo ──────────────────────
+        # Note: window is taken from the *filtered* eeg_arr so the
+        # spectrogram shown in the UI already has line noise removed.
         eeg_samples: list[list[float]] = []
         if eeg_arr is not None and eeg_arr.ndim == 2:
             n_samples = eeg_arr.shape[1]
@@ -176,12 +198,9 @@ class EEGPump:
         # ── Derived EEG (FAA, FMt) ─────────────────────────────────────────
         faa: float | None = None
         fmt: float | None = None
-        derived: dict = {}
-        if sample.eeg_buffer:
-            _min2 = min(len(b) for b in sample.eeg_buffer)
-            if _min2 >= 2:
-                eeg_arr2 = np.array([b[:_min2] for b in sample.eeg_buffer], dtype=np.float32)
-                derived = derived_eeg(eeg_arr2, fs=_EEG_FS)
+        if eeg_arr is not None and eeg_arr.shape[1] >= 2:
+            from neurolink.dsp.derived_eeg import derived_eeg as _derived
+            derived = _derived(eeg_arr, fs=_EEG_FS)
             faa = derived.get("faa")
             fmt = derived.get("fmt")
 
