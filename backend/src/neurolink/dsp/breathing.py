@@ -23,6 +23,46 @@ _MIN_IBIS: int = 10
 _MIN_ACCEL_SAMPLES: int = int(_ACCEL_FS * 10)  # 10 seconds
 
 
+def estimate_rr(
+    signal: list[float] | np.ndarray,
+    fs: float = _ACCEL_FS,
+) -> float | None:
+    """Estimate respiratory rate (bpm) from any 1D biosignal via FFT.
+
+    A general-purpose helper for the test suite and for callers that have a
+    pre-filtered respiratory signal (accel-z, IBI series, etc.) and just want
+    a scalar breaths-per-minute estimate.
+
+    Args:
+        signal: 1D sequence of float samples.
+        fs: Sampling rate of the signal (Hz).
+
+    Returns:
+        Estimated respiratory rate in bpm, or None if the signal is too short
+        or no peak is found in the physiological range.
+    """
+    if signal is None or len(signal) < 2:
+        return None
+
+    arr = np.asarray(signal, dtype=np.float64)
+    if len(arr) < 2:
+        return None
+
+    arr = arr - arr.mean()
+    arr *= np.hanning(len(arr))
+
+    n_fft = max(len(arr), 512)
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / fs)
+    psd = np.abs(np.fft.rfft(arr, n=n_fft)) ** 2
+
+    mask = (freqs >= _RR_MIN_HZ) & (freqs <= _RR_MAX_HZ)
+    if not mask.any():
+        return None
+
+    peak_freq = freqs[mask][np.argmax(psd[mask])]
+    return float(peak_freq * 60.0)
+
+
 def compute_breathing(
     ibi_ms: list[float],
     accel_z: np.ndarray | None = None,
@@ -63,11 +103,9 @@ def _rr_from_ibis(ibi_ms: list[float]) -> float | None:
     if len(arr) < _MIN_IBIS:
         return None
 
-    # Detrend and window
     arr -= arr.mean()
     arr *= np.hanning(len(arr))
 
-    # Zero-pad for frequency resolution
     n_fft = max(len(arr), 512)
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / _IBI_FS_VIRTUAL)
     psd = np.abs(np.fft.rfft(arr, n=n_fft)) ** 2
