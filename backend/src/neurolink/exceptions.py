@@ -25,3 +25,7 @@ class BLEConnectionError(NeurolinkError):
 
 class InvalidAdapterTypeError(NeurolinkError):
     """Raised for unknown adapter_type in adapter factory."""
+
+
+# Alias expected by tests — semantically equivalent to InvalidAdapterTypeError
+AdapterNotFoundError = InvalidAdapterTypeError
