@@ -36,6 +36,14 @@ class PoincareMetrics:
     ellipse_area: float = 0.0
 
 
+@dataclass
+class HRVResult:
+    """HR and HRV metrics derived from an RR-interval series."""
+
+    hr_bpm: float
+    hrv_rmssd: float
+
+
 def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
     """Compute PPG-derived HR and HRV from a PPG buffer.
 
@@ -115,6 +123,40 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
     except Exception as exc:
         log.warning("ppg_compute_error", error=str(exc))
         return empty
+
+
+def compute_hrv(rr_intervals_ms: list[float]) -> HRVResult | None:
+    """Compute HR and RMSSD directly from a pre-computed RR-interval series.
+
+    A lightweight helper for callers (and tests) that already have IBI values
+    and do not need the full neurokit2 peak-detection pipeline.
+
+    Args:
+        rr_intervals_ms: List of RR / IBI values in milliseconds.
+
+    Returns:
+        HRVResult with hr_bpm and hrv_rmssd, or None if the input is too
+        short or all intervals fall outside the physiological range.
+    """
+    valid = [rr for rr in rr_intervals_ms if 300.0 <= rr <= 2000.0]
+    if not valid:
+        return None
+
+    mean_rr = float(np.mean(valid))
+    if mean_rr <= 0 or not math.isfinite(mean_rr):
+        return None
+
+    hr_bpm = 60000.0 / mean_rr
+    if not (_HR_VALID_MIN <= hr_bpm <= _HR_VALID_MAX):
+        return None
+
+    if len(valid) >= 2:
+        diffs = np.diff(valid)
+        hrv_rmssd = float(np.sqrt(np.mean(diffs ** 2)))
+    else:
+        hrv_rmssd = 0.0
+
+    return HRVResult(hr_bpm=hr_bpm, hrv_rmssd=hrv_rmssd)
 
 
 def _poincare(ibi_ms: list[float]) -> PoincareMetrics:
