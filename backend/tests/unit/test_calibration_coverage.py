@@ -50,15 +50,15 @@ async def test_calibration_happy_path():
     hub = EEGHub()
 
     import neurolink.calibration as cal_mod
-    orig = cal_mod._CALIBRATION_DURATION_SEC
+
+    orig = cal_mod.TOTAL_DURATION_SEC  # use the real exported name
     try:
-        cal_mod._CALIBRATION_DURATION_SEC = 0.05
+        cal_mod.TOTAL_DURATION_SEC = 0.05
         session = CalibrationSession(adapter=adapter, hub=hub)
         result = await session.run()
     finally:
-        cal_mod._CALIBRATION_DURATION_SEC = orig
+        cal_mod.TOTAL_DURATION_SEC = orig
 
-    # result is float or None depending on whether DSP collected >= 10 frames
     assert result is None or isinstance(result, float)
     assert session.is_running is False
 
@@ -68,7 +68,6 @@ async def test_calibration_happy_path():
 # ---------------------------------------------------------------------------
 
 async def test_calibration_cancelled_exits_cleanly():
-    # Adapter blocks forever so the task stays alive long enough to cancel
     async def blocking_read():
         await asyncio.sleep(60)
 
@@ -98,13 +97,14 @@ async def test_calibration_too_few_frames_returns_none():
     original_baseline = hub.baseline_alpha
 
     import neurolink.calibration as cal_mod
-    orig = cal_mod._CALIBRATION_DURATION_SEC
+
+    orig = cal_mod.TOTAL_DURATION_SEC
     try:
-        cal_mod._CALIBRATION_DURATION_SEC = 0.02
+        cal_mod.TOTAL_DURATION_SEC = 0.02
         session = CalibrationSession(adapter=adapter, hub=hub)
         result = await session.run()
     finally:
-        cal_mod._CALIBRATION_DURATION_SEC = orig
+        cal_mod.TOTAL_DURATION_SEC = orig
 
     assert result is None
     assert hub.baseline_alpha == original_baseline

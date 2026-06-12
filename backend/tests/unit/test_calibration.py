@@ -11,9 +11,10 @@ async def test_calibration_sets_baseline_alpha():
     """Calibration should set hub.baseline_alpha to a positive float."""
     import neurolink.calibration as cal_module
 
-    # Override duration for test speed
-    original = cal_module._CALIBRATION_DURATION_SEC
-    cal_module._CALIBRATION_DURATION_SEC = 1.5  # 1.5 seconds for test
+    # Patch TOTAL_DURATION_SEC (the actual module-level constant) for speed
+    original_dur = cal_module.TOTAL_DURATION_SEC
+    original_min = cal_module._MIN_FRAMES
+    cal_module.TOTAL_DURATION_SEC = 1.5
     cal_module._MIN_FRAMES = 2
     try:
         hub = EEGHub()
@@ -26,8 +27,8 @@ async def test_calibration_sets_baseline_alpha():
         assert baseline > 0.0
         assert hub.baseline_alpha == baseline
     finally:
-        cal_module._CALIBRATION_DURATION_SEC = original
-        cal_module._MIN_FRAMES = 10
+        cal_module.TOTAL_DURATION_SEC = original_dur
+        cal_module._MIN_FRAMES = original_min
         await adapter.disconnect()
 
 
@@ -39,18 +40,20 @@ async def test_calibration_returns_none_for_no_data():
 
     hub = EEGHub()
     adapter = MagicMock()
-    adapter.read_sample = AsyncMock(return_value=EEGSample(channels=[0.0] * 5, eeg_buffer=None))
+    adapter.read_sample = AsyncMock(
+        return_value=EEGSample(channels=[0.0] * 5, eeg_buffer=None)
+    )
 
     import neurolink.calibration as cal_module
 
-    original_dur = cal_module._CALIBRATION_DURATION_SEC
+    original_dur = cal_module.TOTAL_DURATION_SEC
     original_min = cal_module._MIN_FRAMES
-    cal_module._CALIBRATION_DURATION_SEC = 0.2
+    cal_module.TOTAL_DURATION_SEC = 0.2
     cal_module._MIN_FRAMES = 100  # impossible to meet
     try:
         session = CalibrationSession(adapter=adapter, hub=hub)
         result = await session.run()
         assert result is None
     finally:
-        cal_module._CALIBRATION_DURATION_SEC = original_dur
+        cal_module.TOTAL_DURATION_SEC = original_dur
         cal_module._MIN_FRAMES = original_min

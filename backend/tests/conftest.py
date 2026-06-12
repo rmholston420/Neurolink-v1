@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload
 
+
+# ---------------------------------------------------------------------------
+# Domain fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def hub() -> EEGHub:
@@ -40,8 +45,6 @@ def eeg_buffer_256hz() -> list[list[float]]:
     """4-channel × 256-sample synthetic EEG buffer (1 second at 256 Hz)."""
     rng = np.random.default_rng(42)
     t = np.linspace(0, 1, 256)
-    # Channel 0: alpha (10 Hz), Channel 1: theta (6 Hz),
-    # Channel 2: beta (20 Hz),  Channel 3: delta (2 Hz)
     channels = [
         np.sin(2 * np.pi * 10 * t) + 0.1 * rng.standard_normal(256),
         np.sin(2 * np.pi * 6 * t) + 0.1 * rng.standard_normal(256),
@@ -49,3 +52,24 @@ def eeg_buffer_256hz() -> list[list[float]]:
         np.sin(2 * np.pi * 2 * t) + 0.1 * rng.standard_normal(256),
     ]
     return [ch.tolist() for ch in channels]
+
+
+# ---------------------------------------------------------------------------
+# FastAPI / httpx fixtures — needed by test_main.py and integration tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def app():
+    """Create a fresh FastAPI application instance."""
+    from neurolink.main import create_app
+    return create_app()
+
+
+@pytest.fixture()
+async def client(app):
+    """Async httpx client bound to the FastAPI app via ASGI transport."""
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as c:
+        yield c

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -37,21 +36,19 @@ def _make_sample(
 
 
 class TestEEGPumpBuildPayload:
-    def test_eeg_samples_populated_when_buffer_present(self):
+    async def test_eeg_samples_populated_when_buffer_present(self):
         hub = EEGHub()
         pump = EEGPump(adapter=MagicMock(), hub=hub)
         sample = _make_sample(n_channels=4, n_samples=256)
 
-        payload = asyncio.get_event_loop().run_until_complete(
-            pump._build_payload(sample)
-        )
+        payload = await pump._build_payload(sample)
 
         assert len(payload.eeg_samples) == 4, "Expected 4 channels"
         for ch in payload.eeg_samples:
-            assert len(ch) <= 64, f"Window should be ≤64 samples, got {len(ch)}"
+            assert len(ch) <= 64, f"Window should be \u226464 samples, got {len(ch)}"
             assert len(ch) > 0
 
-    def test_eeg_samples_empty_when_no_buffer(self):
+    async def test_eeg_samples_empty_when_no_buffer(self):
         hub = EEGHub()
         pump = EEGPump(adapter=MagicMock(), hub=hub)
         sample = MagicMock()
@@ -65,32 +62,26 @@ class TestEEGPumpBuildPayload:
         sample.poor_contact = False
         sample.extra = {}
 
-        payload = asyncio.get_event_loop().run_until_complete(
-            pump._build_payload(sample)
-        )
+        payload = await pump._build_payload(sample)
 
         assert payload.eeg_samples == []
 
-    def test_eeg_samples_window_capped_at_64(self):
+    async def test_eeg_samples_window_capped_at_64(self):
         hub = EEGHub()
         pump = EEGPump(adapter=MagicMock(), hub=hub)
-        # Provide a longer buffer (512 samples) — should be windowed to 64
+        # 512-sample buffer — window should be capped at 64
         sample = _make_sample(n_channels=4, n_samples=512)
 
-        payload = asyncio.get_event_loop().run_until_complete(
-            pump._build_payload(sample)
-        )
+        payload = await pump._build_payload(sample)
 
         for ch in payload.eeg_samples:
             assert len(ch) == 64
 
-    def test_bands_nonzero_for_clean_sine(self):
+    async def test_bands_nonzero_for_clean_sine(self):
         hub = EEGHub()
         pump = EEGPump(adapter=MagicMock(), hub=hub)
         sample = _make_sample(n_channels=4, n_samples=512, freq_hz=10.0)
 
-        payload = asyncio.get_event_loop().run_until_complete(
-            pump._build_payload(sample)
-        )
+        payload = await pump._build_payload(sample)
 
         assert payload.bands.alpha > 0, "Alpha should be nonzero for 10Hz input"

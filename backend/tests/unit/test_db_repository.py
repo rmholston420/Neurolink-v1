@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
 
 
-async def _make_factory():
-    os.environ["NEUROLINK_DB_PATH"] = ":memory:"
+async def _make_factory(path: str = ":memory:"):
+    """Create a fresh db engine at *path* and return the session factory.
+
+    Use a unique temp-file path (not `:memory:`) when the test needs a
+    truly isolated database — SQLite `:memory:` databases share state for
+    the lifetime of the cached engine object.
+    """
+    os.environ["NEUROLINK_DB_PATH"] = path
     import neurolink.db.engine as engine_module
+
     engine_module._engine = None
     engine_module._session_factory = None
     await engine_module.init_db()
@@ -19,6 +27,7 @@ async def _make_factory():
 async def test_create_session_returns_entry():
     factory = await _make_factory()
     from neurolink.db.repository import SessionLogRepository
+
     async with factory() as db:
         repo = SessionLogRepository(db)
         entry = await repo.create_session(
@@ -33,6 +42,7 @@ async def test_create_session_returns_entry():
 async def test_end_session_updates_frame_count():
     factory = await _make_factory()
     from neurolink.db.repository import SessionLogRepository
+
     async with factory() as db:
         repo = SessionLogRepository(db)
         entry = await repo.create_session(device_model="mock", adapter_type="mock")
@@ -51,6 +61,7 @@ async def test_end_session_updates_frame_count():
 async def test_list_recent_returns_entries():
     factory = await _make_factory()
     from neurolink.db.repository import SessionLogRepository
+
     async with factory() as db:
         repo = SessionLogRepository(db)
         await repo.create_session(device_model="mock", adapter_type="mock")
@@ -62,17 +73,30 @@ async def test_list_recent_returns_entries():
 
 
 async def test_list_recent_empty_db_returns_empty():
-    factory = await _make_factory()
+    """Use a unique temp file so we get a truly empty database."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        tmp_path = f.name
+    os.unlink(tmp_path)  # remove file so SQLAlchemy creates a fresh one
+
+    factory = await _make_factory(path=tmp_path)
     from neurolink.db.repository import SessionLogRepository
-    async with factory() as db:
-        repo = SessionLogRepository(db)
-        sessions = await repo.list_recent(limit=10)
-    assert sessions == []
+
+    try:
+        async with factory() as db:
+            repo = SessionLogRepository(db)
+            sessions = await repo.list_recent(limit=10)
+        assert sessions == []
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
 
 
 async def test_create_session_no_address():
     factory = await _make_factory()
     from neurolink.db.repository import SessionLogRepository
+
     async with factory() as db:
         repo = SessionLogRepository(db)
         entry = await repo.create_session(

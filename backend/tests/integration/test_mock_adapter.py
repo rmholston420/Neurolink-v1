@@ -16,11 +16,12 @@ class TestMockAdapter:
         sample = asyncio.get_event_loop().run_until_complete(adapter.read_sample())
         assert sample is not None
 
-    def test_sample_has_four_channels(self):
+    def test_sample_has_five_channels(self):
+        """MockAdapter models a Muse S (TP9/AF7/AF8/TP10/AUX) — 5 channels."""
         adapter = MockAdapter()
         asyncio.get_event_loop().run_until_complete(adapter.connect())
         sample = asyncio.get_event_loop().run_until_complete(adapter.read_sample())
-        assert len(sample.eeg_buffer) == 4
+        assert len(sample.eeg_buffer) == 5
 
     def test_sample_channels_are_nonempty(self):
         adapter = MockAdapter()
