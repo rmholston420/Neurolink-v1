@@ -71,6 +71,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.artifact_gate = artifact_gate
     log.info("stage3_artifact_gate_initialised")
 
+    # ── Stage 3b — Multi-type artifact detector ─────────────────────────
+    from neurolink.dsp.artifact_detector import ArtifactDetector
+    artifact_detector = ArtifactDetector(line_freq_hz=line_freq)
+    app.state.artifact_detector = artifact_detector
+    log.info("stage3b_artifact_detector_initialised", line_freq_hz=line_freq)
+
     # Inject DB session factory into service
     from neurolink.dependencies import get_neurolink_service
     service = get_neurolink_service()
@@ -147,6 +153,7 @@ def create_app() -> FastAPI:
     from neurolink.routers.stage1 import router as stage1_router
     from neurolink.routers.stage2 import router as stage2_router
     from neurolink.routers.stage3 import router as stage3_router
+    from neurolink.routers.stage3b import router as stage3b_router
 
     app.include_router(health_router)
     app.include_router(neurolink_router, prefix="/api/v1")
@@ -158,6 +165,7 @@ def create_app() -> FastAPI:
     app.include_router(stage1_router, prefix="/api/v1")
     app.include_router(stage2_router, prefix="/api/v1")
     app.include_router(stage3_router, prefix="/api/v1")
+    app.include_router(stage3b_router, prefix="/api/v1")
 
     log.info("neurolink_app_created")
     return app
