@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 class FilterToggleConfig:
     """One bool per pipeline stage.  True = stage runs; False = bypassed."""
 
-    # Stage 1 — zero-phase FIR chain (HP 0.5 Hz + notch + LP 45 Hz)
+    # Stage 1 — zero-phase FIR chain (HP 0.5 Hz + notch + LP 55 Hz)
     stage1_fir: bool = True
 
     # Stage 2 — bad channel detection + spherical-spline interpolation
@@ -33,8 +33,8 @@ class FilterToggleConfig:
 
     # Stage 3b — multi-type artifact classifier + correction router
     # Classifies 7 artifact types (blink, H-EOG, EMG, cardiac, electrode pop,
-    # line noise, motion) and builds a CorrectionPlan that routes Stages 4-5.
-    # When disabled, Stages 4-5 still run unconditionally on clean frames
+    # line noise, motion) and builds a CorrectionPlan that routes Stages 4-6.
+    # When disabled, Stages 4-6 still run unconditionally on clean frames
     # (same behaviour as before Stage 3b was added).
     stage3b_artifact_detector: bool = True
 
@@ -46,6 +46,9 @@ class FilterToggleConfig:
 
     # Stage 5 — Gratton-Coles ocular regression
     stage5_ocular: bool = True
+
+    # Stage 6 — PPG-referenced cardiac artifact regression (AAS method)
+    stage6_cardiac: bool = True
 
     # IMU motion gate (Stage 0 / Stage 3 motion criterion)
     imu_gate: bool = True
