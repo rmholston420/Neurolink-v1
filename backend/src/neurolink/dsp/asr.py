@@ -43,6 +43,12 @@ Limitations
 * ``filtfilt``-style zero-phase filtering upstream (Stage 1) is required
   before ASR — this is already guaranteed by the EEGPump pipeline.
 
+Threshold defaults
+------------------
+``ASRConfig`` defaults (``burst_sd``, ``calib_sec``) are sourced from
+``neurolink.dsp.artifact_config`` constants so all pipeline stages share
+the same authoritative baseline values.
+
 Public API
 ----------
   ASRConfig         — dataclass of tunable parameters
@@ -57,6 +63,8 @@ from enum import Enum, auto
 
 import numpy as np
 import structlog
+
+from neurolink.dsp.artifact_config import ASR_BURST_SD, ASR_CALIB_SEC
 
 log = structlog.get_logger(__name__)
 
@@ -81,10 +89,12 @@ class ASRConfig:
         Seconds of clean data to collect before activating correction.
         The Stage 0 acquisition-readiness gate ensures this window is
         clean.  Increase to 60 s for more stable covariance estimates.
+        Default sourced from ``artifact_config.ASR_CALIB_SEC``.
     burst_sd:
         BurstCriterion: number of calibration SDs above which a sample
         is considered a burst artifact.  EEGLAB default is 20; lower
         values (e.g. 15) are more aggressive.
+        Default sourced from ``artifact_config.ASR_BURST_SD``.
     eeg_channels:
         Indices of EEG channels in the frame array.  AUX/PPG channels
         are excluded from subspace reconstruction.
@@ -92,9 +102,9 @@ class ASRConfig:
 
     enable: bool = True
     fs: float = 256.0
-    calib_sec: float = 30.0
-    burst_sd: float = 20.0
-    eeg_channels: list[int] = None  # None → auto-detect as [0,1,2,3]
+    calib_sec: float = ASR_CALIB_SEC   # default: 30.0 s
+    burst_sd: float = ASR_BURST_SD     # default: 20.0 SD
+    eeg_channels: list[int] = None     # None → auto-detect as [0,1,2,3]
 
     def __post_init__(self) -> None:
         if self.eeg_channels is None:

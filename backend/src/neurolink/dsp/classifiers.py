@@ -5,28 +5,52 @@ v2: extended 8-region classifier ported from Rigpa-v3 classifiers.py.
 S-space projection for visualisation.
 
 All functions are pure; no side effects.
+
+Threshold constants are sourced from ``neurolink.dsp.artifact_config``
+so all pipeline stages share the same authoritative baseline values.
 """
 
 from __future__ import annotations
 
+from neurolink.dsp.artifact_config import (
+    V01_ALPHA_C,
+    V01_ALPHA_D,
+    V01_ALPHA_E,
+    V01_BETA_B,
+    V01_DELTA_F,
+    V01_GAMMA_G,
+    V01_MULTIPLICATIO_ALPHA,
+    V01_MULTIPLICATIO_FAA,
+    V01_MULTIPLICATIO_THETA,
+    V01_THETA_D,
+    V01_THETA_E,
+    V2_ALPHA_MULTIPLICATIO,
+    V2_ALPHA_RUBEDO,
+    V2_BETA_ALBEDO,
+    V2_BETA_CALCINATIO,
+    V2_BETA_RUBEDO_MAX,
+    V2_DELTA_COAGULATIO,
+    V2_GAMMA_SUBLIMATIO,
+    V2_THETA_RUBEDO,
+    V2_THETA_SOLUTIO,
+)
 from neurolink.models.eeg import BandPowers, SSpaceCoords
 
 # ============================================================================
 # v0.1 Classifier (6 regions: A-F)
 # ============================================================================
-# Threshold table (FIXED — from Rigpa-v2 classifier_v01.py)
 
-_V01_ALPHA_E: float = 0.30
-_V01_THETA_E: float = 0.15
-_V01_ALPHA_D: float = 0.22
-_V01_THETA_D: float = 0.18
-_V01_ALPHA_C: float = 0.22
-_V01_BETA_B: float = 0.30
-_V01_DELTA_F: float = 0.50
-_V01_GAMMA_G: float = 0.20
-_V01_MULTIPLICATIO_ALPHA: float = 0.35
-_V01_MULTIPLICATIO_THETA: float = 0.15
-_V01_MULTIPLICATIO_FAA: float = -0.05
+_V2_STAGES: dict[str, tuple[str, str]] = {
+    "Multiplicatio": ("E", "Multiplicatio"),
+    "Rubedo": ("E", "Rubedo"),
+    "Citrinitas": ("D", "Citrinitas"),
+    "Solutio": ("D", "Solutio"),
+    "Albedo": ("C", "Albedo"),
+    "Nigredo": ("A", "Nigredo"),
+    "Coagulatio": ("F", "Coagulatio"),
+    "Sublimatio": ("G", "Sublimatio"),
+    "Calcinatio": ("H", "Calcinatio"),
+}
 
 
 def classify_v01(
@@ -53,30 +77,30 @@ def classify_v01(
         (region_label, alchemical_stage) tuple.
     """
     # Region F: deep sleep / delta dominance
-    if delta >= _V01_DELTA_F:
+    if delta >= V01_DELTA_F:
         return "F", "Coagulatio"
 
     # Region E: deep meditation (high alpha + theta)
-    if alpha >= _V01_ALPHA_E and theta >= _V01_THETA_E:
+    if alpha >= V01_ALPHA_E and theta >= V01_THETA_E:
         # Escalation to Multiplicatio: very high alpha + faa gate
         if (
-            alpha >= _V01_MULTIPLICATIO_ALPHA
-            and theta >= _V01_MULTIPLICATIO_THETA
-            and (faa is None or faa >= _V01_MULTIPLICATIO_FAA)
+            alpha >= V01_MULTIPLICATIO_ALPHA
+            and theta >= V01_MULTIPLICATIO_THETA
+            and (faa is None or faa >= V01_MULTIPLICATIO_FAA)
         ):
             return "E", "Multiplicatio"
         return "E", "Rubedo"
 
     # Region D: flow state (theta-dominant)
-    if theta >= _V01_THETA_D and alpha < _V01_ALPHA_E:
+    if theta >= V01_THETA_D and alpha < V01_ALPHA_E:
         return "D", "Citrinitas"
 
     # Region C: alpha onset (moderate alpha)
-    if alpha >= _V01_ALPHA_C and beta < _V01_BETA_B:
+    if alpha >= V01_ALPHA_C and beta < V01_BETA_B:
         return "C", "Albedo"
 
     # Region B: active/aroused (high beta)
-    if beta >= _V01_BETA_B:
+    if beta >= V01_BETA_B:
         return "B", "Albedo"
 
     # Region A: default / mixed
@@ -86,30 +110,6 @@ def classify_v01(
 # ============================================================================
 # v2 Classifier (8 regions: A-H)
 # ============================================================================
-
-_V2_STAGES: dict[str, tuple[str, str]] = {
-    # (region, stage)
-    "Multiplicatio": ("E", "Multiplicatio"),
-    "Rubedo": ("E", "Rubedo"),
-    "Citrinitas": ("D", "Citrinitas"),
-    "Solutio": ("D", "Solutio"),
-    "Albedo": ("C", "Albedo"),
-    "Nigredo": ("A", "Nigredo"),
-    "Coagulatio": ("F", "Coagulatio"),
-    "Sublimatio": ("G", "Sublimatio"),
-    "Calcinatio": ("H", "Calcinatio"),
-}
-
-# v2 thresholds (FIXED)
-_V2_ALPHA_RUBEDO: float = 0.30
-_V2_THETA_RUBEDO: float = 0.15
-_V2_BETA_RUBEDO_MAX: float = 0.25
-_V2_ALPHA_MULTIPLICATIO: float = 0.33
-_V2_BETA_ALBEDO: float = 0.28
-_V2_THETA_SOLUTIO: float = 0.25
-_V2_DELTA_COAGULATIO: float = 0.45
-_V2_GAMMA_SUBLIMATIO: float = 0.20
-_V2_BETA_CALCINATIO: float = 0.40
 
 
 def classify_v2(bands: BandPowers) -> tuple[str, str]:
@@ -124,31 +124,31 @@ def classify_v2(bands: BandPowers) -> tuple[str, str]:
     a, th, b, d, g = bands.alpha, bands.theta, bands.beta, bands.delta, bands.gamma
 
     # Coagulatio: heavy delta (sleep/drowsiness)
-    if d >= _V2_DELTA_COAGULATIO:
+    if d >= V2_DELTA_COAGULATIO:
         return "F", "Coagulatio"
 
     # Sublimatio: gamma-dominant (high cognitive load)
-    if g >= _V2_GAMMA_SUBLIMATIO and g > a and g > th:
+    if g >= V2_GAMMA_SUBLIMATIO and g > a and g > th:
         return "G", "Sublimatio"
 
     # Calcinatio: very high beta (anxiety/hyperarousal)
-    if b >= _V2_BETA_CALCINATIO:
+    if b >= V2_BETA_CALCINATIO:
         return "H", "Calcinatio"
 
     # Multiplicatio: highest meditation state
-    if a >= _V2_ALPHA_MULTIPLICATIO and th >= _V2_THETA_RUBEDO and b <= _V2_BETA_RUBEDO_MAX:
+    if a >= V2_ALPHA_MULTIPLICATIO and th >= V2_THETA_RUBEDO and b <= V2_BETA_RUBEDO_MAX:
         return "E", "Multiplicatio"
 
     # Rubedo: deep meditation
-    if a >= _V2_ALPHA_RUBEDO and th >= _V2_THETA_RUBEDO and b <= _V2_BETA_RUBEDO_MAX:
+    if a >= V2_ALPHA_RUBEDO and th >= V2_THETA_RUBEDO and b <= V2_BETA_RUBEDO_MAX:
         return "E", "Rubedo"
 
     # Solutio: high theta (deep focus/flow)
-    if th >= _V2_THETA_SOLUTIO and a < _V2_ALPHA_RUBEDO:
+    if th >= V2_THETA_SOLUTIO and a < V2_ALPHA_RUBEDO:
         return "D", "Solutio"
 
     # Albedo: moderate beta (relaxed alertness)
-    if b >= _V2_BETA_ALBEDO:
+    if b >= V2_BETA_ALBEDO:
         return "C", "Albedo"
 
     # Citrinitas: balanced alpha-theta

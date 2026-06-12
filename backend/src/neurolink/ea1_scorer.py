@@ -7,13 +7,19 @@ All functions are pure.
 
 from __future__ import annotations
 
+from neurolink.dsp.artifact_config import (
+    ARTIFACT_ACCEL_RMS_G,
+    EA1_ALPHA_THRESHOLD,
+    EA1_CONTACT_QUALITY_MIN,
+    EA1_THETA_THRESHOLD,
+)
 from neurolink.models.eeg import EA1Criterion, EA1Result, IngestPayload
 
-# ── Thresholds ────────────────────────────────────────────────────────────────────
-ALPHA_THRESHOLD: float = 0.30
-THETA_THRESHOLD: float = 0.15
-MOTION_RMS_GATE: float = 0.5  # above this = too much motion
-CONTACT_QUALITY_MIN: float = 0.5  # below this = poor contact
+# ── Thresholds (sourced from artifact_config for pipeline-wide consistency) ───
+ALPHA_THRESHOLD: float = EA1_ALPHA_THRESHOLD
+THETA_THRESHOLD: float = EA1_THETA_THRESHOLD
+MOTION_RMS_GATE: float = ARTIFACT_ACCEL_RMS_G   # unified with ArtifactGate
+CONTACT_QUALITY_MIN: float = EA1_CONTACT_QUALITY_MIN
 
 # S-space gating — must be in region D or E for eligibility
 _ELIGIBLE_REGIONS = {"D", "E"}
@@ -37,7 +43,7 @@ def score(payload: IngestPayload) -> EA1Result:
     1. alpha_power >= 0.30
     2. theta_power >= 0.15
     3. s_space region in {D, E} (v2 classifier region from payload)
-    4. motion_rms < 0.5 (if IMU data present)
+    4. motion_rms < 0.15 g (unified with ArtifactGate.accel_rms_g)
     5. contact_quality >= 0.5 (if contact data present)
 
     Args:

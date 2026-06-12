@@ -27,6 +27,14 @@ The gate is *non-destructive*: it never modifies the EEG array.
 Instead it returns an ``ArtifactDecision`` that callers use to decide
 whether to forward the frame to downstream DSP.
 
+Threshold defaults
+------------------
+All numeric defaults are sourced from
+``neurolink.dsp.artifact_config`` so every module in the pipeline
+shares the same authoritative values.  Runtime overrides are applied
+via ``set_config()`` / ``get_config()`` without restarting the pump,
+enabling per-session adaptive tightening.
+
 Thread-safety
 -------------
 All public methods take the config lock before reading ``_cfg``.
@@ -44,6 +52,12 @@ import numpy as np
 import structlog
 from scipy import stats as sp_stats
 
+from neurolink.dsp.artifact_config import (
+    ARTIFACT_ACCEL_RMS_G,
+    ARTIFACT_KURTOSIS_THRESHOLD,
+    ARTIFACT_PK2PK_UV,
+)
+
 log = structlog.get_logger(__name__)
 
 # EEG-only channel indices (AUX excluded)
@@ -52,11 +66,15 @@ _EEG_IDX: list[int] = [0, 1, 2, 3]
 
 @dataclass
 class GateConfig:
-    """Tunable thresholds for ArtifactGate."""
+    """Tunable thresholds for ArtifactGate.
 
-    pk2pk_uv: float = 100.0        # µV  — amplitude threshold
-    accel_rms_g: float = 0.15      # g   — IMU motion threshold
-    kurtosis_threshold: float = 5.0  # excess kurtosis — burst threshold
+    Defaults are sourced from ``neurolink.dsp.artifact_config`` so all
+    pipeline stages share the same authoritative baseline values.
+    """
+
+    pk2pk_uv: float = ARTIFACT_PK2PK_UV          # µV  — amplitude threshold
+    accel_rms_g: float = ARTIFACT_ACCEL_RMS_G    # g   — IMU motion threshold
+    kurtosis_threshold: float = ARTIFACT_KURTOSIS_THRESHOLD  # burst threshold
     enable_amplitude: bool = True
     enable_imu: bool = True
     enable_kurtosis: bool = True
