@@ -108,9 +108,11 @@ class IngestPayload(BaseModel):
     imu: IMUPayload | None = None
     fnirs_oxy: float | None = None
     fnirs_deoxy: float | None = None
-    # Raw EEG sample window: list of 4 channels, each a list of float samples
-    # Shape: [n_channels][n_samples]  e.g. [[...256 floats...], ...] x4
+    # Raw EEG sample window: list of channels, each a list of float samples
+    # Shape: [n_channels][n_samples]  e.g. [[...64 floats...], ...] x5
     eeg_samples: list[list[float]] = Field(default_factory=list)
+    # Stage 2: channels detected or manually flagged as bad this frame
+    bad_channels: list[str] = Field(default_factory=list)
     # Filled by hub.update()
     region: str = "A"
     alchemical_stage: str = "Nigredo"
@@ -156,9 +158,9 @@ class NeurolinkState(BaseModel):
     fnirs_oxy: float | None = None
     fnirs_deoxy: float | None = None
     # Raw EEG sample window forwarded verbatim from IngestPayload.
-    # Shape: [n_channels][n_samples]  (4 channels x ~64 samples at 4 Hz publish rate)
-    # Empty list when adapter has no raw buffer (e.g. LSL band-power-only mode).
     eeg_samples: list[list[float]] = Field(default_factory=list)
+    # Stage 2: bad channels detected this frame
+    bad_channels: list[str] = Field(default_factory=list)
 
 
 # ============================================================================

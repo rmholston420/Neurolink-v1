@@ -5,17 +5,26 @@ Builds IngestPayload from EEGSample and calls hub.update().
 Stage 0 integration
 -------------------
 When a Stage0Guard is supplied:
-  1. gate_sample() is called on every raw EEGSample to annotate motion flags.
-  2. acquisition_ready is checked before hub.update(); if not ready the frame
-     is dropped silently (except in mock mode).
+  1. gate_sample() annotates motion flags on every raw EEGSample.
+  2. acquisition_ready is checked before hub.update(); frames dropped
+     when not ready (except mock source).
 
 Stage 1 integration
 -------------------
-After eeg_arr is assembled from eeg_buffer, apply_online_filters() is called.
-The cleaned array flows into band powers, derived EEG, and the raw
-eeg_samples window sent to the front-end.  The filter registry is module-level
-(FilterChainRegistry singleton) so no constructor injection is required;
-an optional stage1_registry kwarg is accepted for testing.
+After eeg_arr is assembled, apply_online_filters() runs the zero-phase
+FIR chain (HP + notch(es) + LP) on the buffer.  The filtered array
+flows into all downstream DSP.
+
+Stage 2 integration
+-------------------
+After Stage 1 filtering:
+  1. detector.update(eeg_arr) updates EMA variance/PSD stats.
+  2. bad = detector.get_bad_channels() returns names of bad channels.
+  3. eeg_arr = interpolate_bad_channels(eeg_arr, bad) replaces bad
+     channels with spherical-spline estimates from good neighbours.
+  4. bad_channels list is carried through IngestPayload to hub /
+     NeurolinkState / SSE stream so the UI can show a per-channel
+     quality indicator.
 """
 
 from __future__ import annotations
@@ -27,7 +36,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import structlog
 
+from neurolink.dsp.bad_channels import BadChannelDetector
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
+from neurolink.dsp.spherical_spline import interpolate_bad_channels
 from neurolink.hardware.base import EEGSample, HardwareAdapter
 from neurolink.models.eeg import BandPowers, BreathingPayload, IMUPayload, IngestPayload
 
@@ -40,27 +51,28 @@ _EEG_FS: float = 256.0
 _PPG_FS: float = 64.0
 _ACCEL_FS: float = 52.0
 _WATCHDOG_SEC: float = 10.0
-# Number of raw samples to forward per SSE frame for spectrogram rendering.
-# At 256 Hz EEG and 4 Hz publish rate the buffer holds ~64 samples/channel.
 _EEG_SAMPLES_WINDOW: int = 64
 
 
 class EEGPump:
     """Background asyncio task that drives the EEG processing pipeline.
 
-    At each tick (1/publish_hz seconds):
+    Pipeline per tick
+    -----------------
     1.  Read EEGSample from adapter
-    2.  [Stage 0] Apply IMU motion gate (flag_segment)
-    3.  [Stage 0] Update impedance from poor_contact flag
-    4.  [Stage 0] Check acquisition_ready gate
-    5.  [Stage 1] Apply zero-phase FIR filter chain (HP + notch(es) + LP)
-    6.  Compute band powers from filtered EEG buffer
-    7.  Compute derived EEG (FAA, FMt)
-    8.  Compute PPG HRV if buffer available
-    9.  Compute breathing rate if IMU available
-    10. Compute head orientation
-    11. Build IngestPayload (including filtered raw eeg_samples window)
-    12. Call hub.update()
+    2.  [Stage 0] IMU motion gate
+    3.  [Stage 0] Impedance update
+    4.  [Stage 0] Acquisition readiness gate
+    5.  [Stage 1] Zero-phase FIR filter chain
+    6.  [Stage 2] Bad channel detection (EMA update)
+    7.  [Stage 2] Spherical spline interpolation of bad channels
+    8.  Band powers from interpolated+filtered buffer
+    9.  Derived EEG (FAA, FMt)
+    10. PPG HRV
+    11. Breathing
+    12. IMU head orientation
+    13. Build IngestPayload (bad_channels carried through)
+    14. hub.update()
     """
 
     def __init__(
@@ -70,24 +82,24 @@ class EEGPump:
         publish_hz: float = 4.0,
         stage0_guard: "Stage0Guard | None" = None,
         stage1_registry: FilterChainRegistry | None = None,
+        bad_channel_detector: BadChannelDetector | None = None,
     ) -> None:
         self._adapter = adapter
         self._hub = hub
         self._publish_hz = publish_hz
         self._stage0 = stage0_guard
         self._stage1: FilterChainRegistry = stage1_registry or get_registry()
+        self._stage2: BadChannelDetector = bad_channel_detector or BadChannelDetector()
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
 
     async def start(self) -> None:
-        """Start the pump as a background asyncio task."""
         self._running = True
         self._task = asyncio.create_task(self._pump_loop())
         log.info("eeg_pump_started", publish_hz=self._publish_hz)
 
     async def stop(self) -> None:
-        """Stop the pump and cancel the background task."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -99,7 +111,6 @@ class EEGPump:
         log.info("eeg_pump_stopped")
 
     async def _pump_loop(self) -> None:
-        """Main pump loop. Runs at publish_hz frequency."""
         interval = 1.0 / self._publish_hz
         while self._running:
             tick_start = time.monotonic()
@@ -110,27 +121,21 @@ class EEGPump:
             if self._last_frame_ts > 0 and (time.time() - self._last_frame_ts) > _WATCHDOG_SEC:
                 log.warning("eeg_pump_no_frames", since_sec=_WATCHDOG_SEC)
             elapsed = time.monotonic() - tick_start
-            sleep_time = max(0.0, interval - elapsed)
-            await asyncio.sleep(sleep_time)
+            await asyncio.sleep(max(0.0, interval - elapsed))
 
     async def _tick(self) -> None:
-        """Single pump tick: read sample, apply Stage-0 gates, process, update hub."""
         sample = await self._adapter.read_sample()
         if sample is None:
             return
 
-        # ── Stage 0 — IMU motion gate (mutates sample.extra in-place) ────────
+        # ── Stage 0 ─────────────────────────────────────────────────────────────────
         if self._stage0 is not None:
             sample = self._stage0.gate_sample(sample)
-
-        # ── Stage 0 — impedance update from poor_contact flag ──────────────
         if self._stage0 is not None:
             self._stage0.impedance.update_from_sample(
                 poor_contact=sample.poor_contact,
                 channels=sample.channels,
             )
-
-        # ── Stage 0 — acquisition readiness gate ──────────────────────────
         if (
             self._stage0 is not None
             and not self._stage0.acquisition_ready
@@ -151,7 +156,6 @@ class EEGPump:
         self._hub.update(payload)
 
     async def _build_payload(self, sample: EEGSample) -> IngestPayload:
-        """Build an IngestPayload from a raw EEGSample."""
         from neurolink.dsp.bandpower import compute_band_powers_from_buffer
         from neurolink.dsp.breathing import compute_breathing
         from neurolink.dsp.derived_eeg import derived_eeg
@@ -168,12 +172,26 @@ class EEGPump:
                 )
 
         # ── Stage 1 — zero-phase FIR filter chain ──────────────────────────
-        # Applies HP(0.5 Hz) + notch(50/100 or 60/120 Hz) + LP(45 Hz)
-        # via filtfilt.  Falls back gracefully if buffer is too short.
         if eeg_arr is not None:
             eeg_arr = self._stage1.apply(eeg_arr)
 
-        # ── Band powers ──────────────────────────────────────────────────────
+        # ── Stage 2 — bad channel detection & interpolation ─────────────────
+        bad_channels: list[str] = []
+        if eeg_arr is not None:
+            # Update EMA variance + PSD stats
+            self._stage2.update(eeg_arr)
+            # Identify bad channels
+            bad_channels = self._stage2.get_bad_channels()
+            # Spherical spline interpolation (AUX excluded)
+            if bad_channels:
+                eeg_arr = interpolate_bad_channels(eeg_arr, bad_channels)
+                log.debug(
+                    "stage2_interpolated",
+                    bad=bad_channels,
+                    n_bad=len(bad_channels),
+                )
+
+        # ── Band powers (now from filtered + interpolated buffer) ────────────
         bands_dict: dict[str, float] = {}
         if eeg_arr is not None:
             bands_dict = compute_band_powers_from_buffer(eeg_arr, fs=_EEG_FS)
@@ -186,9 +204,7 @@ class EEGPump:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # ── Raw EEG sample window for spectrogram / topo ──────────────────────
-        # Note: window is taken from the *filtered* eeg_arr so the
-        # spectrogram shown in the UI already has line noise removed.
+        # ── Raw EEG sample window (filtered + interpolated) ─────────────────
         eeg_samples: list[list[float]] = []
         if eeg_arr is not None and eeg_arr.ndim == 2:
             n_samples = eeg_arr.shape[1]
@@ -215,7 +231,6 @@ class EEGPump:
         accel_z: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
             accel_z = np.array(sample.accel_buffer[2], dtype=np.float32)
-
         ibis: list[float] = ppg_payload.ibi_ms if ppg_payload else []
         breathing_payload = compute_breathing(ibis, accel_z=accel_z)
 
@@ -245,4 +260,5 @@ class EEGPump:
             fnirs_oxy=fnirs_oxy,
             fnirs_deoxy=fnirs_deoxy,
             eeg_samples=eeg_samples,
+            bad_channels=bad_channels,
         )
