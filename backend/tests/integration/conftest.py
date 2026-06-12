@@ -8,7 +8,13 @@ from httpx import ASGITransport, AsyncClient
 
 @pytest.fixture()
 def app():
-    """Fresh FastAPI app for each integration test."""
+    """Fresh FastAPI app with reset singletons for each integration test."""
+    import neurolink.dependencies as deps
+    import neurolink.hub as hub_mod
+
+    deps._service = None
+    hub_mod._hub = hub_mod.EEGHub()
+
     from neurolink.main import create_app
     return create_app()
 

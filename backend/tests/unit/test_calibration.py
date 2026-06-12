@@ -11,10 +11,13 @@ async def test_calibration_sets_baseline_alpha():
     """Calibration should set hub.baseline_alpha to a positive float."""
     import neurolink.calibration as cal_module
 
-    # Patch TOTAL_DURATION_SEC (the actual module-level constant) for speed
     original_dur = cal_module.TOTAL_DURATION_SEC
+    original_warmup = cal_module.WARMUP_SEC
     original_min = cal_module._MIN_FRAMES
+    # Zero warmup so baseline capture starts immediately; 1.5s total is enough
+    # for MockAdapter (4 Hz) to collect >= 2 frames.
     cal_module.TOTAL_DURATION_SEC = 1.5
+    cal_module.WARMUP_SEC = 0.0
     cal_module._MIN_FRAMES = 2
     try:
         hub = EEGHub()
@@ -28,6 +31,7 @@ async def test_calibration_sets_baseline_alpha():
         assert hub.baseline_alpha == baseline
     finally:
         cal_module.TOTAL_DURATION_SEC = original_dur
+        cal_module.WARMUP_SEC = original_warmup
         cal_module._MIN_FRAMES = original_min
         await adapter.disconnect()
 
@@ -47,8 +51,10 @@ async def test_calibration_returns_none_for_no_data():
     import neurolink.calibration as cal_module
 
     original_dur = cal_module.TOTAL_DURATION_SEC
+    original_warmup = cal_module.WARMUP_SEC
     original_min = cal_module._MIN_FRAMES
     cal_module.TOTAL_DURATION_SEC = 0.2
+    cal_module.WARMUP_SEC = 0.0
     cal_module._MIN_FRAMES = 100  # impossible to meet
     try:
         session = CalibrationSession(adapter=adapter, hub=hub)
@@ -56,4 +62,5 @@ async def test_calibration_returns_none_for_no_data():
         assert result is None
     finally:
         cal_module.TOTAL_DURATION_SEC = original_dur
+        cal_module.WARMUP_SEC = original_warmup
         cal_module._MIN_FRAMES = original_min

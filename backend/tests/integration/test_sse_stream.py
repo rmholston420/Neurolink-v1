@@ -2,10 +2,13 @@
 
 AC13: SSE stream must emit at least one named 'state' event.
 
-Strategy: connect via POST /connect (starts mock adapter + pump), then
-open /stream and wait for the first frame.  The event_generator yields
-the current hub state immediately on connect, so this should be
-instantaneous.
+Strategy: the app fixture lifespan auto-connects the mock adapter and
+starts the EEG pump.  Open /stream immediately and wait for the first
+frame.  The event_generator yields the current hub state on the first
+tick (~250 ms at 4 Hz), so a 5-second timeout is generous.
+
+Do NOT call POST /connect here — the lifespan already connected; a
+second connect call would return 409 and abort the test.
 """
 
 from __future__ import annotations
@@ -24,20 +27,13 @@ async def test_sse_stream_emits_at_least_one_frame(app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as c:
-        # Start mock adapter so the pump begins pushing frames into this app's hub
-        connect_r = await c.post(
-            "/api/v1/neurolink/connect",
-            json={"adapter_type": "mock", "device_model": "mock"},
-        )
-        assert connect_r.status_code == 200
-
-        # Give the pump one tick to push at least one frame
-        await asyncio.sleep(0.1)
+        # Give the pump one tick to push at least one frame (4 Hz → 250 ms)
+        await asyncio.sleep(0.35)
 
         async def collect_sse() -> None:
             async with c.stream("GET", "/api/v1/neurolink/stream") as response:
                 assert response.status_code == 200
-                pending_event = None
+                pending_event: str | None = None
                 async for line in response.aiter_lines():
                     if line.startswith("event:"):
                         pending_event = line.split(":", 1)[1].strip()
@@ -54,12 +50,12 @@ async def test_sse_stream_emits_at_least_one_frame(app):
 
         try:
             await asyncio.wait_for(collect_sse(), timeout=5.0)
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):
             pass
 
     assert len(received_frames) >= 1, (
-        "SSE stream emitted no frames. The event_generator should yield the "
-        "current hub state immediately on connect."
+        "SSE stream emitted no frames within 5 seconds. "
+        "Check that EEGPump is running and hub.get_state() is non-empty."
     )
     frame = received_frames[0]
     assert "connected" in frame

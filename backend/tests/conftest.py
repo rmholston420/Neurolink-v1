@@ -60,7 +60,24 @@ def eeg_buffer_256hz() -> list[list[float]]:
 
 @pytest.fixture()
 def app():
-    """Create a fresh FastAPI application instance."""
+    """Create a fresh FastAPI application instance with reset singletons.
+
+    The lifespan auto-connects mock on startup.  Without resetting the module-
+    level singletons, the second test that tries to connect sees an already-
+    connected adapter and gets 409 Conflict.
+
+    Reset both:
+      - neurolink.dependencies._service  (NeuroLinkService singleton)
+      - neurolink.hub._hub               (EEGHub singleton)
+    so each app instance starts from a clean state.
+    """
+    import neurolink.dependencies as deps
+    import neurolink.hub as hub_mod
+
+    # Reset singletons before creating app
+    deps._service = None
+    hub_mod._hub = hub_mod.EEGHub()
+
     from neurolink.main import create_app
     return create_app()
 

@@ -74,12 +74,23 @@ def classify_focus(score: float) -> FocusState:
 def compute_focus_score(bands_alpha: float, bands_beta: float, baseline_alpha: float) -> float:
     """Compute a normalised focus score from band powers.
 
-    Focus is driven by alpha suppression relative to baseline,
-    penalised by beta (mind-wandering).
+    In contemplative practice, focused meditation is characterised by
+    alpha relative to the subject's own baseline (present, settled mind)
+    combined with beta engagement (active, clear attention).  High beta
+    with moderate alpha is the hallmark of focused, non-drowsy practice;
+    low alpha AND low beta together indicate distraction or drowsiness.
+
+    Score = alpha_ratio_component * 0.6 + beta_engagement * 0.4
+
+    where:
+      alpha_ratio_component = min(bands_alpha / baseline_alpha, 1.5) / 1.5
+          (alpha relative to calibrated baseline, capped to avoid overflow)
+      beta_engagement       = min(bands_beta, 0.5) / 0.5
+          (normalised beta, capped at 0.5 — above that is noise/artefact)
 
     Args:
-        bands_alpha: Current alpha band power fraction
-        bands_beta: Current beta band power fraction
+        bands_alpha: Current alpha band power fraction in [0, 1]
+        bands_beta:  Current beta band power fraction in [0, 1]
         baseline_alpha: Per-subject alpha baseline from calibration
 
     Returns:
@@ -88,12 +99,12 @@ def compute_focus_score(bands_alpha: float, bands_beta: float, baseline_alpha: f
     if baseline_alpha <= 0:
         baseline_alpha = 0.3  # sensible fallback
 
-    # Inverse of alpha ratio (alpha suppression = focus)
+    # Alpha relative to subject baseline (capped at 1.5× to stay in [0, 1])
     alpha_ratio = bands_alpha / (baseline_alpha + 1e-6)
-    alpha_component = max(0.0, 1.0 - alpha_ratio)
+    alpha_component = min(alpha_ratio, 1.5) / 1.5
 
-    # Beta penalty (high beta = mind-wandering)
-    beta_penalty = min(bands_beta, 0.5) / 0.5
+    # Beta engagement: active attention indicator
+    beta_engagement = min(bands_beta, 0.5) / 0.5
 
-    score = (alpha_component * 0.7) + ((1.0 - beta_penalty) * 0.3)
+    score = (alpha_component * 0.6) + (beta_engagement * 0.4)
     return float(max(0.0, min(1.0, score)))
