@@ -6,6 +6,10 @@
  *   No terminal, no drivers, no install required.
  *   The browser's native BLE picker handles device selection.
  *
+ *   NOTE: App.tsx owns the single useMuseBLE instance and passes it
+ *   down via the optional `bleInstance` prop.  When present we use it
+ *   directly to avoid opening a second BLE connection.
+ *
  * Path B (Backend BLE tab):
  *   Calls POST /api/v1/neurolink/ble/scan to trigger a backend bleak
  *   scan, then lets the user pick a device from the scan results and
@@ -18,13 +22,16 @@
  */
 import React, { useState } from 'react'
 import { useMuseBLE } from '../hooks/useMuseBLE'
+import type { UseMuseBLEReturn } from '../hooks/useMuseBLE'
 import MuseConnectButton from './MuseConnectButton'
 import type { ConnectRequest, ConnectResponse, BLEDevice } from '../types'
 
 interface Props {
-  apiUrl:    string
-  connected: boolean
+  apiUrl:       string
+  connected:    boolean
   onStatusChange?: (msg: string, ok: boolean) => void
+  /** Optional: pass the App-level useMuseBLE instance to avoid a second hook call. */
+  bleInstance?: UseMuseBLEReturn
 }
 
 type Tab = 'webbt' | 'backend'
@@ -98,7 +105,7 @@ const s: Record<string, React.CSSProperties> = {
 const ADAPTER_TYPES: ConnectRequest['adapter_type'][] = ['ble', 'lsl', 'mock']
 const DEVICE_MODELS: ConnectRequest['device_model'][] = ['muse_s_gen1', 'muse_s_athena', 'mock']
 
-// ── Backend BLE Tab ───────────────────────────────────────────────────────────
+// ── Backend BLE Tab ──────────────────────────────────────────────────────────────────
 function BackendBLETab({
   apiUrl, connected, onStatusChange,
 }: { apiUrl: string; connected: boolean; onStatusChange?: (m: string, ok: boolean) => void }) {
@@ -284,10 +291,13 @@ function BackendBLETab({
   )
 }
 
-// ── Main ConnectionPanel ──────────────────────────────────────────────────────
-export default function ConnectionPanel({ apiUrl, connected, onStatusChange }: Props) {
+// ── Main ConnectionPanel ────────────────────────────────────────────────────────────
+export default function ConnectionPanel({ apiUrl, connected, onStatusChange, bleInstance }: Props) {
   const [tab, setTab] = useState<Tab>('webbt')
-  const ble = useMuseBLE(apiUrl)
+  // Use the passed-in instance if available, otherwise create one locally
+  // (fallback keeps the component usable standalone in tests).
+  const localBle = useMuseBLE(bleInstance ? '' : apiUrl)
+  const ble = bleInstance ?? localBle
 
   return (
     <div style={s.root}>
