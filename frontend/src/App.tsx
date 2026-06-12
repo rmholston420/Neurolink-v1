@@ -47,6 +47,9 @@ import { useHRVCoherence }      from './hooks/useHRVCoherence'
 import { useAlchemicalJournal } from './hooks/useAlchemicalJournal'
 import { useSessionGoals }      from './hooks/useSessionGoals'
 
+// ── Filters page ─────────────────────────────────────────────────────────────
+import FiltersPage from './components/FiltersPage'
+
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000'
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -112,7 +115,7 @@ const dot = (connected: boolean): React.CSSProperties => ({
   background: connected ? '#3fb950' : '#f85149',
 })
 
-type Tab = 'live' | 'pipeline' | 'spectrogram' | 'topo' | 'connectivity' | 'practice' | 'journal' | 'history'
+type Tab = 'live' | 'pipeline' | 'spectrogram' | 'topo' | 'connectivity' | 'practice' | 'journal' | 'history' | 'filters'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'live',          label: '⚡ Live' },
   { id: 'pipeline',      label: '🔬 Pipeline' },
@@ -122,6 +125,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'practice',      label: '🧘 Practice' },
   { id: 'journal',       label: '📓 Journal' },
   { id: 'history',       label: '📊 History' },
+  { id: 'filters',       label: '🔧 Filters' },
 ]
 
 function tabBtn(id: Tab, active: Tab): React.CSSProperties {
@@ -508,6 +512,11 @@ export default function App() {
             <SessionHistoryPanel history={history} />
           </div>
         </div>
+      )}
+
+      {/* ═══════════════════════ FILTERS TAB ═════════════════════════════ */}
+      {tab === 'filters' && (
+        <FiltersPage apiUrl={API_URL} />
       )}
 
       {state && (

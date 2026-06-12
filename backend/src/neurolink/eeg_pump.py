@@ -87,19 +87,34 @@ Ocular regression runs on clean frames only (after Stage 4).
   - OLS slope coefficients are refitted every recalib_frames ticks
     (default 512 ≈ 2 min at 4 Hz) to track slow skin-potential drift.
 
+Filter toggles
+--------------
+Each stage can be disabled at runtime via PUT /api/v1/filters without
+restarting the server.  get_toggles() returns an immutable snapshot of
+the current FilterToggleConfig; the pump reads it at the top of every
+_build_payload() call so changes take effect on the very next tick.
+Disabled stages are logged at DEBUG level so the pipeline audit trail
+remains complete even when stages are bypassed.
+
 Pipeline per tick
 -----------------
  1.  Read EEGSample from adapter
- 2.  [Stage 0] IMU motion gate
+ 2.  [Stage 0] IMU motion gate          (skipped if imu_gate=False)
  3.  [Stage 0] Impedance update
  4.  [Stage 0] Acquisition readiness gate
  5.  [Stage 1] Zero-phase FIR filter chain (HP + notch + LP)
+                                         (bypassed if stage1_fir=False)
  6.  [Stage 2] Bad channel detection (EMA update)
  7.  [Stage 2] Spherical spline interpolation of bad channels
+                                         (bypassed if stage2_bad_channels=False)
  8.  [Stage 3] Epoch-level artifact gate (amplitude / IMU / kurtosis)
- 9.  [Stage 4] ASR burst reconstruction          (clean frames only)
+                                         (bypassed if stage3_artifact_gate=False)
+ 9.  [Stage 4] ASR burst reconstruction  (clean frames only)
+                                         (bypassed if stage4_asr=False)
  9b. [Stage 4b] Baseline recording / impedance stabilisation
+                                         (bypassed if stage4b_baseline=False)
 10.  [Stage 5] Gratton-Coles ocular regression   (clean frames only)
+                                         (bypassed if stage5_ocular=False)
 11.  Band powers from corrected+filtered buffer  (clean frames only)
 12.  Derived EEG (FAA, FMt)                      (clean frames only)
 13.  PPG HRV
@@ -122,6 +137,7 @@ from neurolink.dsp.artifact_gate import ArtifactGate
 from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
 from neurolink.dsp.baseline import BaselineRecorder
+from neurolink.dsp.filter_toggles import get_toggles
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
@@ -158,6 +174,13 @@ class EEGPump:
     ASR and hub instances that the pump owns.  It runs silently inside
     _build_payload() on every clean frame; no external configuration
     is required.
+
+    Filter toggles
+    --------------
+    get_toggles() is called once per tick at the top of _build_payload()
+    to snapshot the current FilterToggleConfig.  Each stage is wrapped
+    in `if toggles.<flag>:` so a PUT /api/v1/filters change takes effect
+    on the very next tick with no restart.
 
     Pipeline per tick
     -----------------
@@ -248,10 +271,12 @@ class EEGPump:
         if sample is None:
             return
 
-        # ── Stage 0 ───────────────────────────────────────────────────────────────────────
+        # ── Stage 0 ───────────────────────────────────────────────────────────
+        toggles = get_toggles()
+
         if self._stage0 is not None:
-            sample = self._stage0.gate_sample(sample)
-        if self._stage0 is not None:
+            if toggles.imu_gate:
+                sample = self._stage0.gate_sample(sample)
             self._stage0.impedance.update_from_sample(
                 poor_contact=sample.poor_contact,
                 channels=sample.channels,
@@ -282,6 +307,15 @@ class EEGPump:
         from neurolink.dsp.imu import head_orientation
         from neurolink.dsp.ppg import compute_ppg
 
+        # Snapshot toggle state once per tick — changes from PUT /api/v1/filters
+        # take effect on the next tick; within this tick the view is consistent.
+        toggles = get_toggles()
+
+        # Log any disabled stages at debug level so audit trail is complete.
+        disabled = [k for k, v in toggles.to_dict().items() if not v]
+        if disabled:
+            log.debug("eeg_pump_stages_disabled", disabled=disabled)
+
         # ── Assemble raw EEG array ───────────────────────────────────────
         eeg_arr: np.ndarray | None = None
         if sample.eeg_buffer:
@@ -292,12 +326,12 @@ class EEGPump:
                 )
 
         # ── Stage 1 — zero-phase FIR filter chain ──────────────────────
-        if eeg_arr is not None:
+        if eeg_arr is not None and toggles.stage1_fir:
             eeg_arr = self._stage1.apply(eeg_arr)
 
         # ── Stage 2 — bad channel detection & interpolation ─────────────
         bad_channels: list[str] = []
-        if eeg_arr is not None:
+        if eeg_arr is not None and toggles.stage2_bad_channels:
             self._stage2.update(eeg_arr)
             bad_channels = self._stage2.get_bad_channels()
             if bad_channels:
@@ -311,7 +345,7 @@ class EEGPump:
         # ── Stage 3 — epoch-level artifact gate ────────────────────────
         artifact_rejected: bool = False
         artifact_reasons: list[str] = []
-        if eeg_arr is not None:
+        if eeg_arr is not None and toggles.stage3_artifact_gate:
             accel_arr: np.ndarray | None = None
             if sample.accel_buffer and len(sample.accel_buffer) >= 3:
                 try:
@@ -330,28 +364,15 @@ class EEGPump:
                 )
 
         # ── Stage 4 — ASR burst reconstruction (clean frames only) ─────
-        # Prioritised over pure ICA for low-channel-count wearable EEG.
-        # Calibrates automatically on the first calib_sec seconds of
-        # clean data; passes frames through unchanged during calibration.
-        if eeg_arr is not None and not artifact_rejected:
+        if eeg_arr is not None and not artifact_rejected and toggles.stage4_asr:
             eeg_arr = self._stage4.apply(eeg_arr)
 
         # ── Stage 4b — Baseline recording (clean frames only) ───────────
-        # BaselineRecorder.process() is a pure side-effect shim: it
-        # returns eeg_arr unchanged in all phases while internally:
-        #   WARMUP    — discards frames (electrode stabilisation)
-        #   RECORDING — feeds frames to ASR for covariance fitting
-        #   COMPLETE  — fires bell SSE event exactly once, then no-ops
-        # The current phase is written to baseline_phase on every tick
-        # so the frontend can show a countdown / progress indicator.
-        if eeg_arr is not None and not artifact_rejected:
+        if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
             eeg_arr = self._baseline.process(eeg_arr)
 
         # ── Stage 5 — Gratton-Coles ocular regression (clean frames) ───
-        # Temporal regression is preferred over ICA ocular removal for
-        # low-channel hardware.  Falls back to pass-through when no
-        # EOG/AUX channel is present.
-        if eeg_arr is not None and not artifact_rejected:
+        if eeg_arr is not None and not artifact_rejected and toggles.stage5_ocular:
             eeg_arr = self._stage5.apply(eeg_arr)
 
         # ── Band powers (clean frames only) ─────────────────────────────

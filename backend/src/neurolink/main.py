@@ -134,6 +134,7 @@ def create_app() -> FastAPI:
     from neurolink.routers.ble import router as ble_router
     from neurolink.routers.calibration import router as calibration_router
     from neurolink.routers.eeg_gate import router as eeg_gate_router
+    from neurolink.routers.filters import router as filters_router
     from neurolink.routers.health import router as health_router
     from neurolink.routers.neurolink import router as neurolink_router
     from neurolink.routers.stage0 import router as stage0_router
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(neurolink_router, prefix="/api/v1")
     app.include_router(calibration_router, prefix="/api/v1")
     app.include_router(eeg_gate_router, prefix="/api/v1")
+    app.include_router(filters_router, prefix="/api/v1")
     app.include_router(ble_router, prefix="/api/v1/neurolink")
     app.include_router(stage0_router, prefix="/api/v1")
     app.include_router(stage1_router, prefix="/api/v1")
