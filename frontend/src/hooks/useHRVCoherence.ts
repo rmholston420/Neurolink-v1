@@ -1,116 +1,109 @@
 /**
- * useHRVCoherence
+ * useHRVCoherence — Tier 2
+ * Estimates real-time HRV coherence ratio targeting the 0.1 Hz resonance band.
+ * Uses a circular buffer of R-R intervals derived from hr_bpm to compute power
+ * in the low-frequency coherence band (0.04–0.15 Hz) vs. total HRV power.
  *
- * Computes a HRV coherence score from the live hrv_rmssd stream and
- * drives a paced-breathing pacer targeting 0.1 Hz resonance frequency
- * (≈ 6 breaths/min, the standard heart-rate-variability biofeedback target).
- *
- * Coherence score algorithm:
- *   - Maintain a 30-sample rolling buffer of hrv_rmssd values
- *   - Compute coefficient of variation (CV = sigma/mean)
- *   - A high CV with a rhythm close to 0.1 Hz oscillation → high coherence
- *   - Score 0–100 is derived from: min(100, CV * 120) as a proxy
- *     (a real implementation would use frequency-domain LF/HF power ratio;
- *      this is a clinically reasonable approximation for a 4-electrode device)
- *
- * Pacer:
- *   - pacerPhase: 0–1 cycling at breathsPerMin / 60 Hz
- *   - pacerState: 'inhale' | 'exhale'
- *   - breathsPerMin: configurable 4–7 (default 6)
+ * Also drives a paced-breathing pacer: inhale/exhale phase at ~5.5 breath/min (0.092 Hz).
  */
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import type { NeurolinkState } from '../types'
 
-export type PacerState = 'inhale' | 'exhale'
+export type BreathPhase = 'inhale' | 'exhale'
 
-export interface HRVCoherenceReturn {
-  coherenceScore:  number        // 0–100
-  coherenceLabel:  string        // Low / Medium / High
-  coherenceColour: string
-  pacerPhase:      number        // 0–1 within current inhale or exhale
-  pacerState:      PacerState
-  breathsPerMin:   number
-  setBreathsPerMin: (b: number) => void
-  hrvMean:         number | null
-  hrvSigma:        number | null
-  nSamples:        number
+export interface HRVCoherenceResult {
+  coherenceRatio:  number       // 0–1; ≥ 0.6 considered coherent
+  coherenceLabel:  string
+  rrBufferLen:     number
+  breathPhase:     BreathPhase
+  breathProgress:  number       // 0–1 within current phase
+  pacerBpm:        number       // configurable resonance breathing rate
+  setPacerBpm:     (bpm: number) => void
+  isCoherent:      boolean
 }
 
-const HRV_BUFFER = 30
+const BUFFER_SIZE = 30   // ~30 s at ~1 sample/s derived from HR
+const SAMPLE_RATE = 1    // Hz (we derive one RR per second from hr_bpm)
 
-function coherenceFromBuffer(buf: number[]): number {
-  if (buf.length < 5) return 0
-  const mean  = buf.reduce((a, b) => a + b, 0) / buf.length
-  if (mean < 0.001) return 0
-  const sigma = Math.sqrt(buf.reduce((a, b) => a + (b - mean) ** 2, 0) / buf.length)
-  const cv    = sigma / mean
-  // Map CV 0→0.4 to score 0→100; clamp at 100
-  return Math.min(100, cv * 250)
+function lfPower(rr: number[]): number {
+  // Approximate LF band (0.04–0.15 Hz) power via Goertzel-like sum
+  // on the RR series. Simple DFT energy sum for target bins.
+  if (rr.length < 4) return 0
+  const N = rr.length
+  let lf = 0, total = 0
+  for (let k = 0; k < N; k++) {
+    const freq = (k * SAMPLE_RATE) / N
+    const power = rr.reduce((acc, x, n) => {
+      return acc + x * Math.cos(2 * Math.PI * k * n / N)
+    }, 0) ** 2 + rr.reduce((acc, x, n) => {
+      return acc + x * Math.sin(2 * Math.PI * k * n / N)
+    }, 0) ** 2
+    total += power
+    if (freq >= 0.04 && freq <= 0.15) lf += power
+  }
+  return total > 0 ? lf / total : 0
 }
 
-export function useHRVCoherence(
-  state: Partial<NeurolinkState> | null,
-): HRVCoherenceReturn {
-  const [coherenceScore,  setCoherenceScore]  = useState(0)
-  const [pacerPhase,      setPacerPhase]      = useState(0)
-  const [pacerState,      setPacerState]      = useState<PacerState>('inhale')
-  const [breathsPerMin,   setBreathsPerMinS]  = useState(6)
-  const [hrvMean,         setHrvMean]         = useState<number | null>(null)
-  const [hrvSigma,        setHrvSigma]        = useState<number | null>(null)
-  const [nSamples,        setNSamples]        = useState(0)
+export function useHRVCoherence(state: NeurolinkState | null): HRVCoherenceResult {
+  const rrBuffer   = useRef<number[]>([])
+  const [coherenceRatio, setCoherenceRatio] = useState(0)
+  const [pacerBpm, setPacerBpm] = useState(5.5)  // resonance frequency target
+  const [breathPhase, setBreathPhase] = useState<BreathPhase>('inhale')
+  const [breathProgress, setBreathProgress] = useState(0)
 
-  const hrvBufRef       = useRef<number[]>([])
-  const pacerStartRef   = useRef<number>(Date.now())
-  const pacerTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Build RR buffer from hr_bpm
+  const hrRef = useRef<number | null>(null)
+  hrRef.current = state?.hr_bpm ?? null
 
-  // HRV coherence computation — runs on each new frame
   useEffect(() => {
-    const hrv = state?.hrv_rmssd
-    if (hrv === null || hrv === undefined) return
-    hrvBufRef.current.push(hrv)
-    if (hrvBufRef.current.length > HRV_BUFFER) hrvBufRef.current.shift()
-
-    const buf  = hrvBufRef.current
-    const score = coherenceFromBuffer(buf)
-    setCoherenceScore(score)
-    setNSamples(buf.length)
-
-    if (buf.length >= 5) {
-      const mean  = buf.reduce((a, b) => a + b, 0) / buf.length
-      const sigma = Math.sqrt(buf.reduce((a, b) => a + (b - mean) ** 2, 0) / buf.length)
-      setHrvMean(mean)
-      setHrvSigma(sigma)
-    }
-  }, [state?.frame_count])
-
-  // Pacer animation loop — independent of EEG frames
-  useEffect(() => {
-    pacerStartRef.current = Date.now()
-    const cycleDurationMs = (60 / breathsPerMin) * 1000  // one full breath cycle
-
-    if (pacerTimerRef.current) clearInterval(pacerTimerRef.current)
-    pacerTimerRef.current = setInterval(() => {
-      const elapsed  = (Date.now() - pacerStartRef.current) % cycleDurationMs
-      const phase    = elapsed / cycleDurationMs           // 0–1 over full cycle
-      const inhaling = phase < 0.5
-      setPacerPhase(inhaling ? phase * 2 : (phase - 0.5) * 2)  // 0–1 within phase
-      setPacerState(inhaling ? 'inhale' : 'exhale')
-    }, 50)
-
-    return () => { if (pacerTimerRef.current) clearInterval(pacerTimerRef.current) }
-  }, [breathsPerMin])
-
-  const setBreathsPerMin = useCallback((b: number) => {
-    setBreathsPerMinS(Math.min(7, Math.max(4, b)))
+    const id = setInterval(() => {
+      const hr = hrRef.current
+      if (hr && hr > 30 && hr < 220) {
+        const rr = 60 / hr  // seconds per beat
+        rrBuffer.current.push(rr)
+        if (rrBuffer.current.length > BUFFER_SIZE) rrBuffer.current.shift()
+        const ratio = lfPower(rrBuffer.current)
+        setCoherenceRatio(Math.min(1, ratio * 4))  // scale to 0–1 display
+      }
+    }, 1000)
+    return () => clearInterval(id)
   }, [])
 
-  const score = coherenceScore
-  const coherenceLabel  = score >= 66 ? 'High' : score >= 33 ? 'Medium' : 'Low'
-  const coherenceColour = score >= 66 ? '#3fb950' : score >= 33 ? '#e3b341' : '#f85149'
+  // Breathing pacer at pacerBpm
+  useEffect(() => {
+    const cycleSec  = 60 / pacerBpm         // total seconds per breath cycle
+    const halfCycle = cycleSec / 2 * 1000   // ms per phase
+    let startTime = performance.now()
+    let phase: BreathPhase = 'inhale'
+
+    const id = setInterval(() => {
+      const now     = performance.now()
+      const elapsed = now - startTime
+      const progress = Math.min(1, elapsed / halfCycle)
+      setBreathProgress(progress)
+      setBreathPhase(phase)
+      if (progress >= 1) {
+        phase = phase === 'inhale' ? 'exhale' : 'inhale'
+        startTime = now
+      }
+    }, 50)
+    return () => clearInterval(id)
+  }, [pacerBpm])
+
+  const isCoherent = coherenceRatio >= 0.6
+  const coherenceLabel =
+    coherenceRatio >= 0.8 ? 'High Coherence' :
+    coherenceRatio >= 0.6 ? 'Coherent' :
+    coherenceRatio >= 0.3 ? 'Building' : 'Low Coherence'
 
   return {
-    coherenceScore: score, coherenceLabel, coherenceColour,
-    pacerPhase, pacerState, breathsPerMin, setBreathsPerMin,
-    hrvMean, hrvSigma, nSamples,
+    coherenceRatio,
+    coherenceLabel,
+    rrBufferLen: rrBuffer.current.length,
+    breathPhase,
+    breathProgress,
+    pacerBpm,
+    setPacerBpm,
+    isCoherent,
   }
 }

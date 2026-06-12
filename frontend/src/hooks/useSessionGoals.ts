@@ -1,200 +1,132 @@
 /**
- * useSessionGoals
- *
- * Tracks session goals and awards achievement badges.
- *
- * Goals (all optional, user-configurable):
- *   - Target duration in minutes
- *   - EA-1 eligibility % target
- *   - Focus % target
- *
- * Progress is computed live from the current session.
- *
- * Achievements (earned in-memory, persist across sessions this browser session):
- *   FIRST_EA1        First time ea1.eligible becomes true
- *   DEEP_FOCUS       focus_score >= 0.8 sustained for 60 consecutive frames
- *   LONG_SIT         Session duration >= 20 minutes
- *   COHERENCE_MASTER HRV coherence score >= 66 for 30 consecutive frames
- *   NIGREDO_ESCAPE   First stage transition out of Nigredo
- *   RUBEDO_TOUCH     alchemical_stage === 'Rubedo' for the first time
+ * useSessionGoals — Tier 2
+ * Manages a pre-session goal (target duration + EA-1%), tracks live progress,
+ * awards achievement badges on completion, persists badge list across mounts.
  */
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import type { NeurolinkState } from '../types'
 
-export interface SessionGoalConfig {
-  durationMinTarget:  number | null   // minutes
-  ea1PctTarget:       number | null   // 0–100
-  focusPctTarget:     number | null   // 0–100
+export interface SessionGoal {
+  targetMinutes:  number    // desired session duration
+  targetEA1Pct:   number    // desired % of time in EA-1 eligibility (0–100)
 }
 
-export interface GoalProgress {
-  durationMin:    number
-  durationPct:    number   // 0–1 toward target
-  ea1Pct:         number
-  ea1ProgressPct: number   // 0–1 toward target
-  focusPct:       number
-  focusProgressPct: number // 0–1 toward target
-  allGoalsMet:    boolean
+export interface Badge {
+  id:        string
+  label:     string
+  emoji:     string
+  earnedAt:  number
+  detail:    string
 }
 
-export type AchievementId =
-  | 'FIRST_EA1'
-  | 'DEEP_FOCUS'
-  | 'LONG_SIT'
-  | 'COHERENCE_MASTER'
-  | 'NIGREDO_ESCAPE'
-  | 'RUBEDO_TOUCH'
-
-export interface Achievement {
-  id:          AchievementId
-  label:       string
-  description: string
-  icon:        string
-  earnedAt:    number | null
+export interface SessionGoalsResult {
+  goal:            SessionGoal | null
+  setGoal:         (g: SessionGoal) => void
+  clearGoal:       () => void
+  elapsedSec:      number
+  ea1Frames:       number
+  totalFrames:     number
+  ea1Pct:          number    // live % of frames that were EA-1 eligible
+  durationProgress: number   // 0–1
+  ea1Progress:     number    // 0–1
+  badges:          Badge[]
+  isRunning:       boolean
+  startSession:    () => void
+  endSession:      () => void
 }
 
-const ACHIEVEMENT_DEFS: Omit<Achievement, 'earnedAt'>[] = [
-  { id: 'FIRST_EA1',        icon: '✨', label: 'First Light',       description: 'EA-1 eligibility reached for the first time' },
-  { id: 'DEEP_FOCUS',       icon: '🎯', label: 'Deep Focus',        description: 'Maintained focus ≥ 80% for 60 consecutive frames' },
-  { id: 'LONG_SIT',         icon: '🪷', label: 'Long Sit',          description: 'Completed a session of 20+ minutes' },
-  { id: 'COHERENCE_MASTER', icon: '💚', label: 'Coherence Master',  description: 'Sustained HRV coherence ≥ 66 for 30 consecutive frames' },
-  { id: 'NIGREDO_ESCAPE',   icon: '🌅', label: 'Dawn Breaking',     description: 'First transition out of Nigredo stage' },
-  { id: 'RUBEDO_TOUCH',     icon: '🔴', label: 'Rubedo Touch',      description: 'Reached the Rubedo alchemical stage' },
+const BADGE_STORE: Badge[] = []
+
+const BADGE_DEFS: Array<{ id: string; label: string; emoji: string; detail: string;
+  test: (el: number, ea1Pct: number, goal: SessionGoal) => boolean }> = [
+  { id: 'first_session',  label: 'First Session',  emoji: '🌱', detail: 'Completed your first timed session',
+    test: (el) => el >= 60 },
+  { id: 'five_min',       label: '5-Minute Sit',   emoji: '⏱',  detail: 'Meditated for 5 continuous minutes',
+    test: (el) => el >= 300 },
+  { id: 'twenty_min',     label: '20-Minute Sit',  emoji: '🧘', detail: 'Meditated for 20 continuous minutes',
+    test: (el) => el >= 1200 },
+  { id: 'ea1_50',         label: 'EA-1 Achiever',  emoji: '⚡', detail: '50%+ of session time in EA-1',
+    test: (_e, ea1) => ea1 >= 50 },
+  { id: 'ea1_75',         label: 'EA-1 Master',    emoji: '🔮', detail: '75%+ of session time in EA-1',
+    test: (_e, ea1) => ea1 >= 75 },
+  { id: 'goal_met',       label: 'Goal Achieved',  emoji: '🏆', detail: 'Met both duration and EA-1 targets',
+    test: (el, ea1, g) => el >= g.targetMinutes * 60 && ea1 >= g.targetEA1Pct },
 ]
 
-export interface SessionGoalsReturn {
-  goals:          SessionGoalConfig
-  setGoals:       (g: Partial<SessionGoalConfig>) => void
-  progress:       GoalProgress
-  achievements:   Achievement[]
-  newAchievement: Achievement | null   // most recently earned, shown as toast
-  clearToast:     () => void
-}
+export function useSessionGoals(state: NeurolinkState | null): SessionGoalsResult {
+  const [goal,       setGoalState]   = useState<SessionGoal | null>(null)
+  const [isRunning,  setIsRunning]   = useState(false)
+  const [elapsedSec, setElapsedSec]  = useState(0)
+  const [ea1Frames,  setEa1Frames]   = useState(0)
+  const [totalFrames, setTotalFrames] = useState(0)
+  const [badges,     setBadges]      = useState<Badge[]>(BADGE_STORE)
 
-export function useSessionGoals(
-  state: Partial<NeurolinkState> | null,
-  coherenceScore?: number,
-): SessionGoalsReturn {
-  const [goals, setGoalsState] = useState<SessionGoalConfig>({
-    durationMinTarget: 20,
-    ea1PctTarget:      30,
-    focusPctTarget:    50,
-  })
+  const stateRef   = useRef(state)
+  stateRef.current = state
 
-  const [achievements, setAchievements] = useState<Achievement[]>(
-    ACHIEVEMENT_DEFS.map(a => ({ ...a, earnedAt: null }))
-  )
-  const [newAchievement, setNewAchievement] = useState<Achievement | null>(null)
+  const goalRef = useRef(goal)
+  goalRef.current = goal
 
-  // Session accumulators
-  const sessionStartRef   = useRef<number>(Date.now())
-  const ea1FramesRef      = useRef<number>(0)
-  const totalFramesRef    = useRef<number>(0)
-  const focusSumRef       = useRef<number>(0)
-  const deepFocusRunRef   = useRef<number>(0)
-  const coherenceRunRef   = useRef<number>(0)
-  const prevStageRef      = useRef<string>('')
-  const prevFrameRef      = useRef<number>(0)
-
-  const earn = useCallback((id: AchievementId) => {
-    setAchievements(prev => {
-      const existing = prev.find(a => a.id === id)
-      if (existing?.earnedAt !== null) return prev  // already earned
-      const updated = prev.map(a =>
-        a.id === id ? { ...a, earnedAt: Date.now() } : a
-      )
-      const earned = updated.find(a => a.id === id)!
-      setNewAchievement(earned)
-      return updated
-    })
-  }, [])
-
+  // Tick every second when running
   useEffect(() => {
-    if (!state) return
-    const frame     = state.frame_count  ?? 0
-    const ea1ok     = state.ea1?.eligible ?? false
-    const focus     = state.focus_score   ?? 0
-    const stage     = state.alchemical_stage ?? ''
-    const connected = state.connected ?? false
+    if (!isRunning) return
+    const id = setInterval(() => {
+      const s = stateRef.current
+      setElapsedSec(t => t + 1)
+      setTotalFrames(n => n + 1)
+      if (s?.ea1?.eligible) setEa1Frames(n => n + 1)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [isRunning])
 
-    if (!connected) return
+  // Badge evaluation on every state update
+  useEffect(() => {
+    if (!isRunning || !goalRef.current) return
+    const ea1Pct = totalFrames > 0 ? (ea1Frames / totalFrames) * 100 : 0
+    const g = goalRef.current
+    BADGE_DEFS.forEach(def => {
+      const alreadyEarned = BADGE_STORE.some(b => b.id === def.id)
+      if (!alreadyEarned && def.test(elapsedSec, ea1Pct, g)) {
+        const badge: Badge = {
+          id: def.id, label: def.label, emoji: def.emoji,
+          earnedAt: Date.now(), detail: def.detail,
+        }
+        BADGE_STORE.push(badge)
+        setBadges([...BADGE_STORE])
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [elapsedSec, isRunning])
 
-    // Detect session reset
-    if (frame < prevFrameRef.current && prevFrameRef.current > 10) {
-      sessionStartRef.current  = Date.now()
-      ea1FramesRef.current     = 0
-      totalFramesRef.current   = 0
-      focusSumRef.current      = 0
-      deepFocusRunRef.current  = 0
-      coherenceRunRef.current  = 0
-    }
-    prevFrameRef.current = frame
+  const ea1Pct = totalFrames > 0 ? (ea1Frames / totalFrames) * 100 : 0
+  const g = goal
+  const durationProgress = g ? Math.min(1, elapsedSec / (g.targetMinutes * 60)) : 0
+  const ea1Progress      = g ? Math.min(1, ea1Pct / g.targetEA1Pct)              : 0
 
-    totalFramesRef.current++
-    if (ea1ok) ea1FramesRef.current++
-    focusSumRef.current += focus
-
-    // Deep focus run
-    if (focus >= 0.8) {
-      deepFocusRunRef.current++
-      if (deepFocusRunRef.current >= 60) earn('DEEP_FOCUS')
-    } else {
-      deepFocusRunRef.current = 0
-    }
-
-    // Coherence run
-    if ((coherenceScore ?? 0) >= 66) {
-      coherenceRunRef.current++
-      if (coherenceRunRef.current >= 30) earn('COHERENCE_MASTER')
-    } else {
-      coherenceRunRef.current = 0
-    }
-
-    // EA-1 first time
-    if (ea1ok) earn('FIRST_EA1')
-
-    // Long sit (20 min)
-    const durationMin = (Date.now() - sessionStartRef.current) / 60000
-    if (durationMin >= 20) earn('LONG_SIT')
-
-    // Stage transitions
-    if (stage && stage !== prevStageRef.current) {
-      if (prevStageRef.current === 'Nigredo') earn('NIGREDO_ESCAPE')
-      if (stage === 'Rubedo') earn('RUBEDO_TOUCH')
-      prevStageRef.current = stage
-    }
-  }, [state?.frame_count, coherenceScore, earn])
-
-  const setGoals = useCallback((g: Partial<SessionGoalConfig>) => {
-    setGoalsState(prev => ({ ...prev, ...g }))
-  }, [])
-
-  const clearToast = useCallback(() => setNewAchievement(null), [])
-
-  // Live progress
-  const durationMin    = (Date.now() - sessionStartRef.current) / 60000
-  const ea1Pct         = totalFramesRef.current > 0
-    ? (ea1FramesRef.current / totalFramesRef.current) * 100 : 0
-  const focusPct       = totalFramesRef.current > 0
-    ? (focusSumRef.current / totalFramesRef.current) * 100 : 0
-
-  const durTarget   = goals.durationMinTarget ?? 0
-  const ea1Target   = goals.ea1PctTarget      ?? 0
-  const focusTarget = goals.focusPctTarget    ?? 0
-
-  const progress: GoalProgress = {
-    durationMin,
-    durationPct:     durTarget   > 0 ? Math.min(1, durationMin / durTarget)    : 0,
-    ea1Pct,
-    ea1ProgressPct:  ea1Target   > 0 ? Math.min(1, ea1Pct      / ea1Target)    : 0,
-    focusPct,
-    focusProgressPct: focusTarget > 0 ? Math.min(1, focusPct    / focusTarget)  : 0,
-    allGoalsMet: (
-      (durTarget   === 0 || durationMin >= durTarget) &&
-      (ea1Target   === 0 || ea1Pct      >= ea1Target) &&
-      (focusTarget === 0 || focusPct    >= focusTarget)
-    ),
+  function startSession() {
+    setElapsedSec(0)
+    setEa1Frames(0)
+    setTotalFrames(0)
+    setIsRunning(true)
   }
 
-  return { goals, setGoals, progress, achievements, newAchievement, clearToast }
+  function endSession() {
+    setIsRunning(false)
+  }
+
+  function setGoal(g: SessionGoal) {
+    setGoalState(g)
+  }
+
+  function clearGoal() {
+    setGoalState(null)
+    setIsRunning(false)
+  }
+
+  return {
+    goal, setGoal, clearGoal,
+    elapsedSec, ea1Frames, totalFrames, ea1Pct,
+    durationProgress, ea1Progress,
+    badges, isRunning, startSession, endSession,
+  }
 }

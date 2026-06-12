@@ -21,15 +21,24 @@ import BandTrend           from './components/BandTrend'
 import ConnectivityArc     from './components/ConnectivityArc'
 import NeurofeedbackGauge  from './components/NeurofeedbackGauge'
 
-// ── New feature components ────────────────────────────────────────────────────
+// ── Tier 1 feature components & hooks ────────────────────────────────────────
 import AudioFeedbackPanel  from './components/AudioFeedbackPanel'
 import WanderingLog        from './components/WanderingLog'
 import SessionHistoryPanel from './components/SessionHistoryPanel'
-
-// ── New feature hooks ─────────────────────────────────────────────────────────
 import { useAudioFeedback }     from './hooks/useAudioFeedback'
 import { useWanderingDetector } from './hooks/useWanderingDetector'
 import { useSessionHistory }    from './hooks/useSessionHistory'
+
+// ── Tier 2 feature components & hooks ────────────────────────────────────────
+import MeditationTimer      from './components/MeditationTimer'
+import PersonalBaseline     from './components/PersonalBaseline'
+import HRVCoherenceTrainer  from './components/HRVCoherenceTrainer'
+import AlchemicalJournal    from './components/AlchemicalJournal'
+import SessionGoals         from './components/SessionGoals'
+import { usePersonalBaseline }  from './hooks/usePersonalBaseline'
+import { useHRVCoherence }      from './hooks/useHRVCoherence'
+import { useAlchemicalJournal } from './hooks/useAlchemicalJournal'
+import { useSessionGoals }      from './hooks/useSessionGoals'
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000'
 
@@ -96,12 +105,14 @@ const dot = (connected: boolean): React.CSSProperties => ({
   background: connected ? '#3fb950' : '#f85149',
 })
 
-type Tab = 'live' | 'spectrogram' | 'topo' | 'connectivity' | 'history'
+type Tab = 'live' | 'spectrogram' | 'topo' | 'connectivity' | 'practice' | 'journal' | 'history'
 const TABS: { id: Tab; label: string }[] = [
   { id: 'live',          label: '⚡ Live' },
   { id: 'spectrogram',   label: '🌊 Spectrogram' },
   { id: 'topo',          label: '🧠 Topo Map' },
   { id: 'connectivity',  label: '🔗 Connectivity' },
+  { id: 'practice',      label: '🧘 Practice' },
+  { id: 'journal',       label: '📓 Journal' },
   { id: 'history',       label: '📊 History' },
 ]
 
@@ -151,10 +162,16 @@ export default function App() {
   const connected  = state?.connected ?? false
   const [tab, setTab] = useState<Tab>('live')
 
-  // ── New feature hooks (all derive from `state`) ───────────────────────────
+  // ── Tier 1 hooks ──────────────────────────────────────────────────────────
   const audio    = useAudioFeedback(state)
   const detector = useWanderingDetector(state)
   const history  = useSessionHistory(state)
+
+  // ── Tier 2 hooks ──────────────────────────────────────────────────────────
+  const baseline    = usePersonalBaseline(state)
+  const coherence   = useHRVCoherence(state)
+  const journal     = useAlchemicalJournal(state)
+  const sessionGoals = useSessionGoals(state)
 
   // Battery: Path A (Web BT) has numeric %; Path B has nothing.
   const battery = ble.battery
@@ -296,6 +313,12 @@ export default function App() {
               <div style={S.cardTitle}>🔔 Audio Neurofeedback</div>
               <AudioFeedbackPanel audio={audio} />
             </div>
+
+            {/* ── Personal Baseline (live tab summary) ─────────────────── */}
+            <div style={S.card}>
+              <div style={S.cardTitle}>📈 Personal Baseline</div>
+              <PersonalBaseline result={baseline} />
+            </div>
           </div>
         </>
       )}
@@ -354,6 +377,49 @@ export default function App() {
           <div style={S.card}>
             <div style={S.cardTitle}>Band Trends · 60 s</div>
             <BandTrend bands={state?.bands ?? null} baselineAlpha={null} />
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════ PRACTICE TAB ════════════════════════════ */}
+      {tab === 'practice' && (
+        <div style={S.grid}>
+          {/* Session Goals — top-of-practice */}
+          <div style={S.cardWide}>
+            <div style={S.cardTitle}>🏆 Session Goals &amp; Achievements</div>
+            <SessionGoals goals={sessionGoals} />
+          </div>
+
+          {/* Meditation Timer */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>🕐 Guided Meditation Timer</div>
+            <MeditationTimer />
+          </div>
+
+          {/* HRV Coherence Trainer */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>💓 HRV Coherence Trainer</div>
+            <HRVCoherenceTrainer
+              result={coherence}
+              hrBpm={state?.hr_bpm ?? null}
+              hrv={state?.hrv_rmssd ?? null}
+            />
+          </div>
+
+          {/* Personal Baseline (full view on practice tab) */}
+          <div style={S.card}>
+            <div style={S.cardTitle}>📈 Personal Baseline Deviations</div>
+            <PersonalBaseline result={baseline} />
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════ JOURNAL TAB ═════════════════════════════ */}
+      {tab === 'journal' && (
+        <div style={S.grid}>
+          <div style={S.cardWide}>
+            <div style={S.cardTitle}>📓 Alchemical Stage Journal</div>
+            <AlchemicalJournal journal={journal} />
           </div>
         </div>
       )}

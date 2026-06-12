@@ -1,118 +1,84 @@
 /**
- * usePersonalBaseline
- *
- * Maintains a rolling personal baseline for alpha, theta, and focus_score
- * computed from the last N completed sessions.
- *
- * Each frame, computes a z-score deviation from the baseline mean:
- *   z = (current - mean) / sigma
- *
- * Exports:
- *   baseline        rolling mean ± sigma for each metric
- *   deviation       current z-scores { alpha, theta, focus }
- *   nSessions       number of sessions used for baseline
- *   isCalibrated    true once >= MIN_SESSIONS available
- *   recordSession   call at end of each session with mean values
- *   resetBaseline   clears accumulated data
+ * usePersonalBaseline — Tier 2
+ * Maintains a rolling baseline (exponential moving average) for alpha, theta,
+ * beta, focus_score, and fatigue_score. Returns per-metric deviation from norm.
  */
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import type { NeurolinkState } from '../types'
 
-const MIN_SESSIONS = 3   // need at least 3 sessions for meaningful baseline
-const MAX_SESSIONS = 20  // keep last 20
-
-export interface MetricBaseline {
-  mean:  number
-  sigma: number
-}
-
-export interface BaselineSnapshot {
-  alpha: MetricBaseline
-  theta: MetricBaseline
-  focus: MetricBaseline
+export interface BaselineMetrics {
+  alpha:        number | null
+  theta:        number | null
+  beta:         number | null
+  focusScore:   number | null
+  fatigueScore: number | null
 }
 
 export interface BaselineDeviation {
-  alpha: number | null   // z-score, null if not calibrated
-  theta: number | null
-  focus: number | null
+  alpha:        number | null  // (current - baseline) / baseline * 100  [%]
+  theta:        number | null
+  beta:         number | null
+  focusScore:   number | null
+  fatigueScore: number | null
 }
 
-export interface SessionSample {
-  meanAlpha: number
-  meanTheta: number
-  meanFocus: number
-}
-
-export interface PersonalBaselineReturn {
-  baseline:     BaselineSnapshot | null
-  deviation:    BaselineDeviation
-  nSessions:    number
-  isCalibrated: boolean
-  recordSession: (sample: SessionSample) => void
+export interface PersonalBaselineResult {
+  baseline:   BaselineMetrics
+  deviation:  BaselineDeviation
+  sampleCount: number
   resetBaseline: () => void
 }
 
-function stats(vals: number[]): MetricBaseline {
-  const mean  = vals.reduce((a, b) => a + b, 0) / vals.length
-  const sigma = Math.sqrt(
-    vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length
-  ) || 0.001
-  return { mean, sigma }
+const ALPHA = 0.03  // EMA smoothing — ~33-sample half-life at 1 fps
+
+function ema(prev: number | null, next: number): number {
+  if (prev === null) return next
+  return prev * (1 - ALPHA) + next * ALPHA
 }
 
-export function usePersonalBaseline(
-  state: Partial<NeurolinkState> | null,
-): PersonalBaselineReturn {
-  const [sessions,  setSessions]  = useState<SessionSample[]>([])
-  const [baseline,  setBaseline]  = useState<BaselineSnapshot | null>(null)
-  const [deviation, setDeviation] = useState<BaselineDeviation>({ alpha: null, theta: null, focus: null })
+function deviation(current: number, base: number | null): number | null {
+  if (base === null || base === 0) return null
+  return ((current - base) / base) * 100
+}
 
-  // Recompute baseline whenever sessions change
+export function usePersonalBaseline(state: NeurolinkState | null): PersonalBaselineResult {
+  const [baseline, setBaseline] = useState<BaselineMetrics>({
+    alpha: null, theta: null, beta: null, focusScore: null, fatigueScore: null,
+  })
+  const [sampleCount, setSampleCount] = useState(0)
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  // Tick at 1 Hz (state updates arrive faster; we sample periodically)
   useEffect(() => {
-    if (sessions.length < MIN_SESSIONS) {
-      setBaseline(null)
-      return
-    }
-    setBaseline({
-      alpha: stats(sessions.map(s => s.meanAlpha)),
-      theta: stats(sessions.map(s => s.meanTheta)),
-      focus: stats(sessions.map(s => s.meanFocus)),
-    })
-  }, [sessions])
-
-  // Recompute deviation on every new frame
-  useEffect(() => {
-    if (!baseline || !state) {
-      setDeviation({ alpha: null, theta: null, focus: null })
-      return
-    }
-    const alpha = state.bands?.alpha ?? 0
-    const theta = state.bands?.theta ?? 0
-    const focus = state.focus_score  ?? 0
-    setDeviation({
-      alpha: (alpha - baseline.alpha.mean) / baseline.alpha.sigma,
-      theta: (theta - baseline.theta.mean) / baseline.theta.sigma,
-      focus: (focus - baseline.focus.mean) / baseline.focus.sigma,
-    })
-  }, [state?.frame_count, baseline])
-
-  const recordSession = useCallback((sample: SessionSample) => {
-    setSessions(prev => [sample, ...prev].slice(0, MAX_SESSIONS))
+    const id = setInterval(() => {
+      const s = stateRef.current
+      if (!s?.connected || !s.bands) return
+      setBaseline(prev => ({
+        alpha:        ema(prev.alpha,        s.bands.alpha),
+        theta:        ema(prev.theta,        s.bands.theta),
+        beta:         ema(prev.beta,         s.bands.beta),
+        focusScore:   ema(prev.focusScore,   s.focus_score),
+        fatigueScore: ema(prev.fatigueScore, s.fatigue_score),
+      }))
+      setSampleCount(n => n + 1)
+    }, 1000)
+    return () => clearInterval(id)
   }, [])
 
-  const resetBaseline = useCallback(() => {
-    setSessions([])
-    setBaseline(null)
-    setDeviation({ alpha: null, theta: null, focus: null })
-  }, [])
-
-  return {
-    baseline,
-    deviation,
-    nSessions:    sessions.length,
-    isCalibrated: sessions.length >= MIN_SESSIONS,
-    recordSession,
-    resetBaseline,
+  const resetBaseline = () => {
+    setBaseline({ alpha: null, theta: null, beta: null, focusScore: null, fatigueScore: null })
+    setSampleCount(0)
   }
+
+  const bands = state?.bands ?? null
+  const dev: BaselineDeviation = {
+    alpha:        bands ? deviation(bands.alpha,        baseline.alpha)        : null,
+    theta:        bands ? deviation(bands.theta,        baseline.theta)        : null,
+    beta:         bands ? deviation(bands.beta,         baseline.beta)         : null,
+    focusScore:   state  ? deviation(state.focus_score,  baseline.focusScore)  : null,
+    fatigueScore: state  ? deviation(state.fatigue_score, baseline.fatigueScore) : null,
+  }
+
+  return { baseline, deviation: dev, sampleCount, resetBaseline }
 }
