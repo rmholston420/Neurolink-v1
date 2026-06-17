@@ -8,29 +8,16 @@ Public API
   get_toggles()  -> FilterToggleConfig  (copy of current singleton)
   set_toggles()  -> FilterToggleConfig  (merge updates, return new state)
 
-to_dict() returns the 8 public-facing stage fields.  stage6_cardiac is
-excluded from to_dict() because it is gated separately in _build_payload
-and is not part of the REST-exposed toggle surface.
-set_toggles({'stage6_cardiac': False}) still works via the normal key path.
-Unknown keys and non-bool values are silently ignored.
+to_dict() returns all 9 dataclass fields, including stage6_cardiac.
+This is the complete set used by the reset_toggles test fixture and by
+any REST endpoint that serialises the full toggle state.
+Unknown keys and non-bool values passed to set_toggles() are silently ignored.
 """
 
 from __future__ import annotations
 
 import threading
 from dataclasses import asdict, dataclass
-
-# Fields exposed by to_dict() — stage6_cardiac is excluded.
-_PUBLIC_KEYS = {
-    "stage1_fir",
-    "stage2_bad_channels",
-    "stage3_artifact_gate",
-    "stage3b_artifact_detector",
-    "stage4_asr",
-    "stage4b_baseline",
-    "stage5_ocular",
-    "imu_gate",
-}
 
 
 @dataclass
@@ -48,8 +35,8 @@ class FilterToggleConfig:
     imu_gate: bool = True
 
     def to_dict(self) -> dict[str, bool]:
-        """Return the 8 public toggle keys (stage6_cardiac excluded)."""
-        return {k: v for k, v in asdict(self).items() if k in _PUBLIC_KEYS}
+        """Return all toggle fields as a plain dict."""
+        return asdict(self)
 
 
 # ---------------------------------------------------------------------------
@@ -69,11 +56,11 @@ def get_toggles() -> FilterToggleConfig:
 def set_toggles(updates: dict[str, bool]) -> FilterToggleConfig:
     """Merge *updates* into the live config and return the new state.
 
-    Accepts ALL dataclass field names (including stage6_cardiac).
-    Unknown keys and non-bool values are silently ignored.
+    Accepts all dataclass field names.  Unknown keys and non-bool values
+    are silently ignored.
     """
     global _toggles
-    valid_keys = {f.name for f in FilterToggleConfig.__dataclass_fields__.values()}
+    valid_keys = {f for f in asdict(FilterToggleConfig())}
     with _lock:
         current = asdict(_toggles)
         for k, v in updates.items():

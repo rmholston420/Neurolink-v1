@@ -14,8 +14,10 @@ Three independent detection passes, each configurable:
    wet-electrode systems (100 µV).
 
 2. IMU motion gate
-   Accelerometer RMS > ``accel_rms_g`` → frame flagged as motion-
-   contaminated.
+   Accelerometer AC-RMS (after subtracting per-axis mean to remove
+   gravity) > ``accel_rms_g`` → frame flagged as motion-contaminated.
+   Using AC-RMS prevents the ~1 g steady-state gravity on the Z axis
+   of a stationary device from triggering false rejections.
 
 3. Kurtosis burst detection
    Excess kurtosis > ``kurtosis_threshold`` (default 5) → EMG burst
@@ -113,7 +115,9 @@ class GateConfig:
         Peak-to-peak amplitude limit (µV).  When None (default), derived
         from ``electrode_type``.  Pass explicit value to override at runtime.
     accel_rms_g:
-        IMU RMS gate (g).
+        IMU AC-RMS gate (g).  Applied to the AC component of accelerometer
+        data (after per-axis mean subtraction) so gravity does not trigger
+        false rejections.
     kurtosis_threshold:
         Excess-kurtosis burst detection threshold (Fisher convention).
     """
@@ -224,15 +228,19 @@ class ArtifactGate:
                     electrode_type=cfg.electrode_type,
                 )
 
-        # 2. IMU motion gate
+        # 2. IMU motion gate — use AC-RMS (subtract per-axis mean) so that
+        #    steady-state gravity (~1 g on Z axis) does not trigger rejection.
+        #    Only genuine dynamic motion (shaking, nodding) exceeds the threshold.
         if cfg.enable_imu and accel is not None:
             accel_arr = np.asarray(accel, dtype=np.float64)
             if accel_arr.ndim == 1:
                 accel_arr = accel_arr[np.newaxis, :]
-            rms = float(np.sqrt(np.mean(accel_arr ** 2)))
+            # Subtract per-axis mean to remove DC / gravity component.
+            accel_ac = accel_arr - accel_arr.mean(axis=1, keepdims=True)
+            rms = float(np.sqrt(np.mean(accel_ac ** 2)))
             if rms > cfg.accel_rms_g:
-                decision.add_reason(f"imu_rms={rms:.3f}g>{cfg.accel_rms_g}g")
-                log.debug("stage3_imu_reject", rms_g=rms)
+                decision.add_reason(f"imu_rms_ac={rms:.3f}g>{cfg.accel_rms_g}g")
+                log.debug("stage3_imu_reject", rms_ac_g=rms)
 
         # 3. Kurtosis burst detection
         if cfg.enable_kurtosis and eeg_idx:
