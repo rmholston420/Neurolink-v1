@@ -13,8 +13,9 @@ import threading
 from dataclasses import asdict, dataclass, field
 
 # Keys excluded from the public to_dict() / set_toggles() API.
-# stage6_cardiac is internal to eeg_pump and not exposed via PUT /api/v1/filters.
-_EXCLUDED_KEYS: frozenset[str] = frozenset({"stage6_cardiac"})
+# NOTE: stage6_cardiac is intentionally included in the public API so that
+# set_toggles({'stage6_cardiac': False}) works and to_dict() returns all fields.
+_EXCLUDED_KEYS: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -32,7 +33,7 @@ class FilterToggleConfig:
     imu_gate: bool = True
 
     def to_dict(self) -> dict[str, bool]:
-        """Return public toggle keys (excludes internal-only keys)."""
+        """Return all toggle keys as a dict."""
         d = asdict(self)
         for k in _EXCLUDED_KEYS:
             d.pop(k, None)
@@ -56,8 +57,8 @@ def get_toggles() -> FilterToggleConfig:
 def set_toggles(updates: dict[str, bool]) -> FilterToggleConfig:
     """Merge *updates* into the live config and return the new state.
 
-    Only public keys (those returned by to_dict()) are accepted;
-    internal keys (stage6_cardiac) and unknown keys are silently ignored.
+    All public keys (those returned by to_dict()) are accepted;
+    unknown keys and non-bool values are silently ignored.
     """
     global _toggles
     valid_keys = FilterToggleConfig().to_dict().keys()

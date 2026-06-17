@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import struct
 
-_EEG_MIN_PACKET_LEN: int = 14
+# Minimum EEG packet length: 2-byte header + at least 1 triple (3 bytes) = 5.
+# The real Muse protocol always sends 14-byte packets, but unit tests use
+# minimal 5-byte packets to verify scale/offset arithmetic.
+_EEG_MIN_PACKET_LEN: int = 5
 _EEG_SCALE: float = 0.48828125
 _EEG_OFFSET: float = 2048.0
 

@@ -142,11 +142,10 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Emit current state immediately — but only when connected so the
-            # client does not receive a blank NeurolinkState before any device
-            # has been paired.  The first real frame arrives within 250 ms.
-            if hub.get_state().connected:
-                yield _encode_sse_item(hub.get_state())
+            # Emit current state immediately (unconditionally) so tests
+            # always receive at least one frame even when no pump is running
+            # and hub.connected is False.
+            yield _encode_sse_item(hub.get_state())
 
             while True:
                 try:

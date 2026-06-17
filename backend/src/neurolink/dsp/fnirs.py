@@ -86,8 +86,6 @@ def reset() -> None:
 
 def apply(raw: np.ndarray | None) -> np.ndarray | None:
     """Preprocess one fNIRS frame."""
-    # Declare all module-level mutable state as global to prevent Python
-    # from treating them as unbound locals due to assignments below.
     global _baseline, _running_mean, _running_m2, _n_frames
 
     if raw is None:
@@ -110,6 +108,21 @@ def apply(raw: np.ndarray | None) -> np.ndarray | None:
         rm = _running_mean
         rm2 = _running_m2
         nf = _n_frames
+        bl = _baseline
+
+    # Guard: if cached baseline has wrong channel count, discard it.
+    # This can happen when test isolation is incomplete (e.g. a 4-channel
+    # test runs before an 8-channel test without an explicit reset()).
+    if bl is not None and bl.shape[0] != n_ch:
+        bl = None
+        rm = None
+        rm2 = None
+        nf = 0
+        with _lock:
+            _baseline = None
+            _running_mean = None
+            _running_m2 = None
+            _n_frames = 0
 
     if rm is not None and rm2 is not None and nf > 1:
         sigma = np.sqrt(np.maximum(rm2 / nf, 1e-8)).astype(np.float32)
@@ -120,9 +133,6 @@ def apply(raw: np.ndarray | None) -> np.ndarray | None:
         out = centred + mu
 
     # Baseline detrend
-    with _lock:
-        bl = _baseline
-
     if bl is None:
         bl = out.mean(axis=1).copy()
     else:

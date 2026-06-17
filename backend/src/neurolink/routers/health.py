@@ -1,6 +1,7 @@
 """Health check and diagnostics endpoints.
 
 GET /health      — adapter status, hub frame count, Redis ping, DB reachability.
+GET /ready       — lightweight Kubernetes-style readiness probe.
 GET /hub/stats   — lightweight hub diagnostic counters (frames, settling, SSE
                     client count, baseline phase).  Safe to poll at any cadence.
 """
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from neurolink.dependencies import ServiceDep
@@ -108,6 +110,25 @@ async def health(
         redis=redis_status,
         db=db_status,
     )
+
+
+@router.get("/ready")
+async def ready() -> JSONResponse:
+    """Kubernetes-style readiness probe.
+
+    Returns 200 when the service is ready to accept traffic, 503 otherwise.
+    'Ready' means the database is reachable; Redis is optional.
+    """
+    try:
+        from neurolink.db.engine import get_engine
+
+        engine = get_engine()
+        async with engine.connect() as conn:
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        return JSONResponse(status_code=200, content={"status": "ready"})
+    except Exception as exc:
+        log.warning("ready_db_error", error=str(exc))
+        return JSONResponse(status_code=503, content={"status": "not_ready", "detail": str(exc)})
 
 
 @router.get("/hub/stats", response_model=HubStatsResponse)

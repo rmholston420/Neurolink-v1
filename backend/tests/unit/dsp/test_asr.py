@@ -32,6 +32,11 @@ FS = 256.0
 CALIB_SEC = 1.0  # short for tests
 SAMPLES_PER_TICK = 64  # 250 ms at 256 Hz
 
+# Number of ticks required to complete calibration:
+# calib_samples_needed = CALIB_SEC * FS = 256
+# ticks_needed = ceil(256 / 64) = 4
+_CALIB_TICKS = 4
+
 
 def _make_cfg(enable: bool = True, burst_sd: float = ASR_BURST_SD) -> ASRConfig:
     return ASRConfig(
@@ -53,8 +58,12 @@ def _clean_frame(n_samples: int = SAMPLES_PER_TICK, scale: float = 10.0) -> np.n
     return (rng.standard_normal((N_CH, n_samples)) * scale).astype(np.float32)
 
 
-def _feed_calibration(asr: ArtifactSubspaceReconstructor, n_frames: int = 8) -> None:
-    """Feed enough frames to complete calibration (CALIB_SEC * FS samples)."""
+def _feed_calibration(asr: ArtifactSubspaceReconstructor, n_frames: int = _CALIB_TICKS) -> None:
+    """Feed exactly enough frames to complete calibration (CALIB_SEC * FS samples).
+
+    Default n_frames=_CALIB_TICKS ensures calibration completes on the last
+    frame and _frames_processed is reset to 0 with no extra post-calib calls.
+    """
     for _ in range(n_frames):
         asr.apply(_clean_frame())
 
@@ -266,8 +275,8 @@ def test_degenerate_single_channel_covariance():
     )
     asr = ArtifactSubspaceReconstructor(cfg)
     rng = np.random.default_rng(0)
-    # Feed enough single-channel data
-    for _ in range(8):
+    # Feed exactly enough single-channel data
+    for _ in range(_CALIB_TICKS):
         frame = rng.standard_normal((4, SAMPLES_PER_TICK)).astype(np.float32)
         asr.apply(frame)
     assert asr.get_state() == "READY"

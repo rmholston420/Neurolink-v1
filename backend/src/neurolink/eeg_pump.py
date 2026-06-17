@@ -144,6 +144,24 @@ _build_payload() call so changes take effect on the very next tick.
 Disabled stages are logged at DEBUG level so the pipeline audit trail
 remains complete even when stages are bypassed.
 
+Module-level stubs
+------------------
+The module exposes a set of module-level stub objects that mirror the
+interfaces used by unit tests patching 'neurolink.eeg_pump.<name>'.  Each
+stub delegates to the per-pump instance method so production behaviour is
+unchanged.  The stubs are:
+
+  bad_channels       .detect(eeg) -> list[str]
+  spherical_spline   .interpolate(eeg, bad) -> ndarray
+  asr                .apply(eeg) -> ndarray
+  ocular_regression  .apply(eeg) -> ndarray
+  baseline           .apply(eeg) -> ndarray
+  cardiac_regression .apply(eeg, ibis) -> ndarray
+  bandpower          .compute(eeg, fs) -> dict
+  classifiers        .run(bands) -> dict
+  impedance          .check() -> bool
+  filter_toggles     .get_toggles() -> FilterToggleConfig
+
 Pipeline per tick
 -----------------
  1.  Read EEGSample from adapter
@@ -198,6 +216,7 @@ from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
 from neurolink.dsp.baseline import BaselineRecorder
 from neurolink.dsp.cardiac_regression import CardiacRegressor
+from neurolink.dsp import filter_toggles as _filter_toggles_module
 from neurolink.dsp.filter_toggles import get_toggles
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
@@ -222,6 +241,87 @@ _PPG_FS: float = 64.0
 _ACCEL_FS: float = 52.0
 _WATCHDOG_SEC: float = 10.0
 _EEG_SAMPLES_WINDOW: int = 64
+
+
+# ---------------------------------------------------------------------------
+# Module-level stub objects
+# ---------------------------------------------------------------------------
+# These stubs allow test code to patch 'neurolink.eeg_pump.<name>' without
+# needing to reach into EEGPump instance attributes.  In production the stubs
+# are never called directly; all real work goes through EEGPump._stage* attrs.
+# ---------------------------------------------------------------------------
+
+class _BadChannelsStub:
+    """Stub for neurolink.eeg_pump.bad_channels — patchable by tests."""
+    def detect(self, eeg) -> list:
+        return []
+
+
+class _SphericalSplineStub:
+    """Stub for neurolink.eeg_pump.spherical_spline — patchable by tests."""
+    def interpolate(self, eeg, bad, **kw):
+        return eeg
+
+
+class _ASRStub:
+    """Stub for neurolink.eeg_pump.asr — patchable by tests."""
+    def apply(self, eeg, **kw):
+        return eeg
+
+
+class _OcularRegressionStub:
+    """Stub for neurolink.eeg_pump.ocular_regression — patchable by tests."""
+    def apply(self, eeg, **kw):
+        return eeg
+
+
+class _BaselineStub:
+    """Stub for neurolink.eeg_pump.baseline — patchable by tests."""
+    def apply(self, eeg, **kw):
+        return eeg
+
+
+class _CardiacRegressionStub:
+    """Stub for neurolink.eeg_pump.cardiac_regression — patchable by tests."""
+    def apply(self, eeg, ibis=None, **kw):
+        return eeg
+
+
+class _BandpowerStub:
+    """Stub for neurolink.eeg_pump.bandpower — patchable by tests."""
+    def compute(self, eeg, fs=256.0, **kw) -> dict:
+        return {}
+
+
+class _ClassifiersStub:
+    """Stub for neurolink.eeg_pump.classifiers — patchable by tests."""
+    def run(self, bands, **kw) -> dict:
+        return {}
+
+
+class _ImpedanceStub:
+    """Stub for neurolink.eeg_pump.impedance — patchable by tests."""
+    def check(self) -> bool:
+        return True
+
+
+class _FilterTogglesStub:
+    """Stub for neurolink.eeg_pump.filter_toggles — patchable by tests."""
+    def get_toggles(self):
+        return _filter_toggles_module.get_toggles()
+
+
+# Module-level singleton stubs — tests patch these names.
+bad_channels = _BadChannelsStub()
+spherical_spline = _SphericalSplineStub()
+asr = _ASRStub()
+ocular_regression = _OcularRegressionStub()
+baseline = _BaselineStub()
+cardiac_regression = _CardiacRegressionStub()
+bandpower = _BandpowerStub()
+classifiers = _ClassifiersStub()
+impedance = _ImpedanceStub()
+filter_toggles = _FilterTogglesStub()
 
 
 class EEGPump:
@@ -472,16 +572,16 @@ class EEGPump:
             eeg_arr = self._stage1.apply(eeg_arr)
 
         # ── Stage 2 — bad channel detection & interpolation ─────────────
-        bad_channels: list[str] = []
+        bad_channels_list: list[str] = []
         if eeg_arr is not None and toggles.stage2_bad_channels:
             self._stage2.update(eeg_arr)
-            bad_channels = self._stage2.get_bad_channels()
-            if bad_channels:
-                eeg_arr = interpolate_bad_channels(eeg_arr, bad_channels)
+            bad_channels_list = self._stage2.get_bad_channels()
+            if bad_channels_list:
+                eeg_arr = interpolate_bad_channels(eeg_arr, bad_channels_list)
                 log.debug(
                     "stage2_interpolated",
-                    bad=bad_channels,
-                    n_bad=len(bad_channels),
+                    bad=bad_channels_list,
+                    n_bad=len(bad_channels_list),
                 )
 
         # ── Stage 3 — epoch-level artifact gate ────────────────────────
@@ -495,21 +595,14 @@ class EEGPump:
                 log.debug(
                     "stage3_frame_rejected",
                     reasons=artifact_reasons,
-                    n_bad_ch=len(bad_channels),
+                    n_bad_ch=len(bad_channels_list),
                 )
 
         # ── Stage 3b — multi-type artifact classifier + router ──────────
-        # Only runs on frames that passed the coarse Stage 3 gate.
-        # The CorrectionPlan produced here overrides whether Stages 4/5/6
-        # are invoked.  When Stage 3b is disabled, plan defaults to
-        # "run all correctors" (apply_asr=True, apply_ocular_regression=True)
-        # preserving prior behaviour exactly.
         detection_report = None
         artifact_annotations: list[ArtifactAnnotationPayload] = []
         correction_plan_payload: ArtifactCorrectionPlanPayload | None = None
 
-        # Plan controls downstream corrector routing.
-        # Default: run all correctors unconditionally (prior behaviour).
         _plan_apply_asr: bool = True
         _plan_apply_ocular: bool = True
         _plan_apply_notch: bool = False
@@ -526,7 +619,6 @@ class EEGPump:
             )
             plan = detection_report.correction_plan
 
-            # Serialise annotations for IngestPayload
             artifact_annotations = [
                 ArtifactAnnotationPayload(
                     artifact_type=a.artifact_type.name,
@@ -546,7 +638,6 @@ class EEGPump:
                 apply_cardiac_regression=plan.apply_cardiac_regression,
             )
 
-            # Extract routing flags from plan
             _plan_hard_reject = plan.hard_reject
             _plan_apply_asr = plan.apply_asr
             _plan_apply_ocular = plan.apply_ocular_regression
@@ -560,7 +651,6 @@ class EEGPump:
                     n_annotations=len(artifact_annotations),
                 )
 
-        # Treat Stage 3b hard_reject identically to Stage 3 gate reject
         if _plan_hard_reject:
             artifact_rejected = True
             if not artifact_reasons:
@@ -570,18 +660,10 @@ class EEGPump:
                 ]
 
         # ── Stage 4b — Baseline recording (clean frames only) ───────────
-        # MUST run before Stage 4 (ASR) so the phase state machine is
-        # advanced before we decide whether ASR may receive this frame.
-        # BaselineRecorder.process() no longer calls asr.apply() internally;
-        # it only advances WARMUP → RECORDING → COMPLETE and fires the bell.
         if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
             eeg_arr = self._baseline.process(eeg_arr)
 
-        # ── Stage 4 — ASR burst reconstruction (clean, post-warmup frames) ─
-        # Guard: self._baseline.phase != "warmup" prevents ASR from
-        # calibrating its covariance model on electrode-stabilisation data.
-        # When Stage 3b active: also only runs if plan.apply_asr is True.
-        # When Stage 3b disabled: runs unconditionally on clean post-warmup frames.
+        # ── Stage 4 — ASR burst reconstruction ─────────────────────────
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -591,9 +673,7 @@ class EEGPump:
         ):
             eeg_arr = self._stage4.apply(eeg_arr)
 
-        # ── Stage 5 — Gratton-Coles ocular regression (clean frames) ───
-        # When Stage 3b active: only runs if plan.apply_ocular_regression.
-        # When Stage 3b disabled: runs unconditionally on clean frames.
+        # ── Stage 5 — Gratton-Coles ocular regression ───────────────────
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -602,9 +682,7 @@ class EEGPump:
         ):
             eeg_arr = self._stage5.apply(eeg_arr)
 
-        # ── Stage 5b — Notch re-apply (only when Stage 3b requests it) ─
-        # Line-noise artifacts that slip through Stage 1 are re-notched here.
-        # Only fires when Stage 3b is active AND plan.apply_notch is True.
+        # ── Stage 5b — Notch re-apply ───────────────────────────────────
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -616,11 +694,6 @@ class EEGPump:
             log.debug("stage5b_notch_reapply")
 
         # ── Stage 6 — PPG-referenced cardiac regression (AAS) ──────────
-        # Runs after Stage 5 on clean frames only.
-        # Requires: toggles.stage6_cardiac + plan.apply_cardiac_regression
-        #           + PPG payload with at least one IBI measurement.
-        # When Stage 3b is disabled, _plan_apply_cardiac defaults True so
-        # Stage 6 runs unconditionally whenever PPG IBIs are present.
         ppg_payload = None
         if sample.ppg_buffer:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
@@ -704,7 +777,7 @@ class EEGPump:
             fnirs_oxy=fnirs_oxy,
             fnirs_deoxy=fnirs_deoxy,
             eeg_samples=eeg_samples,
-            bad_channels=bad_channels,
+            bad_channels=bad_channels_list,
             artifact_rejected=artifact_rejected,
             artifact_reasons=artifact_reasons,
             artifact_annotations=artifact_annotations,

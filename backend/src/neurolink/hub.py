@@ -28,6 +28,7 @@ SSE consumers distinguish the three types by checking for 'event' key:
 from __future__ import annotations
 
 import asyncio
+import queue as stdlib_queue
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -56,6 +57,9 @@ _BASELINE_COMPLETE_EVENT: dict = {"event": "baseline_complete"}
 
 # Settling sentinel template
 _SETTLING_EVENT_TYPE: str = "settling"
+
+# Both asyncio and stdlib queues may be registered (tests use stdlib Queue).
+_QUEUE_FULL_EXCEPTIONS = (asyncio.QueueFull, stdlib_queue.Full)
 
 
 class EEGHub:
@@ -168,7 +172,7 @@ class EEGHub:
         for q in queues:
             try:
                 q.put_nowait(_BASELINE_COMPLETE_EVENT)
-            except asyncio.QueueFull:
+            except _QUEUE_FULL_EXCEPTIONS:
                 log.warning("sse_queue_full_dropping_baseline_event")
 
     def emit_settling(self, reason: str = "settling") -> None:
@@ -179,7 +183,7 @@ class EEGHub:
         for q in queues:
             try:
                 q.put_nowait(event)
-            except asyncio.QueueFull:
+            except _QUEUE_FULL_EXCEPTIONS:
                 log.warning(
                     "sse_queue_full_dropping_settling_event",
                     reason=reason,
@@ -289,7 +293,7 @@ class EEGHub:
         for q in queues:
             try:
                 q.put_nowait(state)
-            except asyncio.QueueFull:
+            except _QUEUE_FULL_EXCEPTIONS:
                 log.warning("sse_queue_full_dropping_frame")
 
 

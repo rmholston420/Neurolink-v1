@@ -22,6 +22,12 @@ _RR_MAX_HZ: float = 0.55  # 33 bpm
 _MIN_IBIS: int = 10
 _MIN_ACCEL_SAMPLES: int = int(_ACCEL_FS * 10)  # 10 seconds
 
+# Minimum PSD variance (sum of PSD values) required to consider the signal
+# oscillatory.  A DC signal (all-ones) has zero AC content after mean-subtract
+# so its PSD is numerically zero; returning the argmax bin would give the
+# first bin frequency which can land in the physiological range by chance.
+_PSD_NOISE_FLOOR: float = 1e-12
+
 
 def estimate_rr(
     signal: list[float] | np.ndarray,
@@ -38,8 +44,9 @@ def estimate_rr(
         fs: Sampling rate of the signal (Hz).
 
     Returns:
-        Estimated respiratory rate in bpm, or None if the signal is too short
-        or no peak is found in the physiological range.
+        Estimated respiratory rate in bpm, or None if the signal is too short,
+        has no meaningful oscillatory content, or no peak is found in the
+        physiological range.
     """
     if signal is None or len(signal) < 2:
         return None
@@ -54,6 +61,11 @@ def estimate_rr(
     n_fft = max(len(arr), 512)
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / fs)
     psd = np.abs(np.fft.rfft(arr, n=n_fft)) ** 2
+
+    # Return None when the signal has no meaningful oscillatory content
+    # (e.g. DC constant signal whose PSD is numerically zero).
+    if psd.sum() < _PSD_NOISE_FLOOR:
+        return None
 
     mask = (freqs >= _RR_MIN_HZ) & (freqs <= _RR_MAX_HZ)
     if not mask.any():
@@ -110,6 +122,9 @@ def _rr_from_ibis(ibi_ms: list[float]) -> float | None:
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / _IBI_FS_VIRTUAL)
     psd = np.abs(np.fft.rfft(arr, n=n_fft)) ** 2
 
+    if psd.sum() < _PSD_NOISE_FLOOR:
+        return None
+
     mask = (freqs >= _RR_MIN_HZ) & (freqs <= _RR_MAX_HZ)
     if not mask.any():
         return None
@@ -128,6 +143,9 @@ def _rr_from_accel(accel_z: np.ndarray, fs: float) -> float | None:
 
     freqs = np.fft.rfftfreq(len(arr), d=1.0 / fs)
     psd = np.abs(np.fft.rfft(arr)) ** 2
+
+    if psd.sum() < _PSD_NOISE_FLOOR:
+        return None
 
     mask = (freqs >= _RR_MIN_HZ) & (freqs <= _RR_MAX_HZ)
     if not mask.any():

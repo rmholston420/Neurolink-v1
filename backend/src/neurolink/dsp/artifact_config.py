@@ -24,12 +24,12 @@ ARTIFACT_HEOG_ASYMMETRY_UV: float = 30.0
 HEOG_FREQ_HZ_MAX: float = 4.0
 
 # ── Stage 3b: EMG / muscle noise ─────────────────────────────────────────────
-# Raised from 0.30 to 0.65: broadband (white-noise) background EEG at low
-# amplitude has a flat spectrum where HF power ≈ 70 % of total — the old
-# 0.30 threshold would false-positive on any Gaussian background signal.
-# At 0.65 the threshold passes clean low-amplitude noise but still catches
-# true EMG bursts (50 µV RMS broadband noise → HF ratio ≈ 0.70+).
-ARTIFACT_EMG_HF_RATIO: float = 0.65
+# Raised from 0.65 to 0.75: white Gaussian noise at 5 µV RMS has a flat
+# spectrum where HF power ≈ 70 % of total — the 0.65 threshold
+# false-positives on clean low-amplitude background EEG.  At 0.75 the
+# threshold passes clean noise but still catches true EMG bursts
+# (50 µV RMS broadband noise → HF ratio ≈ 0.80+).
+ARTIFACT_EMG_HF_RATIO: float = 0.75
 
 EMG_FREQ_LOW_HZ: float = 30.0
 EMG_FREQ_HIGH_HZ: float = 100.0

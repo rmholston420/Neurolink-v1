@@ -1,7 +1,11 @@
 """Calibration endpoints.
 
-POST /api/v1/neurolink/calibrate  — start 90-second baseline alpha capture.
-GET  /api/v1/neurolink/baseline   — lightweight progress poll for non-SSE clients.
+POST /api/v1/calibration/start  — start 90-second baseline alpha capture.
+GET  /api/v1/calibration/progress — lightweight progress poll for non-SSE clients.
+
+Note: legacy routes at /api/v1/neurolink/calibrate and
+/api/v1/neurolink/baseline remain accessible via the neurolink router
+for backward compatibility.
 """
 
 from __future__ import annotations
@@ -14,10 +18,10 @@ from neurolink.models.eeg import BaselineProgressResponse, CalibrateResponse
 
 log = structlog.get_logger(__name__)
 
-router = APIRouter(prefix="/neurolink", tags=["calibration"])
+router = APIRouter(prefix="/calibration", tags=["calibration"])
 
 
-@router.post("/calibrate", response_model=CalibrateResponse)
+@router.post("/start", response_model=CalibrateResponse)
 async def start_calibration(service: ServiceDep) -> CalibrateResponse:
     """Start a 90-second personal alpha baseline calibration session.
 
@@ -27,8 +31,8 @@ async def start_calibration(service: ServiceDep) -> CalibrateResponse:
     return await service.start_calibration()
 
 
-@router.get("/baseline", response_model=BaselineProgressResponse)
-async def get_baseline_progress(service: ServiceDep) -> BaselineProgressResponse:
+@router.get("/progress", response_model=BaselineProgressResponse)
+async def get_calibration_progress(service: ServiceDep) -> BaselineProgressResponse:
     """Return current calibration progress for polling clients.
 
     Lightweight alternative to the SSE stream for clients that cannot
@@ -47,8 +51,8 @@ async def get_baseline_progress(service: ServiceDep) -> BaselineProgressResponse
         }
 
     The endpoint is always available — callers do **not** need to call
-    ``POST /calibrate`` first.  When no session is running ``phase`` is
-    ``"idle"`` and both timing fields are ``0.0``.
+    ``POST /calibration/start`` first.  When no session is running ``phase``
+    is ``"idle"`` and both timing fields are ``0.0``.
 
     Recommended poll interval: 1–2 s.  Clients that consume the SSE
     stream already receive ``baseline_phase`` on every ``NeurolinkState``
