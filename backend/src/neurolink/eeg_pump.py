@@ -13,6 +13,15 @@ In production the stubs forward to the corresponding EEGPump instance
 attribute, so behaviour is identical.  The forwarding is set up in
 __init__ via _wire_stubs().
 
+Toggle reads
+------------
+All toggle reads in _tick() and _build_payload() go through
+    filter_toggles.get_toggles()
+where ``filter_toggles`` is the module-level _FilterTogglesStub instance.
+This lets tests patch 'neurolink.eeg_pump.filter_toggles' and inject a
+MagicMock with custom field values, so per-stage bypass can be exercised
+without running the full EEGPump.
+
 Stub → method mapping
 ---------------------
   bad_channels         .detect(eeg)              -> list[str]
@@ -68,7 +77,6 @@ from neurolink.dsp.bad_channels import BadChannelDetector
 from neurolink.dsp.baseline import BaselineRecorder
 from neurolink.dsp.cardiac_regression import CardiacRegressor
 from neurolink.dsp import filter_toggles as _filter_toggles_module
-from neurolink.dsp.filter_toggles import get_toggles
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
@@ -306,7 +314,8 @@ class EEGPump:
         if sample is None:
             return
 
-        toggles = get_toggles()
+        # All toggle reads go through the stub so tests can intercept them.
+        toggles = filter_toggles.get_toggles()
 
         # ── Stage 0: impedance check via stub (patchable by tests) ───────
         impedance_ok = impedance.check()
@@ -343,7 +352,8 @@ class EEGPump:
         from neurolink.dsp.imu import head_orientation
         from neurolink.dsp.ppg import compute_ppg
 
-        toggles = get_toggles()
+        # All toggle reads go through the stub so tests can intercept them.
+        toggles = filter_toggles.get_toggles()
 
         disabled = [k for k, v in toggles.to_dict().items() if not v]
         if disabled:

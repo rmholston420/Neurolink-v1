@@ -55,6 +55,14 @@ Thread safety
 the EEG pump asyncio task.  Stats counters use a separate lock so
 ``get_stats()`` never blocks detection.
 
+Motion detection note
+---------------------
+_detect_motion computes RMS on the *AC component* of the accelerometer
+(after subtracting the per-axis mean).  This removes steady-state
+gravity (≈1 g on the Z axis) so that a device sitting still does not
+trigger a false motion rejection.  Only genuine dynamic acceleration
+(shaking, nodding, walking) exceeds the threshold.
+
 Usage
 -----
     from neurolink.dsp.artifact_detector import ArtifactDetector, DetectorConfig
@@ -831,6 +839,12 @@ class ArtifactDetector:
     ) -> None:
         """Detect motion artifact using IMU accelerometer data.
 
+        Computes RMS on the **AC component** (after subtracting the
+        per-axis mean) so that steady-state gravity (~1 g on the Z axis
+        of a stationary device) does not trigger a false rejection.
+        Only genuine dynamic acceleration (shaking, nodding, walking)
+        will exceed the threshold.
+
         This is the most reliable motion detector because it uses a
         direct physical measurement rather than inferring motion from
         the EEG signal itself.  A detected MOTION artifact sets
@@ -840,7 +854,11 @@ class ArtifactDetector:
         accel_arr = np.asarray(accel, dtype=np.float64)
         if accel_arr.ndim == 1:
             accel_arr = accel_arr[np.newaxis, :]
-        rms = float(np.sqrt(np.mean(accel_arr ** 2)))
+
+        # Subtract per-axis mean to remove gravity / DC offset.
+        # This preserves genuine dynamic motion while ignoring orientation.
+        accel_ac = accel_arr - accel_arr.mean(axis=1, keepdims=True)
+        rms = float(np.sqrt(np.mean(accel_ac ** 2)))
 
         if rms <= cfg.motion_accel_rms_g:
             return
@@ -851,7 +869,7 @@ class ArtifactDetector:
             confidence=round(confidence, 3),
             channels=["TP9", "AF7", "AF8", "TP10"],  # motion affects all channels
             feature_value=round(rms, 4),
-            feature_name="accel_rms_g",
+            feature_name="accel_rms_ac_g",
             threshold=cfg.motion_accel_rms_g,
         ))
         report.correction_plan.hard_reject = True

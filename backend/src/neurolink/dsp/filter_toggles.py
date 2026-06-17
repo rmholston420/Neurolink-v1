@@ -8,8 +8,10 @@ Public API
   get_toggles()  -> FilterToggleConfig  (copy of current singleton)
   set_toggles()  -> FilterToggleConfig  (merge updates, return new state)
 
-to_dict() returns ALL dataclass fields, including stage6_cardiac.
-set_toggles({'stage6_cardiac': False}) works via the normal key path.
+to_dict() returns the 8 public-facing stage fields.  stage6_cardiac is
+excluded from to_dict() because it is gated separately in _build_payload
+and is not part of the REST-exposed toggle surface.
+set_toggles({'stage6_cardiac': False}) still works via the normal key path.
 Unknown keys and non-bool values are silently ignored.
 """
 
@@ -17,6 +19,18 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict, dataclass
+
+# Fields exposed by to_dict() — stage6_cardiac is excluded.
+_PUBLIC_KEYS = {
+    "stage1_fir",
+    "stage2_bad_channels",
+    "stage3_artifact_gate",
+    "stage3b_artifact_detector",
+    "stage4_asr",
+    "stage4b_baseline",
+    "stage5_ocular",
+    "imu_gate",
+}
 
 
 @dataclass
@@ -34,8 +48,8 @@ class FilterToggleConfig:
     imu_gate: bool = True
 
     def to_dict(self) -> dict[str, bool]:
-        """Return all toggle keys as a dict (all dataclass fields)."""
-        return asdict(self)
+        """Return the 8 public toggle keys (stage6_cardiac excluded)."""
+        return {k: v for k, v in asdict(self).items() if k in _PUBLIC_KEYS}
 
 
 # ---------------------------------------------------------------------------

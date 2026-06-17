@@ -196,19 +196,23 @@ class TestStage4OcularRegression:
 
     @pytest.mark.asyncio
     async def test_ocular_regression_output_used_downstream(self):
-        """Verify the EEG after ocular correction is what stage 5 receives."""
+        """Verify the EEG after ocular correction is what cardiac_regression receives.
+
+        In the pipeline: ... -> ocular_regression (stage 5) -> cardiac_regression (stage 6) -> ...
+        So cardiac_regression is the immediate downstream consumer of ocular output.
+        """
         pump, hub, adapter = _make_pump(publish_hz=4)
         sentinel = np.zeros((4, 64), dtype=np.float32)
         sentinel[0, 0] = 999.0
         with patch("neurolink.eeg_pump.ocular_regression") as mock_or, \
-             patch("neurolink.eeg_pump.baseline") as mock_bl:
+             patch("neurolink.eeg_pump.cardiac_regression") as mock_cr:
             mock_or.apply.return_value = sentinel
-            mock_bl.apply.side_effect = lambda eeg, **kw: eeg
+            mock_cr.apply.side_effect = lambda eeg, **kw: eeg
             await _run_pump(pump, adapter, duration=0.35)
-        calls = mock_bl.apply.call_args_list
+        calls = mock_cr.apply.call_args_list
         assert any(np.array_equal(c.args[0], sentinel) or
                    (len(c.args) == 0 and np.array_equal(list(c.kwargs.values())[0], sentinel))
-                   for c in calls), "Ocular output not forwarded to stage 5"
+                   for c in calls), "Ocular output not forwarded to cardiac_regression"
 
 
 # ---------------------------------------------------------------------------
@@ -346,8 +350,8 @@ class TestStage8Classifiers:
         pump, hub, adapter = _make_pump(publish_hz=4)
         with patch("neurolink.eeg_pump.classifiers") as mock_cl, \
              patch.object(pump._stage3, "evaluate") as mock_gate:
-            from neurolink.dsp.artifact_gate import GateDecision
-            mock_gate.return_value = GateDecision(reject=True, reasons=["test"])
+            from neurolink.dsp.artifact_gate import ArtifactDecision
+            mock_gate.return_value = ArtifactDecision(reject=True, reasons=["test"])
             mock_cl.run.return_value = {}
             await _run_pump(pump, adapter, duration=0.35)
         mock_cl.run.assert_not_called()
