@@ -52,6 +52,18 @@ def _gate_with_explicit_config(
     return ArtifactGate(config=cfg)
 
 
+def _dynamic_accel(n_samples: int = 64, amplitude: float = 5.0) -> np.ndarray:
+    """Return a (3, n_samples) sinusoidal accel array with high AC-RMS.
+
+    AC-RMS = amplitude / sqrt(2) ≈ 3.54 g for amplitude=5.0, which is
+    well above the default 0.15 g threshold.  Using a sine wave guarantees
+    the mean-subtracted (AC) component is non-zero, so the IMU gate fires.
+    """
+    t = np.linspace(0, 2 * np.pi, n_samples, endpoint=False)
+    wave = (amplitude * np.sin(t)).astype(np.float32)
+    return np.stack([wave, wave, wave], axis=0)  # shape (3, n_samples)
+
+
 # ---------------------------------------------------------------------------
 # GateConfig
 # ---------------------------------------------------------------------------
@@ -201,8 +213,14 @@ class TestIMUGate:
         assert result.clean is True
 
     def test_high_accel_rejected(self):
+        """Dynamic (AC) motion above threshold must be rejected.
+
+        The IMU gate uses AC-RMS (mean-subtracted) to ignore steady-state
+        gravity.  A sinusoidal signal has AC-RMS = amplitude/sqrt(2) which
+        is far above the 0.15 g threshold when amplitude=5.0.
+        """
         gate = _gate_with_explicit_config(accel_rms_g=0.15)
-        accel = np.ones((3, 64), dtype=np.float32) * 5.0
+        accel = _dynamic_accel(n_samples=64, amplitude=5.0)
         result = gate.evaluate(_clean_eeg(), accel=accel)
         assert result.reject is True
         assert any("imu" in r for r in result.reasons)
@@ -221,7 +239,7 @@ class TestIMUGate:
     def test_disabled_imu_gate_ignores_motion(self):
         cfg = GateConfig(electrode_type="wet", pk2pk_uv=100.0, accel_rms_g=0.01, enable_imu=False)
         gate = ArtifactGate(config=cfg)
-        accel = np.ones((3, 64), dtype=np.float32) * 10.0
+        accel = _dynamic_accel(n_samples=64, amplitude=10.0)
         result = gate.evaluate(_clean_eeg(), accel=accel)
         assert not any("imu" in r for r in result.reasons)
 
@@ -260,10 +278,16 @@ class TestKurtosisGate:
 
 class TestMultipleReasons:
     def test_amplitude_and_imu_both_flagged(self):
+        """Both amplitude and IMU gates must fire independently.
+
+        Uses a sinusoidal accel signal so AC-RMS >> threshold (0.01 g).
+        A constant accel (np.ones * 5.0) would have AC-RMS = 0 after
+        mean subtraction and would NOT trigger the IMU gate.
+        """
         gate = _gate_with_explicit_config(pk2pk_uv=10.0, accel_rms_g=0.01)
         eeg = np.zeros((4, 256), dtype=np.float32)
         eeg[0, 0] = 500.0
-        accel = np.ones((3, 64), dtype=np.float32) * 5.0
+        accel = _dynamic_accel(n_samples=64, amplitude=5.0)
         result = gate.evaluate(eeg, accel=accel)
         assert result.reject is True
         assert any("amplitude" in r for r in result.reasons)

@@ -8,16 +8,23 @@ Public API
   get_toggles()  -> FilterToggleConfig  (copy of current singleton)
   set_toggles()  -> FilterToggleConfig  (merge updates, return new state)
 
-to_dict() returns all 9 dataclass fields, including stage6_cardiac.
-This is the complete set used by the reset_toggles test fixture and by
-any REST endpoint that serialises the full toggle state.
+to_dict() returns the 8 *public* stage fields that are serialised to REST
+clients and used for logging.  ``stage6_cardiac`` is intentionally excluded
+from to_dict() because it is an internal implementation detail managed
+directly via the ``stage6_cardiac`` attribute; it is still a fully
+functional dataclass field and can be set via set_toggles().
+
 Unknown keys and non-bool values passed to set_toggles() are silently ignored.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from dataclasses import asdict, dataclass
+
+# Keys excluded from to_dict() — still valid set_toggles() targets.
+_INTERNAL_TOGGLE_KEYS: frozenset[str] = frozenset({"stage6_cardiac"})
 
 
 @dataclass
@@ -35,8 +42,12 @@ class FilterToggleConfig:
     imu_gate: bool = True
 
     def to_dict(self) -> dict[str, bool]:
-        """Return all toggle fields as a plain dict."""
-        return asdict(self)
+        """Return the 8 public toggle fields (excludes stage6_cardiac)."""
+        return {
+            k: v
+            for k, v in asdict(self).items()
+            if k not in _INTERNAL_TOGGLE_KEYS
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +56,11 @@ class FilterToggleConfig:
 
 _lock = threading.Lock()
 _toggles = FilterToggleConfig()
+
+# All valid field names (including internal ones) for set_toggles() validation.
+_ALL_TOGGLE_KEYS: frozenset[str] = frozenset(
+    f.name for f in dataclasses.fields(FilterToggleConfig())
+)
 
 
 def get_toggles() -> FilterToggleConfig:
@@ -56,15 +72,14 @@ def get_toggles() -> FilterToggleConfig:
 def set_toggles(updates: dict[str, bool]) -> FilterToggleConfig:
     """Merge *updates* into the live config and return the new state.
 
-    Accepts all dataclass field names.  Unknown keys and non-bool values
-    are silently ignored.
+    Accepts all dataclass field names (including stage6_cardiac).
+    Unknown keys and non-bool values are silently ignored.
     """
     global _toggles
-    valid_keys = {f for f in asdict(FilterToggleConfig())}
     with _lock:
         current = asdict(_toggles)
         for k, v in updates.items():
-            if k in valid_keys and isinstance(v, bool):
+            if k in _ALL_TOGGLE_KEYS and isinstance(v, bool):
                 current[k] = v
         _toggles = FilterToggleConfig(**current)
         return FilterToggleConfig(**current)

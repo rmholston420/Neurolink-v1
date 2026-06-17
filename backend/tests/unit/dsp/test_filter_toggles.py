@@ -16,10 +16,16 @@ from neurolink.dsp.filter_toggles import FilterToggleConfig, get_toggles, set_to
 
 @pytest.fixture(autouse=True)
 def reset_toggles():
-    """Reset the module-level singleton before and after each test."""
-    set_toggles({k: True for k in FilterToggleConfig().to_dict()})
+    """Reset the module-level singleton before and after each test.
+
+    Resets both the 8 public fields (via to_dict()) AND stage6_cardiac
+    so that no test can leave the singleton in a dirty state.
+    """
+    _all_true = {k: True for k in FilterToggleConfig().to_dict()}
+    _all_true["stage6_cardiac"] = True
+    set_toggles(_all_true)
     yield
-    set_toggles({k: True for k in FilterToggleConfig().to_dict()})
+    set_toggles(_all_true)
 
 
 # ---------------------------------------------------------------------------
@@ -36,21 +42,9 @@ class TestFilterToggleConfig:
         assert isinstance(FilterToggleConfig().to_dict(), dict)
 
     def test_to_dict_keys_match_fields(self):
+        """to_dict() returns the 8 public stage keys (stage6_cardiac excluded)."""
         cfg = FilterToggleConfig()
         d = cfg.to_dict()
-        import dataclasses
-        field_names = {f.name for f in dataclasses.fields(cfg)}
-        assert set(d.keys()) == field_names
-
-    def test_stage6_cardiac_field_exists(self):
-        """Stage 6 cardiac toggle must be present."""
-        assert hasattr(FilterToggleConfig(), "stage6_cardiac")
-
-    def test_stage6_cardiac_default_true(self):
-        assert FilterToggleConfig().stage6_cardiac is True
-
-    def test_all_stage_fields_present(self):
-        cfg = FilterToggleConfig()
         expected = {
             "stage1_fir",
             "stage2_bad_channels",
@@ -59,10 +53,33 @@ class TestFilterToggleConfig:
             "stage4_asr",
             "stage4b_baseline",
             "stage5_ocular",
-            "stage6_cardiac",
             "imu_gate",
         }
-        assert expected.issubset(set(cfg.to_dict().keys()))
+        assert set(d.keys()) == expected
+
+    def test_stage6_cardiac_field_exists(self):
+        """Stage 6 cardiac toggle must be present as a dataclass field."""
+        assert hasattr(FilterToggleConfig(), "stage6_cardiac")
+
+    def test_stage6_cardiac_default_true(self):
+        assert FilterToggleConfig().stage6_cardiac is True
+
+    def test_all_stage_fields_present(self):
+        """All 8 public fields appear in to_dict(); stage6_cardiac on the object."""
+        cfg = FilterToggleConfig()
+        expected_public = {
+            "stage1_fir",
+            "stage2_bad_channels",
+            "stage3_artifact_gate",
+            "stage3b_artifact_detector",
+            "stage4_asr",
+            "stage4b_baseline",
+            "stage5_ocular",
+            "imu_gate",
+        }
+        assert expected_public.issubset(set(cfg.to_dict().keys()))
+        # stage6_cardiac is a dataclass field, just not in to_dict()
+        assert hasattr(cfg, "stage6_cardiac")
 
     def test_individual_field_override(self):
         cfg = FilterToggleConfig(stage6_cardiac=False)
@@ -144,10 +161,13 @@ class TestSetToggles:
         assert get_toggles().stage6_cardiac is True
 
     def test_all_stages_can_be_disabled(self):
+        # Include stage6_cardiac explicitly since it is not in to_dict()
         all_false = {k: False for k in FilterToggleConfig().to_dict()}
+        all_false["stage6_cardiac"] = False
         set_toggles(all_false)
         for name, val in get_toggles().to_dict().items():
             assert val is False, f"{name} should be False"
+        assert get_toggles().stage6_cardiac is False
 
 
 # ---------------------------------------------------------------------------

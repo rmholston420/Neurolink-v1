@@ -20,6 +20,24 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+
+# ===========================================================================
+# Fixture: restore filter_toggles singleton between tests in this module.
+# Without this, test_filter_toggles_set_partial_update leaves stage4_asr=False
+# which causes test_eeg_pump tests to see stage4_asr=False and skip asr.apply().
+# ===========================================================================
+
+@pytest.fixture(autouse=True)
+def reset_toggles():
+    """Reset the filter_toggles singleton before and after every test in this module."""
+    from neurolink.dsp.filter_toggles import FilterToggleConfig, set_toggles
+    _all_true = {k: True for k in FilterToggleConfig().to_dict()}
+    _all_true["stage6_cardiac"] = True
+    set_toggles(_all_true)
+    yield
+    set_toggles(_all_true)
+
+
 # ===========================================================================
 # dsp/baseline.py — BaselineRecorder
 # ===========================================================================
@@ -178,6 +196,7 @@ def test_filter_toggles_set_partial_update():
     assert result.stage4_asr is False
     assert get_toggles().stage4_asr is False
     assert get_toggles().stage1_fir is True
+    # Note: the autouse reset_toggles fixture restores stage4_asr=True after this test.
 
 
 def test_filter_toggles_unknown_keys_ignored():
