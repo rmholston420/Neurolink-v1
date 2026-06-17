@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -111,8 +111,7 @@ def test_baseline_recording_to_complete_fires_bell():
     from neurolink.dsp.baseline import BaselinePhase
 
     rec, mock_asr, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
-    from neurolink.dsp.baseline import BaselinePhase as BP
-    rec._phase = BP.RECORDING
+    rec._phase = BaselinePhase.RECORDING
 
     arr = np.ones((5, 64), dtype=np.float32)
     out = rec.process(arr)
@@ -272,10 +271,7 @@ def test_v01_region_a_default():
 
 def test_v01_multiplicatio_faa_none_allowed():
     from neurolink.dsp.classifiers import classify_v01
-    from neurolink.dsp.artifact_config import (
-        V01_ALPHA_E, V01_THETA_E,
-        V01_MULTIPLICATIO_ALPHA, V01_MULTIPLICATIO_THETA,
-    )
+    from neurolink.dsp.artifact_config import V01_MULTIPLICATIO_ALPHA, V01_MULTIPLICATIO_THETA
 
     region, stage = classify_v01(
         alpha=V01_MULTIPLICATIO_ALPHA + 0.01,
@@ -356,8 +352,7 @@ def test_v2_multiplicatio():
 def test_v2_rubedo():
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import (
-        V2_ALPHA_RUBEDO, V2_ALPHA_MULTIPLICATIO,
-        V2_THETA_RUBEDO, V2_BETA_RUBEDO_MAX,
+        V2_ALPHA_RUBEDO, V2_THETA_RUBEDO, V2_BETA_RUBEDO_MAX,
     )
     from neurolink.models.eeg import BandPowers
 

@@ -6,7 +6,6 @@ import threading
 
 import pytest
 
-import neurolink.dsp.filter_toggles as ft
 from neurolink.dsp.filter_toggles import FilterToggleConfig, get_toggles, set_toggles
 
 
