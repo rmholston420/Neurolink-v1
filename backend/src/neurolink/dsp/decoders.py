@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import struct
 
-# Minimum EEG packet length: 2-byte header + at least one full 3-byte triple = 6.
-# A 5-byte packet (header + 3 bytes = only one partial triple offset) cannot
-# yield any samples and must return [].
-_EEG_MIN_PACKET_LEN: int = 6
+# Minimum EEG packet length: 2-byte header + at least one full 3-byte triple = 5.
+# A packet shorter than 5 bytes has no payload triple and returns [].
+_EEG_MIN_PACKET_LEN: int = 5
 _EEG_SCALE: float = 0.48828125
 _EEG_OFFSET: float = 2048.0
 

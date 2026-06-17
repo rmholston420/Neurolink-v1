@@ -8,22 +8,15 @@ Public API
   get_toggles()  -> FilterToggleConfig  (copy of current singleton)
   set_toggles()  -> FilterToggleConfig  (merge updates, return new state)
 
-to_dict() intentionally omits stage6_cardiac; that toggle is accessible via
-get_toggles().stage6_cardiac but is not part of the generic key/value API
-exposed to the filters endpoint, so it will not be accidentally bulk-disabled.
-set_toggles({'stage6_cardiac': False}) still works because the key is accepted
-by the dataclass; it just won't appear in to_dict() round-trips.
+to_dict() returns ALL dataclass fields, including stage6_cardiac.
+set_toggles({'stage6_cardiac': False}) works via the normal key path.
+Unknown keys and non-bool values are silently ignored.
 """
 
 from __future__ import annotations
 
 import threading
 from dataclasses import asdict, dataclass
-
-# Keys excluded from the public to_dict() / set_toggles() key-enumeration API.
-# stage6_cardiac is excluded from the dict view because the cardiac regression
-# toggle has a dedicated UI control and must not appear in bulk-toggle lists.
-_EXCLUDED_KEYS: frozenset[str] = frozenset({"stage6_cardiac"})
 
 
 @dataclass
@@ -41,11 +34,8 @@ class FilterToggleConfig:
     imu_gate: bool = True
 
     def to_dict(self) -> dict[str, bool]:
-        """Return all public toggle keys as a dict (excludes _EXCLUDED_KEYS)."""
-        d = asdict(self)
-        for k in _EXCLUDED_KEYS:
-            d.pop(k, None)
-        return d
+        """Return all toggle keys as a dict (all dataclass fields)."""
+        return asdict(self)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +59,6 @@ def set_toggles(updates: dict[str, bool]) -> FilterToggleConfig:
     Unknown keys and non-bool values are silently ignored.
     """
     global _toggles
-    # Valid keys = all dataclass fields (not just the public to_dict() subset)
     valid_keys = {f.name for f in FilterToggleConfig.__dataclass_fields__.values()}
     with _lock:
         current = asdict(_toggles)

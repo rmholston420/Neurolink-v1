@@ -49,7 +49,6 @@ def test_settings_cors_origins_list():
     origins = s.cors_origins_list
     assert "http://localhost:5173" in origins
     assert "http://localhost:3000" in origins
-    # trailing empty string filtered out
     assert "" not in origins
 
 
@@ -79,28 +78,24 @@ def test_compute_all_bands_happy_path():
 
 
 def test_compute_all_bands_short_channels_skipped():
-    """Channels with < 4 samples are skipped; others still compute."""
     from neurolink.hardware.muse_s.compute import compute_all_bands
     n = 512
     t = np.linspace(0, 2, n)
     channel_samples = {
-        "TP9": [0.1, 0.2],  # too short -> skipped
+        "TP9": [0.1, 0.2],
         "AF7": (0.4 * np.sin(2 * np.pi * 10.0 * t)).tolist(),
     }
     result = compute_all_bands(channel_samples)
-    # Only AF7 contributed, result must still be normalised
     assert abs(sum(result.values()) - 1.0) < 1e-5
 
 
 def test_compute_all_bands_all_short_returns_zeros():
-    """All channels < 4 samples -> n_channels == 0 -> zero dict."""
     from neurolink.hardware.muse_s.compute import compute_all_bands
     result = compute_all_bands({"TP9": [0.1], "AF7": [0.2]})
     assert all(v == 0.0 for v in result.values())
 
 
 def test_compute_all_bands_zero_psd_returns_zeros():
-    """Flat-zero signal -> total PSD == 0 -> zero dict."""
     from neurolink.hardware.muse_s.compute import compute_all_bands
     channel_samples = {"TP9": [0.0] * 512, "AF7": [0.0] * 512}
     result = compute_all_bands(channel_samples)
@@ -108,23 +103,15 @@ def test_compute_all_bands_zero_psd_returns_zeros():
 
 
 def test_compute_all_bands_importerror_fallback():
-    """ImportError for scipy.signal falls back to bandpower buffer path.
-
-    patch.dict with None makes `from scipy.signal import welch` raise
-    ImportError at the call site without reloading any module.
-    """
     from neurolink.hardware.muse_s.compute import compute_all_bands
-
     n = 512
     t = np.linspace(0, 2, n)
     channel_samples = {
         ch: (0.4 * np.sin(2 * np.pi * 10.0 * t)).tolist()
         for ch in ["TP9", "AF7", "AF8", "TP10", "AUX"]
     }
-
     with patch.dict(sys.modules, {"scipy.signal": None, "scipy": None}):
         result = compute_all_bands(channel_samples)
-
     assert isinstance(result, dict)
     assert set(result.keys()) == {"delta", "theta", "alpha", "beta", "gamma"}
 
@@ -134,34 +121,37 @@ def test_compute_all_bands_importerror_fallback():
 # ===========================================================================
 
 def test_breathing_both_sources_fused():
-    """Both IBIs and accel_z available -> fused average."""
+    """Both IBIs and accel_z available -> fused average.
+
+    IBIs oscillate at ~0.25 Hz (RSA breathing rate) around 800 ms so that
+    _rr_from_ibis has non-zero spectral content and returns a valid value.
+    """
     from neurolink.dsp.breathing import compute_breathing
-    # 30 IBIs at ~800ms (75 bpm)
-    ibis = [800.0] * 30
+    # 30 IBIs with RSA modulation at 0.25 Hz (~15 bpm breathing)
+    rng = np.random.default_rng(42)
+    t_ibi = np.linspace(0, 30, 30)
+    ibis = (800.0 + 50.0 * np.sin(2 * np.pi * 0.25 * t_ibi) +
+            5.0 * rng.standard_normal(30)).tolist()
     # 10+ seconds of 52 Hz accel with 0.25 Hz breathing signal
     n = int(52.0 * 15)
     t = np.linspace(0, 15, n)
     accel_z = (np.sin(2 * np.pi * 0.25 * t) + 1.0).astype(np.float32)
     result = compute_breathing(ibis, accel_z=accel_z)
-    # rr_bpm is the fused value (average of ppg and accel estimates)
     assert result.rr_bpm is not None
     assert result.rr_ppg is not None
     assert result.rr_accel is not None
 
 
 def test_breathing_only_accel():
-    """No IBIs, only accel_z -> rr_bpm = rr_accel."""
     from neurolink.dsp.breathing import compute_breathing
     n = int(52.0 * 15)
     t = np.linspace(0, 15, n)
     accel_z = (np.sin(2 * np.pi * 0.25 * t) + 1.0).astype(np.float32)
     result = compute_breathing([], accel_z=accel_z)
     assert result.rr_ppg is None
-    # rr_bpm == rr_accel (may be None if no valid peak found, but branch is hit)
 
 
 def test_breathing_neither_source_rr_none():
-    """No IBIs, no accel -> rr_bpm is None."""
     from neurolink.dsp.breathing import compute_breathing
     result = compute_breathing([], accel_z=None)
     assert result.rr_bpm is None
@@ -170,7 +160,6 @@ def test_breathing_neither_source_rr_none():
 
 
 def test_breathing_ibi_no_valid_mask():
-    """IBI freq range produces no valid mask -> _rr_from_ibis returns None."""
     from neurolink.dsp.breathing import _rr_from_ibis
     ibis = [500.0] * 10
     result = _rr_from_ibis(ibis)
@@ -178,7 +167,6 @@ def test_breathing_ibi_no_valid_mask():
 
 
 def test_breathing_accel_too_short():
-    """accel_z shorter than _MIN_ACCEL_SAMPLES -> _rr_from_accel returns None."""
     from neurolink.dsp.breathing import _rr_from_accel
     short_accel = np.ones(10, dtype=np.float32)
     result = _rr_from_accel(short_accel, fs=52.0)
@@ -204,7 +192,6 @@ def test_ppg_none_input_returns_empty():
 
 
 def test_ppg_exception_returns_empty(monkeypatch):
-    """If neurokit2 raises, the except branch returns empty PPGPayload."""
     from neurolink.dsp import ppg as ppg_mod
     orig = None
     try:
@@ -221,9 +208,8 @@ def test_ppg_exception_returns_empty(monkeypatch):
 
 
 def test_ppg_poincare_too_short():
-    """_poincare with < 2 IBIs returns default PoincareMetrics."""
     from neurolink.dsp.ppg import _poincare
-    m = _poincare([800.0])  # single IBI
+    m = _poincare([800.0])
     assert m.sd1 == 0.0
     assert m.sd2 == 0.0
     assert m.ellipse_area == 0.0
@@ -251,20 +237,19 @@ def test_derived_eeg_1d_input_returns_none_dict():
 
 def test_derived_eeg_too_few_samples():
     from neurolink.dsp.derived_eeg import derived_eeg
-    eeg = np.zeros((5, 10))  # 10 samples < 256 min
+    eeg = np.zeros((5, 10))
     result = derived_eeg(eeg)
     assert result["faa"] is None
 
 
 def test_derived_eeg_too_few_channels():
     from neurolink.dsp.derived_eeg import derived_eeg
-    eeg = np.zeros((4, 512))  # 4 channels < 5
+    eeg = np.zeros((4, 512))
     result = derived_eeg(eeg)
     assert result["faa"] is None
 
 
 def test_derived_eeg_both_alpha_positive():
-    """Both AF7 and AF8 have alpha -> FAA = log(af8) - log(af7)."""
     from neurolink.dsp.derived_eeg import derived_eeg
     n = 512
     t = np.linspace(0, 2, n)
@@ -277,31 +262,28 @@ def test_derived_eeg_both_alpha_positive():
 
 
 def test_derived_eeg_af8_only_faa_positive():
-    """AF8 has alpha but AF7 is zero -> faa = 1.0."""
     from neurolink.dsp.derived_eeg import derived_eeg
     n = 512
     t = np.linspace(0, 2, n)
     alpha = (0.4 * np.sin(2 * np.pi * 10.0 * t)).astype(np.float32)
     eeg = np.zeros((5, n), dtype=np.float32)
-    eeg[2] = alpha  # AF8 index
+    eeg[2] = alpha
     result = derived_eeg(eeg)
     assert result["faa"] == 1.0
 
 
 def test_derived_eeg_af7_only_faa_negative():
-    """AF7 has alpha but AF8 is zero -> faa = -1.0."""
     from neurolink.dsp.derived_eeg import derived_eeg
     n = 512
     t = np.linspace(0, 2, n)
     alpha = (0.4 * np.sin(2 * np.pi * 10.0 * t)).astype(np.float32)
     eeg = np.zeros((5, n), dtype=np.float32)
-    eeg[1] = alpha  # AF7 index
+    eeg[1] = alpha
     result = derived_eeg(eeg)
     assert result["faa"] == -1.0
 
 
 def test_derived_eeg_no_alpha_faa_zero():
-    """Both AF7 and AF8 zero power -> faa = 0.0."""
     from neurolink.dsp.derived_eeg import derived_eeg
     eeg = np.zeros((5, 512), dtype=np.float32)
     result = derived_eeg(eeg)
@@ -315,12 +297,12 @@ def test_derived_eeg_no_alpha_faa_zero():
 
 def test_decode_eeg_short_packet():
     from neurolink.dsp.decoders import decode_eeg
-    assert decode_eeg(b"\x00" * 5) == []  # < 14 bytes
+    # _EEG_MIN_PACKET_LEN is 5; 4 bytes is below threshold -> []
+    assert decode_eeg(b"\x00" * 4) == []
 
 
 def test_decode_eeg_happy_path():
     from neurolink.dsp.decoders import decode_eeg
-    # 2-byte header + 12 * 1.5 bytes = 20 bytes of payload
     data = b"\x00\x00" + bytes(range(18))
     result = decode_eeg(data)
     assert isinstance(result, list)
@@ -334,7 +316,6 @@ def test_decode_ppg_short_packet():
 
 def test_decode_ppg_happy_path():
     from neurolink.dsp.decoders import decode_ppg
-    # 2-byte header + 6 * 3-byte samples = 20 bytes
     data = b"\x00\x00" + bytes(range(18))
     result = decode_ppg(data)
     assert isinstance(result, list)
@@ -350,9 +331,8 @@ def test_decode_imu_short_packet():
 
 def test_decode_imu_happy_path():
     from neurolink.dsp.decoders import decode_imu
-    # 2-byte header + 18 bytes (9 int16 big-endian) = 20 bytes
     header = b"\x00\x00"
-    payload = b"\x00\x01" * 9  # 9 int16 values = 1 each
+    payload = b"\x00\x01" * 9
     data = header + payload
     accel, gyro = decode_imu(data)
     assert len(accel) == 9
@@ -360,9 +340,7 @@ def test_decode_imu_happy_path():
 
 
 def test_decode_imu_padding_to_9():
-    """Short payload padded with 0.0 to reach 9 values."""
     from neurolink.dsp.decoders import decode_imu
-    # 2-byte header + only 4 bytes (2 int16 values)
     data = b"\x00\x00" + b"\x00\x01\x00\x02" + b"\x00" * 14
     accel, gyro = decode_imu(data)
     assert len(accel) == 9
@@ -390,7 +368,6 @@ def _make_sample(**overrides):
 
 
 async def test_build_payload_empty_eeg_buffer():
-    """Empty eeg_buffer -> bands all 0, no derived EEG."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hub import EEGHub
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
@@ -402,7 +379,6 @@ async def test_build_payload_empty_eeg_buffer():
 
 
 async def test_build_payload_eeg_single_channel():
-    """eeg_arr.shape[1] >= 2 but only 1 channel -> bands computed, derived skipped."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hub import EEGHub
     n = 256 * 4
@@ -415,7 +391,6 @@ async def test_build_payload_eeg_single_channel():
 
 
 async def test_build_payload_no_ppg_buffer():
-    """No ppg_buffer -> ppg_payload is None."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hub import EEGHub
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
@@ -425,7 +400,6 @@ async def test_build_payload_no_ppg_buffer():
 
 
 async def test_build_payload_no_accel_buffer():
-    """No accel_buffer -> accel_z is None -> breathing uses ibis only."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hub import EEGHub
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
@@ -435,21 +409,18 @@ async def test_build_payload_no_accel_buffer():
 
 
 async def test_build_payload_accel_buffer_too_short():
-    """accel_buffer with < 3 elements -> accel_z stays None."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hub import EEGHub
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
-    sample = _make_sample(accel_buffer=[[1.0, 2.0], [3.0, 4.0]])  # only 2 axes
+    sample = _make_sample(accel_buffer=[[1.0, 2.0], [3.0, 4.0]])
     payload = await pump._build_payload(sample)
     assert payload is not None
 
 
 async def test_build_payload_accel_shape_zero():
-    """accel_arr.shape[1] == 0 -> imu_payload is None."""
     from neurolink.eeg_pump import EEGPump
     from neurolink.hub import EEGHub
     pump = EEGPump(adapter=AsyncMock(), hub=EEGHub())
-    # 3 channels with 0 samples each
     sample = _make_sample(
         accel_buffer=[[], [], []],
         gyro_buffer=[[], [], []],
@@ -459,7 +430,6 @@ async def test_build_payload_accel_shape_zero():
 
 
 async def test_pump_loop_watchdog_fires():
-    """Verify watchdog log fires when last_frame_ts is stale."""
     from neurolink.eeg_pump import EEGPump, _WATCHDOG_SEC
     from neurolink.hub import EEGHub
 
@@ -472,11 +442,10 @@ async def test_pump_loop_watchdog_fires():
         tick_count += 1
         if tick_count >= 2:
             pump._running = False
-        return None  # returns None so _tick returns early
+        return None
 
     adapter.read_sample = controlled_read
     pump = EEGPump(adapter=adapter, hub=hub, publish_hz=100.0)
-    # Set stale last_frame_ts to trigger watchdog
     pump._last_frame_ts = time.time() - (_WATCHDOG_SEC + 1)
     await pump.start()
     for _ in range(30):
@@ -484,5 +453,4 @@ async def test_pump_loop_watchdog_fires():
         if tick_count >= 2:
             break
     await pump.stop()
-    # Watchdog branch executed without raising
     assert tick_count >= 2

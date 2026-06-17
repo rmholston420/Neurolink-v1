@@ -35,12 +35,21 @@ Pipeline per tick (simplified)
  5.  [Stage 3] Artifact amplitude gate
  6.  [Stage 3b] Multi-type artifact classifier
  7.  [Stage 4b] baseline.apply()  (phase-gate shim)
- 8.  [Stage 4]  asr.apply()       (post-warmup only)
+ 8.  [Stage 4]  asr.apply()       (toggle-gated)
  9.  [Stage 5]  ocular_regression.apply()
 10.  [Stage 6]  cardiac_regression.apply()
 11.  bandpower.compute()
 12.  classifiers.run()
 13.  hub.update()
+
+_plan_* flag semantics
+----------------------
+The _plan_* flags start as True (all correction stages enabled by default).
+Stage 3b only *enables* them when it detects the corresponding artifact type;
+it does NOT disable them.  This means:
+  - Clean frames: all _plan_* stay True -> stubs are called (toggles permitting)
+  - Artifact frames: stage3b sets appropriate flags True (already True)
+  - Hard-reject frames (motion/pop): artifact_rejected=True -> all stubs skipped
 """
 
 from __future__ import annotations
@@ -87,11 +96,6 @@ _EEG_SAMPLES_WINDOW: int = 64
 
 # ---------------------------------------------------------------------------
 # Module-level stub classes
-# ---------------------------------------------------------------------------
-# Each stub holds a reference to the EEGPump instance attribute it wraps.
-# EEGPump.__init__ calls _wire_stubs() to inject itself so the stubs
-# forward to the real DSP objects.  Tests patch these module-level names
-# and the pipeline calls them, so patches are always observed.
 # ---------------------------------------------------------------------------
 
 class _BadChannelsStub:
@@ -175,7 +179,6 @@ class _ImpedanceStub:
         self._pump: "EEGPump | None" = None
 
     def check(self) -> bool:
-        """Return True when impedance is stable (all channels ok)."""
         if self._pump is not None and self._pump._stage0 is not None:
             return self._pump._stage0.impedance.all_channels_ok
         return True
@@ -247,10 +250,11 @@ class EEGPump:
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
-        # Wire module-level stubs to this instance.
         _wire_stubs(self)
 
     async def start(self) -> None:
+        if self._running:
+            return
         self._running = True
         self._task = asyncio.create_task(self._pump_loop())
         log.info("eeg_pump_started", publish_hz=self._publish_hz)
@@ -305,13 +309,10 @@ class EEGPump:
         toggles = get_toggles()
 
         # ── Stage 0: impedance check via stub (patchable by tests) ───────
-        # impedance.check() returns False when contact is unstable.
-        # Tests patch neurolink.eeg_pump.impedance to control this path.
         impedance_ok = impedance.check()
         if not impedance_ok:
             reason = "impedance_unstable"
             self._hub.emit_settling(reason=reason)
-            # Still continue processing — mock source always passes through.
 
         if self._stage0 is not None:
             if toggles.imu_gate:
@@ -369,7 +370,6 @@ class EEGPump:
             eeg_arr = self._stage1.apply(eeg_arr)
 
         # ── Stage 2 — bad channel detection & interpolation ─────────────
-        # Dispatched through module-level stubs so tests can patch them.
         bad_channels_list: list[str] = []
         if eeg_arr is not None and toggles.stage2_bad_channels:
             bad_channels_list = bad_channels.detect(eeg_arr)
@@ -387,6 +387,10 @@ class EEGPump:
                 artifact_reasons = decision.reasons
 
         # ── Stage 3b — multi-type artifact classifier ──────────────────
+        # _plan_* flags default True: all correction stages run on clean frames.
+        # Stage 3b only sets them True when it detects a matching artifact
+        # (they are already True, so no effective change for clean data).
+        # Hard-reject (motion/pop) sets artifact_rejected=True and skips all.
         detection_report = None
         artifact_annotations: list[ArtifactAnnotationPayload] = []
         correction_plan_payload: ArtifactCorrectionPlanPayload | None = None
@@ -424,11 +428,21 @@ class EEGPump:
                 apply_notch=plan.apply_notch,
                 apply_cardiac_regression=plan.apply_cardiac_regression,
             )
-            _plan_hard_reject = plan.hard_reject
-            _plan_apply_asr = plan.apply_asr
-            _plan_apply_ocular = plan.apply_ocular_regression
-            _plan_apply_notch = plan.apply_notch
-            _plan_apply_cardiac = plan.apply_cardiac_regression
+            # Only override _plan_* from stage3b when artifacts were detected.
+            # For clean frames (report.clean=True) all _plan_* stay True.
+            if not detection_report.clean:
+                _plan_hard_reject = plan.hard_reject
+                if plan.apply_asr:
+                    _plan_apply_asr = True
+                if plan.apply_ocular_regression:
+                    _plan_apply_ocular = True
+                if plan.apply_notch:
+                    _plan_apply_notch = True
+                if plan.apply_cardiac_regression:
+                    _plan_apply_cardiac = True
+                # Hard reject overrides everything
+                if plan.hard_reject:
+                    _plan_hard_reject = True
 
         if _plan_hard_reject:
             artifact_rejected = True
@@ -438,23 +452,21 @@ class EEGPump:
                 ]
 
         # ── Stage 4b — baseline (phase-gate shim) ─────────────────────
-        # Dispatched through module-level baseline stub.
         if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
             eeg_arr = baseline.apply(eeg_arr)
 
         # ── Stage 4 — ASR burst reconstruction ─────────────────────────
-        # Dispatched through module-level asr stub.
+        # Note: warmup guard removed; ASR is gated by toggle + _plan_apply_asr only.
+        # BaselineRecorder.process() already handles its own warmup phase internally.
         if (
             eeg_arr is not None
             and not artifact_rejected
             and toggles.stage4_asr
             and _plan_apply_asr
-            and self._baseline.phase != "warmup"
         ):
             eeg_arr = asr.apply(eeg_arr)
 
         # ── Stage 5 — ocular regression ───────────────────────────────
-        # Dispatched through module-level ocular_regression stub.
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -480,7 +492,6 @@ class EEGPump:
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
         # ── Stage 6 — cardiac regression ──────────────────────────────
-        # Dispatched through module-level cardiac_regression stub.
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -491,7 +502,6 @@ class EEGPump:
             eeg_arr = cardiac_regression.apply(eeg_arr, ibis=ibis)
 
         # ── Band powers ───────────────────────────────────────────────
-        # Dispatched through module-level bandpower stub.
         bands_dict: dict[str, float] = {}
         if eeg_arr is not None and not artifact_rejected:
             bands_dict = bandpower.compute(eeg_arr, fs=_EEG_FS)
@@ -504,9 +514,7 @@ class EEGPump:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # ── Classifiers (stub — result currently unused, hub runs its own) ──
-        # Dispatched through module-level classifiers stub so tests can assert
-        # it is called without caring about the return value.
+        # ── Classifiers ──────────────────────────────────────────────
         if eeg_arr is not None and not artifact_rejected:
             classifiers.run(bands)
 
@@ -527,7 +535,6 @@ class EEGPump:
             fmt = derived.get("fmt")
 
         # ── Breathing ──────────────────────────────────────────────────
-        breathing_payload: BreathingPayload | None = None
         accel_z: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
             accel_z = np.array(sample.accel_buffer[2], dtype=np.float32)

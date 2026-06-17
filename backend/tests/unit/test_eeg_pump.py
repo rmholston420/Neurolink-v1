@@ -106,7 +106,16 @@ class TestStage1BadChannels:
         with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
              patch("neurolink.eeg_pump.bad_channels") as mock_bc:
             cfg = MagicMock()
-            cfg.stage1_bad_channels = False
+            cfg.stage2_bad_channels = False  # real field name
+            cfg.stage1_fir = True
+            cfg.stage3_artifact_gate = True
+            cfg.stage3b_artifact_detector = True
+            cfg.stage4_asr = True
+            cfg.stage4b_baseline = True
+            cfg.stage5_ocular = True
+            cfg.stage6_cardiac = True
+            cfg.imu_gate = True
+            cfg.to_dict.return_value = {}
             mock_ft.get_toggles.return_value = cfg
             mock_bc.detect.return_value = []
             await _run_pump(pump, adapter, duration=0.35)
@@ -157,14 +166,16 @@ class TestStage3ASR:
         with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
              patch("neurolink.eeg_pump.asr") as mock_asr:
             cfg = MagicMock()
-            cfg.stage1_bad_channels = True
-            cfg.stage2_interpolation = True
-            cfg.stage3_asr = False
-            cfg.stage4_ocular = True
-            cfg.stage5_baseline = True
+            cfg.stage1_fir = True
+            cfg.stage2_bad_channels = True
+            cfg.stage3_artifact_gate = True
+            cfg.stage3b_artifact_detector = True
+            cfg.stage4_asr = False  # real field name
+            cfg.stage4b_baseline = True
+            cfg.stage5_ocular = True
             cfg.stage6_cardiac = True
-            cfg.stage7_bandpower = True
-            cfg.stage8_classify = True
+            cfg.imu_gate = True
+            cfg.to_dict.return_value = {}
             mock_ft.get_toggles.return_value = cfg
             await _run_pump(pump, adapter, duration=0.35)
         mock_asr.apply.assert_not_called()
@@ -194,7 +205,6 @@ class TestStage4OcularRegression:
             mock_or.apply.return_value = sentinel
             mock_bl.apply.side_effect = lambda eeg, **kw: eeg
             await _run_pump(pump, adapter, duration=0.35)
-        # If ocular output is wired through, baseline must receive sentinel
         calls = mock_bl.apply.call_args_list
         assert any(np.array_equal(c.args[0], sentinel) or
                    (len(c.args) == 0 and np.array_equal(list(c.kwargs.values())[0], sentinel))
@@ -220,14 +230,16 @@ class TestStage5Baseline:
         with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
              patch("neurolink.eeg_pump.baseline") as mock_bl:
             cfg = MagicMock()
-            cfg.stage1_bad_channels = True
-            cfg.stage2_interpolation = True
-            cfg.stage3_asr = True
-            cfg.stage4_ocular = True
-            cfg.stage5_baseline = False
+            cfg.stage1_fir = True
+            cfg.stage2_bad_channels = True
+            cfg.stage3_artifact_gate = True
+            cfg.stage3b_artifact_detector = True
+            cfg.stage4_asr = True
+            cfg.stage4b_baseline = False  # real field name
+            cfg.stage5_ocular = True
             cfg.stage6_cardiac = True
-            cfg.stage7_bandpower = True
-            cfg.stage8_classify = True
+            cfg.imu_gate = True
+            cfg.to_dict.return_value = {}
             mock_ft.get_toggles.return_value = cfg
             await _run_pump(pump, adapter, duration=0.35)
         mock_bl.apply.assert_not_called()
@@ -252,14 +264,16 @@ class TestStage6CardiacRegression:
         with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
              patch("neurolink.eeg_pump.cardiac_regression") as mock_cr:
             cfg = MagicMock()
-            cfg.stage1_bad_channels = True
-            cfg.stage2_interpolation = True
-            cfg.stage3_asr = True
-            cfg.stage4_ocular = True
-            cfg.stage5_baseline = True
-            cfg.stage6_cardiac = False
-            cfg.stage7_bandpower = True
-            cfg.stage8_classify = True
+            cfg.stage1_fir = True
+            cfg.stage2_bad_channels = True
+            cfg.stage3_artifact_gate = True
+            cfg.stage3b_artifact_detector = True
+            cfg.stage4_asr = True
+            cfg.stage4b_baseline = True
+            cfg.stage5_ocular = True
+            cfg.stage6_cardiac = False  # real field name
+            cfg.imu_gate = True
+            cfg.to_dict.return_value = {}
             mock_ft.get_toggles.return_value = cfg
             await _run_pump(pump, adapter, duration=0.35)
         mock_cr.apply.assert_not_called()
@@ -272,11 +286,16 @@ class TestStage6CardiacRegression:
              patch("neurolink.eeg_pump.cardiac_regression") as mock_cr, \
              patch("neurolink.eeg_pump.bandpower") as mock_bp:
             cfg = MagicMock()
-            for attr in ["stage1_bad_channels", "stage2_interpolation",
-                         "stage3_asr", "stage4_ocular", "stage5_baseline",
-                         "stage7_bandpower", "stage8_classify"]:
-                setattr(cfg, attr, True)
+            cfg.stage1_fir = True
+            cfg.stage2_bad_channels = True
+            cfg.stage3_artifact_gate = True
+            cfg.stage3b_artifact_detector = True
+            cfg.stage4_asr = True
+            cfg.stage4b_baseline = True
+            cfg.stage5_ocular = True
             cfg.stage6_cardiac = False
+            cfg.imu_gate = True
+            cfg.to_dict.return_value = {}
             mock_ft.get_toggles.return_value = cfg
             mock_bp.compute.return_value = {}
             await _run_pump(pump, adapter, duration=0.35)
@@ -304,7 +323,6 @@ class TestStage7Bandpower:
         pump, hub, adapter = _make_pump(publish_hz=10)
         await _run_pump(pump, adapter, duration=0.5)
         state = hub.get_state()
-        # MockAdapter produces valid EEG — bands should be populated
         assert state.band_powers is not None
 
 
@@ -323,16 +341,14 @@ class TestStage8Classifiers:
 
     @pytest.mark.asyncio
     async def test_classifiers_skipped_when_toggle_off(self):
+        """classifiers.run is always called when eeg is valid and not rejected;
+        to skip it, we force artifact_rejected by making the gate always reject."""
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
-             patch("neurolink.eeg_pump.classifiers") as mock_cl:
-            cfg = MagicMock()
-            for attr in ["stage1_bad_channels", "stage2_interpolation",
-                         "stage3_asr", "stage4_ocular", "stage5_baseline",
-                         "stage6_cardiac", "stage7_bandpower"]:
-                setattr(cfg, attr, True)
-            cfg.stage8_classify = False
-            mock_ft.get_toggles.return_value = cfg
+        with patch("neurolink.eeg_pump.classifiers") as mock_cl, \
+             patch.object(pump._stage3, "evaluate") as mock_gate:
+            from neurolink.dsp.artifact_gate import GateDecision
+            mock_gate.return_value = GateDecision(reject=True, reasons=["test"])
+            mock_cl.run.return_value = {}
             await _run_pump(pump, adapter, duration=0.35)
         mock_cl.run.assert_not_called()
 
@@ -375,7 +391,6 @@ class TestSettlingEmission:
              patch("neurolink.eeg_pump.impedance") as mock_imp:
             mock_imp.check.return_value = True  # stable
             await _run_pump(pump, adapter, duration=0.35)
-        # If impedance stable, emit_settling should not be called for that reason
         reasons = [c.kwargs.get("reason", c.args[0] if c.args else None)
                    for c in mock_emit.call_args_list]
         assert "impedance_unstable" not in reasons
@@ -391,7 +406,6 @@ class TestArtifactGateIntegration:
         pump, hub, adapter = _make_pump(publish_hz=10)
         await _run_pump(pump, adapter, duration=0.5)
         state = hub.get_state()
-        # Field must exist even if no artifact was rejected
         assert hasattr(state, "artifact_rejected")
 
     @pytest.mark.asyncio
