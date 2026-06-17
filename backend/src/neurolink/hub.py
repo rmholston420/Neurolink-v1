@@ -52,30 +52,14 @@ log = structlog.get_logger(__name__)
 _DEFAULT_BASELINE_ALPHA: float = 0.30
 
 # Sentinel pushed to SSE queues when the 150 s baseline completes.
-# Clients receive event type "baseline_complete" carrying this dict.
 _BASELINE_COMPLETE_EVENT: dict = {"event": "baseline_complete"}
 
-# Settling sentinel template — cloned per call with the reason injected.
-# Clients receive event type "settling" while Stage 0 holds frames.
+# Settling sentinel template
 _SETTLING_EVENT_TYPE: str = "settling"
 
 
 class EEGHub:
-    """Central in-memory EEG state store.
-
-    Single writer (EEGPump) via update(); multiple readers via get_state().
-    All writes are protected by a threading.Lock.
-    SSE fan-out uses per-client asyncio.Queue populated in update().
-    Redis write-through (Task 7.2): hub.update() calls cache.push_state() after
-    every state update when NEUROLINK_REDIS_ENABLED=true.
-
-    SSE queue item types
-    --------------------
-    Queues carry three distinct item types (see module docstring for details):
-      NeurolinkState            — normal data tick
-      _BASELINE_COMPLETE_EVENT  — one-shot bell event
-      settling dict             — emitted by emit_settling() on held frames
-    """
+    """Central in-memory EEG state store."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -84,10 +68,8 @@ class EEGHub:
         self._latest_sample: EEGSample | None = None
         self._fatigue = FatigueDetector()
         self.baseline_alpha: float = _DEFAULT_BASELINE_ALPHA
-        # SSE fan-out queues: one per connected SSE client
         self._sse_queues: list[asyncio.Queue] = []
         self._sse_lock = threading.Lock()
-        # Diagnostic counters
         self._settling_events_emitted: int = 0
         self._frames_processed: int = 0
 
@@ -97,7 +79,6 @@ class EEGHub:
         """Ingest a new payload, run classifiers, update state, fan-out to SSE."""
         bands = payload.bands
 
-        # ── v2 classifier (always runs) ─────────────────────────────────────
         region_v2, stage_v2 = classify_v2(bands)
         s_space = compute_s_space(bands)
 
@@ -107,7 +88,6 @@ class EEGHub:
         payload.integration_coverage = s_space.y
         payload.engagement_index = s_space.x
 
-        # ── v0.1 classifier (muse_ble only) ──────────────────────────────
         region_v01 = "A"
         stage_v01 = "Nigredo"
         if payload.source == "muse_ble":
@@ -121,17 +101,14 @@ class EEGHub:
                 fmt=payload.fmt,
             )
 
-        # ── EA-1 scoring ───────────────────────────────────────────────
         ea1_result = ea1_score(payload)
 
-        # ── Focus + Fatigue ──────────────────────────────────────────────
         fatigue_score = self._fatigue.update(bands.theta, bands.alpha)
         focus_score = compute_focus_score(bands.alpha, bands.beta, self.baseline_alpha)
         focus_state = classify_focus(focus_score)
 
         set_current_focus_score(focus_score)
 
-        # ── Build NeurolinkState ─────────────────────────────────────────
         with self._lock:
             prev_count = self._state.frame_count
             new_state = NeurolinkState(
@@ -184,14 +161,7 @@ class EEGHub:
     # ── SSE sentinel events ────────────────────────────────────────────────────
 
     def notify_baseline_complete(self) -> None:
-        """Push a baseline_complete sentinel to all SSE queues.
-
-        Called exactly once per session by BaselineRecorder._fire_bell().
-        The sentinel is a plain dict — not a NeurolinkState — so SSE
-        consumers must check the type before deserialising.
-        Clients that receive this event should play a bell sound and
-        unlock the session UI.
-        """
+        """Push a baseline_complete sentinel to all SSE queues."""
         log.info("hub_baseline_complete_notified")
         with self._sse_lock:
             queues = list(self._sse_queues)
@@ -202,29 +172,7 @@ class EEGHub:
                 log.warning("sse_queue_full_dropping_baseline_event")
 
     def emit_settling(self, reason: str = "settling") -> None:
-        """Push a settling sentinel to all SSE queues.
-
-        Called by EEGPump._tick() on every frame held by the Stage 0
-        acquisition guard (impedance not stable, motion detected, or
-        environment not ready).  The frontend uses the reason code to
-        display a contextual waiting indicator:
-
-          'impedance_unstable'  — "Adjusting headband / electrode contact"
-          'motion_settling'     — "Keep still"
-          'env_not_ready'       — "Calibrating sensors"
-          'settling'            — generic spinner
-
-        Emitting a settling event does NOT update NeurolinkState — the
-        frame was dropped before any DSP processing.  The SSE stream
-        therefore carries both normal ticks (NeurolinkState) and
-        out-of-band sentinel dicts; consumers must branch on type.
-
-        Parameters
-        ----------
-        reason:
-            One of the four reason codes above.  Unknown values are
-            forwarded as-is so future codes are forwards-compatible.
-        """
+        """Push a settling sentinel to all SSE queues."""
         event = {"event": _SETTLING_EVENT_TYPE, "reason": reason}
         with self._sse_lock:
             queues = list(self._sse_queues)
@@ -243,20 +191,7 @@ class EEGHub:
     # ── Diagnostics ────────────────────────────────────────────────────────────
 
     def get_stats(self) -> dict:
-        """Return lightweight diagnostic counters.
-
-        Safe to call from any thread at any time.  Values are best-effort
-        snapshots — they may be slightly stale under concurrent writes.
-
-        Returns
-        -------
-        dict with keys:
-          frames_processed        — total update() calls since construction/reset
-          settling_events_emitted — total emit_settling() calls
-          sse_client_count        — number of currently registered SSE queues
-          frame_count             — NeurolinkState.frame_count of current state
-          baseline_phase          — current baseline phase string
-        """
+        """Return lightweight diagnostic counters."""
         with self._lock:
             frame_count = self._state.frame_count
             baseline_phase = self._state.baseline_phase
@@ -337,6 +272,15 @@ class EEGHub:
                 self._sse_queues.remove(q)
             except ValueError:
                 pass
+
+    # Backward-compatible aliases used by legacy tests
+    def register_sse_client(self, q: asyncio.Queue) -> None:
+        """Alias for register_sse_queue (backward compatibility)."""
+        self.register_sse_queue(q)
+
+    def unregister_sse_client(self, q: asyncio.Queue) -> None:
+        """Alias for unregister_sse_queue (backward compatibility)."""
+        self.unregister_sse_queue(q)
 
     def _fanout(self, state: NeurolinkState) -> None:
         """Push state to all registered SSE queues (non-blocking put_nowait)."""

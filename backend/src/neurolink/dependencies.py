@@ -29,6 +29,10 @@ def get_neurolink_service() -> NeuroLinkService:
     return _service
 
 
+# Alias used by integration tests
+get_service = get_neurolink_service
+
+
 def get_eeg_hub() -> EEGHub:
     """Return the global EEGHub instance."""
     return get_hub()
