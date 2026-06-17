@@ -88,28 +88,18 @@ class EA1Result(BaseModel):
 
 
 class ArtifactAnnotationPayload(BaseModel):
-    """Single artifact annotation produced by Stage 3b ArtifactDetector.
+    """Single artifact annotation produced by Stage 3b ArtifactDetector."""
 
-    Mirrors ``neurolink.dsp.artifact_detector.ArtifactAnnotation`` as a
-    serialisable Pydantic model so the result can travel through
-    IngestPayload → NeurolinkState → SSE stream to the frontend.
-    """
-
-    artifact_type: str        # ArtifactType.name  e.g. "BLINK", "EMG"
-    confidence: float         # 0.0–1.0
-    channels: list[str]       # channel names where artifact was detected
-    feature_value: float      # raw feature value that triggered detection
-    feature_name: str         # human-readable feature label
-    threshold: float          # the threshold that was exceeded
+    artifact_type: str
+    confidence: float
+    channels: list[str]
+    feature_value: float
+    feature_name: str
+    threshold: float
 
 
 class ArtifactCorrectionPlanPayload(BaseModel):
-    """Serialisable snapshot of the CorrectionPlan built by Stage 3b.
-
-    Forwarded through IngestPayload → NeurolinkState → SSE stream so the
-    frontend and monitoring tools can see which correctors were invoked
-    on each frame without needing to parse artifact_annotations.
-    """
+    """Serialisable snapshot of the CorrectionPlan built by Stage 3b."""
 
     hard_reject: bool = False
     apply_ocular_regression: bool = False
@@ -139,29 +129,14 @@ class IngestPayload(BaseModel):
     imu: IMUPayload | None = None
     fnirs_oxy: float | None = None
     fnirs_deoxy: float | None = None
-    # Raw EEG sample window: list of channels, each a list of float samples
-    # Shape: [n_channels][n_samples]  e.g. [[...64 floats...], ...] x5
     eeg_samples: list[list[float]] = Field(default_factory=list)
-    # Stage 2: channels detected or manually flagged as bad this frame
     bad_channels: list[str] = Field(default_factory=list)
-    # Stage 3: epoch-level artifact gate decision
     artifact_rejected: bool = False
     artifact_reasons: list[str] = Field(default_factory=list)
-    # Stage 3b: multi-type artifact classifier results
-    # Empty list when Stage 3b is disabled or no artifacts detected.
     artifact_annotations: list[ArtifactAnnotationPayload] = Field(default_factory=list)
-    # Stage 3b: correction plan built from classifier results.
-    # None when Stage 3b is disabled.
     artifact_correction_plan: ArtifactCorrectionPlanPayload | None = None
-    # Per-channel impedance in kΩ. Only hardware adapters that expose electrode
-    # impedance need to populate this; defaults to empty dict.
     channel_impedances: dict[str, float] = Field(default_factory=dict)
-    # Baseline phase: "warmup" | "recording" | "complete"
-    # Set by EEGPump from BaselineRecorder.phase every tick.
-    # Lets the frontend know which phase of the startup baseline is active
-    # and when to expect the bell event.
     baseline_phase: str = "warmup"
-    # Filled by hub.update()
     region: str = "A"
     alchemical_stage: str = "Nigredo"
     s_space: SSpaceCoords | None = None
@@ -205,24 +180,19 @@ class NeurolinkState(BaseModel):
     fatigue_score: float = 0.0
     fnirs_oxy: float | None = None
     fnirs_deoxy: float | None = None
-    # Raw EEG sample window forwarded verbatim from IngestPayload.
     eeg_samples: list[list[float]] = Field(default_factory=list)
-    # Stage 2: bad channels detected this frame
     bad_channels: list[str] = Field(default_factory=list)
-    # Stage 3: epoch-level artifact gate
     artifact_rejected: bool = False
     artifact_reasons: list[str] = Field(default_factory=list)
-    # Stage 3b: multi-type artifact classifier results forwarded from IngestPayload.
-    # Empty list when Stage 3b is disabled or no artifacts detected.
     artifact_annotations: list[ArtifactAnnotationPayload] = Field(default_factory=list)
-    # Stage 3b: correction plan forwarded from IngestPayload.
-    # None when Stage 3b is disabled.
     artifact_correction_plan: ArtifactCorrectionPlanPayload | None = None
-    # Per-channel impedance in kΩ, forwarded verbatim from IngestPayload.
     channel_impedances: dict[str, float] = Field(default_factory=dict)
-    # Baseline phase forwarded verbatim from IngestPayload.
-    # "warmup" | "recording" | "complete"
     baseline_phase: str = "warmup"
+
+    @property
+    def band_powers(self) -> BandPowers:
+        """Alias for bands (backward compatibility with tests)."""
+        return self.bands
 
 
 # ============================================================================
@@ -233,9 +203,9 @@ class NeurolinkState(BaseModel):
 class ConnectRequest(BaseModel):
     """POST /api/v1/neurolink/connect request body."""
 
-    adapter_type: str = "mock"  # mock | ble | lsl
-    device_model: str = "muse_s_gen1"  # muse_s_gen1 | muse_s_athena | mock
-    address: str | None = None  # BLE MAC address (required for BLE mode)
+    adapter_type: str = "mock"
+    device_model: str = "muse_s_gen1"
+    address: str | None = None
 
 
 class ConnectResponse(BaseModel):
@@ -258,33 +228,12 @@ class BandPowerResponse(BaseModel):
 
 
 class CalibrateResponse(BaseModel):
-    status: str  # "started" | "complete" | "error"
+    status: str
     baseline_alpha: float | None = None
 
 
 class BaselineProgressResponse(BaseModel):
-    """Response for GET /api/v1/neurolink/baseline.
-
-    Lightweight polling alternative to the SSE stream for clients that
-    cannot use server-sent events (e.g. simple HTTP clients, React Native
-    fetch pollers, CLI tools).
-
-    Fields
-    ------
-    phase
-        Current phase of the baseline calibration session.
-        One of: ``"idle"`` | ``"warmup"`` | ``"baseline"`` | ``"complete"``.
-        ``"idle"`` means no session has been started yet.
-    elapsed_s
-        Seconds elapsed since the session started.
-        0.0 when phase is ``"idle"``.
-    remaining_s
-        Seconds remaining until the session completes.
-        Computed as ``max(0, TOTAL_DURATION_SEC - elapsed_s)``.
-        0.0 when phase is ``"idle"`` or ``"complete"``.
-    total_s
-        Total session duration in seconds (always 90.0).
-    """
+    """Response for GET /api/v1/neurolink/baseline."""
 
     phase: str
     elapsed_s: float
@@ -293,7 +242,7 @@ class BaselineProgressResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    status: str  # "ok" | "degraded"
+    status: str
     adapter_type: str
     adapter_connected: bool
     hub_frame_count: int

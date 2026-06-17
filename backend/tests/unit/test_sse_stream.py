@@ -63,8 +63,8 @@ async def test_sse_stream_state_fields_present(async_client):
     data_lines = [line[len("data: "):] for line in raw.splitlines() if line.startswith("data: ")]
     assert data_lines, "No data lines in SSE output"
     payload = json.loads(data_lines[0])
-    # NeurolinkState must include these top-level keys
-    for key in ("connected", "artifact_flag", "bands"):
+    # NeurolinkState required top-level keys
+    for key in ("connected", "artifact_rejected", "bands"):
         assert key in payload, f"Missing key '{key}' in SSE state frame"
 
 
@@ -77,11 +77,9 @@ async def test_sse_stream_frame_format(async_client):
             raw_chunks.append(chunk)
 
     raw = b"".join(raw_chunks).decode()
-    # Each event block must follow the SSE spec
     blocks = [b for b in raw.split("\n\n") if b.strip()]
     for block in blocks:
         lines = block.splitlines()
-        # Valid SSE blocks are either a comment '': keepalive' or event+data pair
         if lines[0].startswith(":"):
             continue  # keepalive comment — valid SSE
         assert any(l.startswith("event:") for l in lines), f"Block missing event: line: {block!r}"
@@ -92,7 +90,6 @@ async def test_sse_stream_frame_format(async_client):
 async def test_sse_response_headers(async_client):
     """The SSE response must carry Cache-Control and X-Accel-Buffering headers."""
     async with async_client.stream("GET", "/api/v1/neurolink/stream") as resp:
-        # Consume body to close cleanly
         async for _ in resp.aiter_bytes():
             pass
     assert resp.headers.get("cache-control") == "no-cache"

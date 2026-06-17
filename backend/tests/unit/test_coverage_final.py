@@ -31,7 +31,6 @@ def _make_baseline(phase_offset: float = 0.0):
     mock_asr = MagicMock()
     mock_hub = MagicMock()
     rec = BaselineRecorder(asr=mock_asr, hub=mock_hub)
-    # Rewind start time so tests can force phase transitions instantly
     rec._start_ts = time.monotonic() - phase_offset
     return rec, mock_asr, mock_hub
 
@@ -46,37 +45,46 @@ def test_baseline_warmup_discards_frame():
 
     assert rec.phase == BaselinePhase.WARMUP.value
     mock_asr.apply.assert_not_called()
-    assert out is arr  # same object returned
+    assert out is arr
 
 
 def test_baseline_warmup_to_recording_transition():
-    """After BASELINE_DISCARD_SEC the recorder advances to RECORDING."""
+    """After BASELINE_DISCARD_SEC the recorder advances to RECORDING.
+
+    BaselineRecorder.process() is a pure phase-state-machine shim.
+    It does NOT call asr.apply() directly — that responsibility lives
+    in EEGPump._build_payload() (Stage 4), gated on phase != 'warmup'.
+    """
     from neurolink.dsp.artifact_config import BASELINE_DISCARD_SEC
     from neurolink.dsp.baseline import BaselinePhase
 
     rec, mock_asr, _ = _make_baseline(phase_offset=BASELINE_DISCARD_SEC + 1.0)
     arr = np.ones((5, 64), dtype=np.float32)
-    rec.process(arr)
+    rec.process(arr)   # transitions WARMUP → RECORDING
 
     assert rec.phase == BaselinePhase.RECORDING.value
-    # First call after transition: still in RECORDING, not yet COMPLETE → ASR fed
-    rec.process(arr)
-    mock_asr.apply.assert_called()
+    # BaselineRecorder never calls asr.apply() — EEGPump owns that.
+    mock_asr.apply.assert_not_called()
 
 
 def test_baseline_recording_feeds_asr():
-    """During RECORDING each frame is forwarded to asr.apply()."""
+    """During RECORDING each call to process() advances the phase machine.
+
+    BaselineRecorder does NOT call asr.apply() — it only exposes phase
+    so EEGPump._build_payload() can gate Stage 4 correctly.
+    """
     from neurolink.dsp.artifact_config import BASELINE_DISCARD_SEC
     from neurolink.dsp.baseline import BaselinePhase
 
     rec, mock_asr, _ = _make_baseline(phase_offset=BASELINE_DISCARD_SEC + 1.0)
     arr = np.ones((5, 64), dtype=np.float32)
-    rec.process(arr)           # transition to RECORDING
-    rec.process(arr)           # first RECORDING call
-    rec.process(arr)           # second RECORDING call
+    rec.process(arr)   # transition to RECORDING
+    rec.process(arr)   # frame 1 in RECORDING
+    rec.process(arr)   # frame 2 in RECORDING
 
     assert rec.phase == BaselinePhase.RECORDING.value
-    assert mock_asr.apply.call_count == 2
+    # BaselineRecorder is a phase-gate shim — asr.apply() is never called here.
+    mock_asr.apply.assert_not_called()
 
 
 def test_baseline_recording_to_complete_fires_bell():
@@ -85,7 +93,6 @@ def test_baseline_recording_to_complete_fires_bell():
     from neurolink.dsp.baseline import BaselinePhase
 
     rec, mock_asr, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
-    # Force directly into RECORDING so the next process() sees TOTAL elapsed
     from neurolink.dsp.baseline import BaselinePhase as BP
     rec._phase = BP.RECORDING
 
@@ -105,7 +112,7 @@ def test_baseline_complete_passthrough_no_asr():
 
     rec, mock_asr, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
     rec._phase = BaselinePhase.COMPLETE
-    rec._bell_fired = True  # bell already fired
+    rec._bell_fired = True
 
     arr = np.ones((5, 64), dtype=np.float32)
     out = rec.process(arr)
@@ -120,7 +127,7 @@ def test_baseline_bell_idempotent():
     from neurolink.dsp.artifact_config import BASELINE_TOTAL_SEC
 
     rec, _, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
-    rec._bell_fired = True  # pre-set
+    rec._bell_fired = True
 
     rec._fire_bell(elapsed=200.0)
 
@@ -153,32 +160,27 @@ def test_baseline_is_complete_false_during_warmup():
 # ===========================================================================
 
 def test_filter_toggles_get_returns_copy():
-    """get_toggles() returns a copy; mutating it does not alter global state."""
     from neurolink.dsp.filter_toggles import FilterToggleConfig, get_toggles, set_toggles
 
-    # Reset to known state
     set_toggles({"stage1_fir": True})
     snap1 = get_toggles()
-    snap1.stage1_fir = False  # mutate the copy
+    snap1.stage1_fir = False
     snap2 = get_toggles()
-    assert snap2.stage1_fir is True  # global unchanged
+    assert snap2.stage1_fir is True
 
 
 def test_filter_toggles_set_partial_update():
-    """set_toggles() accepts a partial dict and merges correctly."""
     from neurolink.dsp.filter_toggles import get_toggles, set_toggles
 
-    set_toggles({"stage1_fir": True, "stage4_asr": True})  # reset both
+    set_toggles({"stage1_fir": True, "stage4_asr": True})
     result = set_toggles({"stage4_asr": False})
 
     assert result.stage4_asr is False
     assert get_toggles().stage4_asr is False
-    # Other fields untouched
     assert get_toggles().stage1_fir is True
 
 
 def test_filter_toggles_unknown_keys_ignored():
-    """Unknown keys in the update dict are silently ignored."""
     from neurolink.dsp.filter_toggles import get_toggles, set_toggles
 
     original = get_toggles().to_dict()
@@ -189,16 +191,15 @@ def test_filter_toggles_unknown_keys_ignored():
 
 
 def test_filter_toggles_non_bool_values_ignored():
-    """Non-bool values for valid keys are silently ignored."""
     from neurolink.dsp.filter_toggles import get_toggles, set_toggles
 
-    set_toggles({"stage3_artifact_gate": True})  # ensure it's True
-    set_toggles({"stage3_artifact_gate": "yes"})  # type: ignore[arg-type]  — ignored
+    set_toggles({"stage3_artifact_gate": True})
+    set_toggles({"stage3_artifact_gate": "yes"})  # type: ignore[arg-type]
     assert get_toggles().stage3_artifact_gate is True
 
 
 def test_filter_toggles_to_dict_roundtrip():
-    """to_dict() includes all 8 stage fields."""
+    """to_dict() includes the 8 public stage fields (stage6_cardiac excluded)."""
     from neurolink.dsp.filter_toggles import FilterToggleConfig
 
     cfg = FilterToggleConfig()
@@ -217,7 +218,6 @@ def test_filter_toggles_to_dict_roundtrip():
 # ===========================================================================
 
 def test_v01_region_f_delta_dominance():
-    """High delta → Region F / Coagulatio (deep sleep branch)."""
     from neurolink.dsp.classifiers import classify_v01
 
     region, stage = classify_v01(alpha=0.05, theta=0.05, beta=0.05,
@@ -227,7 +227,6 @@ def test_v01_region_f_delta_dominance():
 
 
 def test_v01_region_c_alpha_onset():
-    """Moderate alpha, beta below threshold → Region C / Albedo."""
     from neurolink.dsp.classifiers import classify_v01
     from neurolink.dsp.artifact_config import V01_ALPHA_C, V01_BETA_B
 
@@ -243,7 +242,6 @@ def test_v01_region_c_alpha_onset():
 
 
 def test_v01_region_a_default():
-    """All thresholds unmet → Region A / Nigredo (default)."""
     from neurolink.dsp.classifiers import classify_v01
 
     region, stage = classify_v01(
@@ -254,7 +252,6 @@ def test_v01_region_a_default():
 
 
 def test_v01_multiplicatio_faa_none_allowed():
-    """faa=None means the FAA gate is skipped → Multiplicatio still reached."""
     from neurolink.dsp.classifiers import classify_v01
     from neurolink.dsp.artifact_config import (
         V01_ALPHA_E, V01_THETA_E,
@@ -278,7 +275,6 @@ def test_v01_multiplicatio_faa_none_allowed():
 # ===========================================================================
 
 def test_v2_coagulatio():
-    """Heavy delta → Coagulatio (Region F)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import V2_DELTA_COAGULATIO
     from neurolink.models.eeg import BandPowers
@@ -292,7 +288,6 @@ def test_v2_coagulatio():
 
 
 def test_v2_sublimatio():
-    """High gamma dominant → Sublimatio (Region G)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import V2_GAMMA_SUBLIMATIO
     from neurolink.models.eeg import BandPowers
@@ -307,7 +302,6 @@ def test_v2_sublimatio():
 
 
 def test_v2_calcinatio():
-    """Very high beta → Calcinatio (Region H)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import V2_BETA_CALCINATIO
     from neurolink.models.eeg import BandPowers
@@ -321,7 +315,6 @@ def test_v2_calcinatio():
 
 
 def test_v2_multiplicatio():
-    """Very high alpha + theta, low beta → Multiplicatio (Region E)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import (
         V2_ALPHA_MULTIPLICATIO, V2_THETA_RUBEDO, V2_BETA_RUBEDO_MAX,
@@ -342,7 +335,6 @@ def test_v2_multiplicatio():
 
 
 def test_v2_rubedo():
-    """High alpha + theta (below Multiplicatio threshold), low beta → Rubedo."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import (
         V2_ALPHA_RUBEDO, V2_ALPHA_MULTIPLICATIO,
@@ -364,7 +356,6 @@ def test_v2_rubedo():
 
 
 def test_v2_solutio():
-    """High theta, alpha below Rubedo threshold → Solutio (Region D)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import V2_THETA_SOLUTIO, V2_ALPHA_RUBEDO
     from neurolink.models.eeg import BandPowers
@@ -383,7 +374,6 @@ def test_v2_solutio():
 
 
 def test_v2_albedo():
-    """Moderate beta dominance → Albedo (Region C)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.dsp.artifact_config import V2_BETA_ALBEDO
     from neurolink.models.eeg import BandPowers
@@ -397,7 +387,6 @@ def test_v2_albedo():
 
 
 def test_v2_nigredo_default():
-    """All thresholds unmet → Nigredo (Region A)."""
     from neurolink.dsp.classifiers import classify_v2
     from neurolink.models.eeg import BandPowers
 
@@ -413,7 +402,6 @@ def test_v2_nigredo_default():
 # ===========================================================================
 
 def test_compute_s_space_ranges():
-    """x, y, z are all within their defined ranges [0,10], [0,10], [0,1]."""
     from neurolink.dsp.classifiers import compute_s_space
     from neurolink.models.eeg import BandPowers
 
@@ -426,19 +414,17 @@ def test_compute_s_space_ranges():
 
 
 def test_compute_s_space_zero_alpha_does_not_divide_by_zero():
-    """Zero alpha uses the 1e-6 epsilon guard without raising."""
     from neurolink.dsp.classifiers import compute_s_space
     from neurolink.models.eeg import BandPowers
 
     coords = compute_s_space(
         BandPowers(alpha=0.0, theta=0.0, beta=0.3, delta=0.1, gamma=0.02)
     )
-    assert coords.x == pytest.approx(10.0)  # clamped at max
-    assert coords.y == pytest.approx(0.0)   # alpha*theta = 0
+    assert coords.x == pytest.approx(10.0)
+    assert coords.y == pytest.approx(0.0)
 
 
 def test_compute_s_space_high_gamma_clamps_z():
-    """Very high gamma clamps z to 1.0."""
     from neurolink.dsp.classifiers import compute_s_space
     from neurolink.models.eeg import BandPowers
 
@@ -453,7 +439,6 @@ def test_compute_s_space_high_gamma_clamps_z():
 # ===========================================================================
 
 def test_hub_notify_baseline_complete_delivers_sentinel():
-    """Registered SSE queues receive the baseline_complete sentinel."""
     from neurolink.hub import EEGHub, _BASELINE_COMPLETE_EVENT
 
     hub = EEGHub()
@@ -468,23 +453,21 @@ def test_hub_notify_baseline_complete_delivers_sentinel():
 
 
 def test_hub_notify_baseline_complete_queue_full_suppressed():
-    """A full SSE queue must not raise — QueueFull is swallowed."""
     from neurolink.hub import EEGHub
 
     hub = EEGHub()
     q = asyncio.Queue(maxsize=1)
-    q.put_nowait({"dummy": True})  # fill it up
+    q.put_nowait({"dummy": True})
     hub.register_sse_queue(q)
 
-    hub.notify_baseline_complete()   # must not raise
+    hub.notify_baseline_complete()
 
 
 def test_hub_notify_baseline_complete_no_queues():
-    """notify_baseline_complete() with no subscribers must not raise."""
     from neurolink.hub import EEGHub
 
     hub = EEGHub()
-    hub.notify_baseline_complete()   # must not raise
+    hub.notify_baseline_complete()
 
 
 # ===========================================================================
@@ -492,7 +475,6 @@ def test_hub_notify_baseline_complete_no_queues():
 # ===========================================================================
 
 def test_hub_unregister_present_queue():
-    """Unregistering a present queue removes it from the fan-out list."""
     from neurolink.hub import EEGHub
 
     hub = EEGHub()
@@ -500,18 +482,16 @@ def test_hub_unregister_present_queue():
     hub.register_sse_queue(q)
     hub.unregister_sse_queue(q)
 
-    # After removal no items should arrive in q
     hub.notify_baseline_complete()
     assert q.empty()
 
 
 def test_hub_unregister_missing_queue_no_raise():
-    """Unregistering a queue that was never registered is a silent no-op."""
     from neurolink.hub import EEGHub
 
     hub = EEGHub()
     q = asyncio.Queue()
-    hub.unregister_sse_queue(q)   # must not raise
+    hub.unregister_sse_queue(q)
 
 
 # ===========================================================================
@@ -519,25 +499,22 @@ def test_hub_unregister_missing_queue_no_raise():
 # ===========================================================================
 
 def test_hub_fanout_queue_full_suppressed():
-    """A full SSE queue during _fanout must not raise."""
     from neurolink.hub import EEGHub
     from neurolink.models.eeg import NeurolinkState
 
     hub = EEGHub()
     q = asyncio.Queue(maxsize=1)
-    q.put_nowait(NeurolinkState())   # fill it
+    q.put_nowait(NeurolinkState())
     hub.register_sse_queue(q)
 
-    hub._fanout(NeurolinkState())    # must not raise
+    hub._fanout(NeurolinkState())
 
 
 # ===========================================================================
-# hub.py — update() muse_ble branch exercises classify_v01
+# hub.py — update() muse_ble branch
 # ===========================================================================
 
 def test_hub_update_muse_ble_runs_v01():
-    """update() with source='muse_ble' must produce a non-default v01 region
-    when the bands clearly land in Region E (Rubedo)."""
     from neurolink.dsp.artifact_config import V01_ALPHA_E, V01_THETA_E
     from neurolink.hub import EEGHub
     from neurolink.models.eeg import BandPowers, IngestPayload
@@ -559,7 +536,6 @@ def test_hub_update_muse_ble_runs_v01():
 
 
 def test_hub_update_non_muse_source_skips_v01():
-    """update() with source != 'muse_ble' leaves v01 at default Region A."""
     from neurolink.hub import EEGHub
     from neurolink.models.eeg import BandPowers, IngestPayload
 
@@ -578,7 +554,6 @@ def test_hub_update_non_muse_source_skips_v01():
 # ===========================================================================
 
 def test_hub_module_level_snapshot_returns_dict():
-    """Module-level snapshot() returns a plain dict."""
     import neurolink.hub as hub_module
 
     result = hub_module.snapshot()
@@ -587,7 +562,6 @@ def test_hub_module_level_snapshot_returns_dict():
 
 
 def test_hub_module_level_reset_clears_frame_count():
-    """Module-level reset() sets frame_count back to 0."""
     import neurolink.hub as hub_module
     from neurolink.models.eeg import BandPowers, IngestPayload
 
@@ -600,7 +574,6 @@ def test_hub_module_level_reset_clears_frame_count():
 
 
 def test_hub_module_level_get_hub_returns_singleton():
-    """get_hub() returns the same singleton on repeated calls."""
     from neurolink.hub import get_hub
 
     h1 = get_hub()
@@ -609,7 +582,6 @@ def test_hub_module_level_get_hub_returns_singleton():
 
 
 def test_hub_set_and_get_latest_sample():
-    """set_latest_sample / get_latest round-trip."""
     from neurolink.hub import EEGHub
     from neurolink.hardware.base import EEGSample
 

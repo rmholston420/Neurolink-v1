@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from neurolink.hub import EEGHub
@@ -55,26 +56,15 @@ def eeg_buffer_256hz() -> list[list[float]]:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI / httpx fixtures -- needed by test_main.py and integration tests
+# FastAPI / httpx fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def app():
-    """Create a fresh FastAPI application instance with reset singletons.
-
-    The lifespan auto-connects mock on startup.  Without resetting the module-
-    level singletons, the second test that tries to connect sees an already-
-    connected adapter and gets 409 Conflict.
-
-    Reset both:
-      - neurolink.dependencies._service  (NeuroLinkService singleton)
-      - neurolink.hub._hub               (EEGHub singleton)
-    so each app instance starts from a clean state.
-    """
+    """Create a fresh FastAPI application instance with reset singletons."""
     import neurolink.dependencies as deps
     import neurolink.hub as hub_mod
 
-    # Reset singletons before creating app
     deps._service = None
     hub_mod._hub = hub_mod.EEGHub()
 
@@ -85,6 +75,20 @@ def app():
 @pytest.fixture()
 async def client(app):
     """Async httpx client bound to the FastAPI app via ASGI transport."""
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as c:
+        yield c
+
+
+@pytest_asyncio.fixture()
+async def async_client(app):
+    """Async httpx client for SSE / streaming tests.
+
+    Uses pytest_asyncio.fixture so it is recognised by pytest-asyncio
+    in auto or strict mode.  Identical transport setup to `client`.
+    """
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
