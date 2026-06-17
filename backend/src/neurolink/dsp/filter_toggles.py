@@ -3,24 +3,32 @@
 Each field controls whether a DSP stage runs during EEGPump._build_payload().
 All stages default to enabled=True.
 
-The module-level singleton is accessed by:
-  from neurolink.dsp.filter_toggles import get_toggles, set_toggles
+Public API
+----------
+  get_toggles()  -> FilterToggleConfig  (copy of current singleton)
+  set_toggles()  -> FilterToggleConfig  (merge updates, return new state)
+
+to_dict() intentionally omits stage6_cardiac; that toggle is accessible via
+get_toggles().stage6_cardiac but is not part of the generic key/value API
+exposed to the filters endpoint, so it will not be accidentally bulk-disabled.
+set_toggles({'stage6_cardiac': False}) still works because the key is accepted
+by the dataclass; it just won't appear in to_dict() round-trips.
 """
 
 from __future__ import annotations
 
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
-# Keys excluded from the public to_dict() / set_toggles() API.
-# NOTE: stage6_cardiac is intentionally included in the public API so that
-# set_toggles({'stage6_cardiac': False}) works and to_dict() returns all fields.
-_EXCLUDED_KEYS: frozenset[str] = frozenset()
+# Keys excluded from the public to_dict() / set_toggles() key-enumeration API.
+# stage6_cardiac is excluded from the dict view because the cardiac regression
+# toggle has a dedicated UI control and must not appear in bulk-toggle lists.
+_EXCLUDED_KEYS: frozenset[str] = frozenset({"stage6_cardiac"})
 
 
 @dataclass
 class FilterToggleConfig:
-    """One bool per pipeline stage.  True = stage runs; False = bypassed."""
+    """One bool per pipeline stage. True = stage runs; False = bypassed."""
 
     stage1_fir: bool = True
     stage2_bad_channels: bool = True
@@ -33,7 +41,7 @@ class FilterToggleConfig:
     imu_gate: bool = True
 
     def to_dict(self) -> dict[str, bool]:
-        """Return all toggle keys as a dict."""
+        """Return all public toggle keys as a dict (excludes _EXCLUDED_KEYS)."""
         d = asdict(self)
         for k in _EXCLUDED_KEYS:
             d.pop(k, None)
@@ -57,11 +65,12 @@ def get_toggles() -> FilterToggleConfig:
 def set_toggles(updates: dict[str, bool]) -> FilterToggleConfig:
     """Merge *updates* into the live config and return the new state.
 
-    All public keys (those returned by to_dict()) are accepted;
-    unknown keys and non-bool values are silently ignored.
+    Accepts ALL dataclass field names (including stage6_cardiac).
+    Unknown keys and non-bool values are silently ignored.
     """
     global _toggles
-    valid_keys = FilterToggleConfig().to_dict().keys()
+    # Valid keys = all dataclass fields (not just the public to_dict() subset)
+    valid_keys = {f.name for f in FilterToggleConfig.__dataclass_fields__.values()}
     with _lock:
         current = asdict(_toggles)
         for k, v in updates.items():
