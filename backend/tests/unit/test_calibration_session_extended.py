@@ -103,22 +103,29 @@ class TestCalibrationFastForward:
     async def test_phase_transitions_warmup_then_baseline_then_complete(self):
         """
         Simulate elapsed time racing past WARMUP_SEC and TOTAL_DURATION_SEC
-        by patching time.monotonic to return an ever-increasing sequence.
+        by patching time.monotonic with a callable that returns an
+        ever-increasing sequence.  Using a callable avoids the Python 3.7+
+        restriction that forbids StopIteration from propagating out of a
+        coroutine (which would happen with side_effect=iter([...])).
         """
         hub = EEGHub()
         adapter = _make_adapter()
 
-        # Time sequence: 0, 1, …, 31, 32, …, 91 (jump past all windows fast)
-        times = iter([0.0, 31.0, TOTAL_DURATION_SEC + 1.0])
+        # Each call to monotonic advances through this list; once exhausted
+        # it keeps returning the last value so the loop can exit cleanly.
+        _times = [0.0, 31.0, TOTAL_DURATION_SEC + 1.0]
+        _idx = 0
 
-        with patch("neurolink.calibration.time.monotonic", side_effect=times):
+        def _monotonic():
+            nonlocal _idx
+            val = _times[min(_idx, len(_times) - 1)]
+            _idx += 1
+            return val
+
+        with patch("neurolink.calibration.time.monotonic", side_effect=_monotonic):
             cal = CalibrationSession(adapter, hub)
-            # run() will loop until elapsed >= TOTAL_DURATION_SEC.
-            # Because we only have 3 time values, the loop will exit on
-            # the 3rd call (elapsed >= TOTAL_DURATION_SEC).
-            result = await cal.run()
+            await cal.run()
 
-        # After run(), phase must be 'complete'
         assert cal.phase == "complete"
         assert cal.is_running is False
 
@@ -131,18 +138,14 @@ class TestCalibrationFastForward:
         hub = EEGHub()
         adapter = _make_adapter(return_none=True)
 
-        # Fast-forward time so both warmup and baseline windows expire quickly.
-        times = [0.0, WARMUP_SEC + 1.0, TOTAL_DURATION_SEC + 1.0]
-        call_count = 0
+        _times = [0.0, WARMUP_SEC + 1.0, TOTAL_DURATION_SEC + 1.0]
+        _idx = 0
 
         def _fast_time():
-            nonlocal call_count
-            if call_count < len(times):
-                t = times[call_count]
-            else:
-                t = TOTAL_DURATION_SEC + 2.0
-            call_count += 1
-            return t
+            nonlocal _idx
+            val = _times[min(_idx, len(_times) - 1)]
+            _idx += 1
+            return val
 
         with patch("neurolink.calibration.time.monotonic", side_effect=_fast_time):
             cal = CalibrationSession(adapter, hub)
@@ -156,11 +159,16 @@ class TestCalibrationFastForward:
         """
         If the task is cancelled mid-run, the finally block must set phase
         to 'complete' and is_running to False.
+
+        AsyncMock side_effect must be a *callable* that returns a coroutine,
+        not a pre-created coroutine object (which would already be exhausted).
         """
         hub = EEGHub()
         adapter = MagicMock()
-        # read_sample sleeps forever so we can cancel cleanly
-        adapter.read_sample = AsyncMock(side_effect=asyncio.sleep(9999))
+        # side_effect receives a fresh coroutine on every call
+        adapter.read_sample = AsyncMock(
+            side_effect=lambda *_a, **_kw: asyncio.sleep(9999)
+        )
 
         cal = CalibrationSession(adapter, hub)
         task = asyncio.create_task(cal.run())
