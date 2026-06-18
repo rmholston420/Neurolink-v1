@@ -1,77 +1,98 @@
-"""Unit tests for dsp.cardiac_regression.CardiacRegression."""
+"""Unit tests for neurolink.dsp.cardiac_regression.
+
+Real public API:
+  CardiacRegressor         — stateful corrector; __init__(config)
+  CardiacRegressionConfig  — tunable dataclass
+"""
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from neurolink.dsp.cardiac_regression import CardiacRegression
+from neurolink.dsp.cardiac_regression import CardiacRegressor, CardiacRegressionConfig
 
 
-N_EEG = 4
-FS = 256
+FS = 256.0
+N_CH = 4
+N_SAMPLES = 256
 
 
-@pytest.fixture()
-def regressor() -> CardiacRegression:
-    return CardiacRegression(n_eeg_channels=N_EEG, fs=FS)
+@pytest.fixture
+def corrector() -> CardiacRegressor:
+    return CardiacRegressor()
 
 
-def _eeg() -> np.ndarray:
-    rng = np.random.default_rng(99)
-    return rng.normal(0, 5e-6, size=(N_EEG,))
+@pytest.fixture
+def corrector_disabled() -> CardiacRegressor:
+    return CardiacRegressor(config=CardiacRegressionConfig(enable=False))
 
 
-def _ppg_sample(amp: float = 1.0) -> float:
-    return float(np.sin(2 * np.pi * 1.2 * np.arange(1) / FS)[0]) * amp
+@pytest.fixture
+def clean_eeg() -> np.ndarray:
+    return np.random.default_rng(42).normal(0, 5.0, (N_CH, N_SAMPLES))
+
+
+@pytest.fixture
+def ibi_sequence() -> list[float]:
+    """Physiologically valid IBIs: ~75 bpm = 800 ms interval."""
+    return [800.0] * 12
 
 
 class TestConstruction:
-    def test_instantiation(self):
-        reg = CardiacRegression(n_eeg_channels=N_EEG, fs=FS)
-        assert reg is not None
+    def test_default_construction(self):
+        c = CardiacRegressor()
+        assert c is not None
 
-    def test_n_channels_stored(self, regressor):
-        assert regressor.n_eeg_channels == N_EEG
-
-    def test_fs_stored(self, regressor):
-        assert regressor.fs == FS
-
-
-class TestProcessOutput:
-    def test_output_shape(self, regressor):
-        out = regressor.process(_eeg(), _ppg_sample())
-        assert out.shape == (N_EEG,)
-
-    def test_output_dtype(self, regressor):
-        out = regressor.process(_eeg(), _ppg_sample())
-        assert np.issubdtype(out.dtype, np.floating)
-
-    def test_zero_ppg_no_correction(self, regressor):
-        eeg = _eeg()
-        out = regressor.process(eeg, 0.0)
-        np.testing.assert_array_almost_equal(out, eeg)
+    def test_custom_config(self):
+        cfg = CardiacRegressionConfig(half_win_ms=300.0, template_beats=6)
+        c = CardiacRegressor(config=cfg)
+        assert c is not None
 
 
-class TestCalibration:
-    def test_calibrate_accepts_data(self, regressor):
-        eeg_cal = np.random.default_rng(0).normal(0, 5e-6, size=(FS * 60, N_EEG))
-        ppg_cal = np.sin(2 * np.pi * 1.2 * np.arange(FS * 60) / FS)
-        regressor.calibrate(eeg_cal, ppg_cal)
+class TestDisabledPassthrough:
+    def test_disabled_returns_eeg_unchanged(self, corrector_disabled, clean_eeg):
+        out = corrector_disabled.remove(clean_eeg, ibi_ms=[], fs=FS)
+        np.testing.assert_array_equal(out, clean_eeg)
 
-    def test_after_calibration_output_shape(self, regressor):
-        eeg_cal = np.random.default_rng(0).normal(0, 5e-6, size=(FS * 60, N_EEG))
-        ppg_cal = np.sin(2 * np.pi * 1.2 * np.arange(FS * 60) / FS)
-        regressor.calibrate(eeg_cal, ppg_cal)
-        out = regressor.process(_eeg(), _ppg_sample())
-        assert out.shape == (N_EEG,)
+    def test_disabled_with_valid_ibi_still_passthrough(self, corrector_disabled, clean_eeg, ibi_sequence):
+        out = corrector_disabled.remove(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
+        np.testing.assert_array_equal(out, clean_eeg)
 
 
-class TestReset:
-    def test_reset_does_not_raise(self, regressor):
-        regressor.reset()
+class TestGracefulDegradation:
+    def test_empty_ibi_returns_eeg_unchanged(self, corrector, clean_eeg):
+        """No IBI data -> corrector returns eeg unchanged."""
+        out = corrector.remove(clean_eeg, ibi_ms=[], fs=FS)
+        np.testing.assert_array_equal(out, clean_eeg)
 
-    def test_output_valid_after_reset(self, regressor):
-        regressor.reset()
-        out = regressor.process(_eeg(), _ppg_sample())
-        assert out.shape == (N_EEG,)
-        assert not np.any(np.isnan(out))
+    def test_out_of_range_ibi_returns_unchanged(self, corrector, clean_eeg):
+        """IBIs outside physiological range (min 400 ms, max 2000 ms) -> passthrough."""
+        bad_ibi = [100.0, 3000.0]  # too short and too long
+        out = corrector.remove(clean_eeg, ibi_ms=bad_ibi, fs=FS)
+        np.testing.assert_array_equal(out, clean_eeg)
+
+    def test_insufficient_beats_returns_unchanged(self, corrector, clean_eeg):
+        """Fewer than template_beats valid IBIs -> passthrough."""
+        out = corrector.remove(clean_eeg, ibi_ms=[800.0], fs=FS)
+        np.testing.assert_array_equal(out, clean_eeg)
+
+
+class TestOutputShape:
+    def test_output_same_shape_as_input(self, corrector, clean_eeg, ibi_sequence):
+        out = corrector.remove(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
+        assert out.shape == clean_eeg.shape
+
+    def test_float64_output(self, corrector, clean_eeg, ibi_sequence):
+        out = corrector.remove(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
+        assert out.dtype in (np.float32, np.float64)
+
+
+class TestEdgeCases:
+    def test_single_channel_no_crash(self, corrector):
+        eeg = np.random.default_rng(5).normal(0, 5.0, (1, N_SAMPLES))
+        out = corrector.remove(eeg, ibi_ms=[], fs=FS)
+        assert out.shape == eeg.shape
+
+    def test_none_ibi_returns_eeg(self, corrector, clean_eeg):
+        out = corrector.remove(clean_eeg, ibi_ms=None, fs=FS)  # type: ignore[arg-type]
+        np.testing.assert_array_equal(out, clean_eeg)

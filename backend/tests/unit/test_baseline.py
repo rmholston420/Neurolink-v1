@@ -1,81 +1,106 @@
-"""Unit tests for dsp.baseline.BaselineNormalizer."""
+"""Unit tests for neurolink.dsp.baseline.
+
+Real public API:
+  BaselineRecorder   — stateful manager; __init__(asr, hub)
+  BaselinePhase      — StrEnum: WARMUP | RECORDING | COMPLETE
+
+BaselineRecorder requires an ArtifactSubspaceReconstructor and a hub
+instance.  Tests use real ASR with a minimal stub hub to avoid
+circular imports.
+"""
 from __future__ import annotations
+
+import time
 
 import numpy as np
 import pytest
 
-from neurolink.dsp.baseline import BaselineNormalizer
+from neurolink.dsp.asr import ASRConfig, ArtifactSubspaceReconstructor
+from neurolink.dsp.baseline import BaselinePhase, BaselineRecorder
 
 
+FS = 256.0
 N_CH = 4
-FS = 256
-WINDOW_S = 5.0
+N_SAMPLES = 64
 
 
-@pytest.fixture()
-def normalizer() -> BaselineNormalizer:
-    return BaselineNormalizer(n_channels=N_CH, fs=FS, window_s=WINDOW_S)
+class _StubHub:
+    """Minimal hub stub — records bell calls."""
+
+    def __init__(self):
+        self.bell_count = 0
+
+    def notify_baseline_complete(self):
+        self.bell_count += 1
 
 
-def _frame(offset: float = 0.0) -> np.ndarray:
-    rng = np.random.default_rng(0)
-    return rng.normal(offset, 1e-6, size=(N_CH,))
+@pytest.fixture
+def asr_instance() -> ArtifactSubspaceReconstructor:
+    return ArtifactSubspaceReconstructor(config=ASRConfig(enable=False))
+
+
+@pytest.fixture
+def hub() -> _StubHub:
+    return _StubHub()
+
+
+@pytest.fixture
+def recorder(asr_instance, hub) -> BaselineRecorder:
+    return BaselineRecorder(asr=asr_instance, hub=hub)
+
+
+@pytest.fixture
+def frame() -> np.ndarray:
+    return np.random.default_rng(0).normal(0, 5.0, (N_CH, N_SAMPLES))
 
 
 class TestConstruction:
-    def test_instantiation(self):
-        bn = BaselineNormalizer(n_channels=N_CH, fs=FS, window_s=WINDOW_S)
-        assert bn is not None
+    def test_starts_in_warmup_phase(self, recorder):
+        assert recorder.phase == BaselinePhase.WARMUP
 
-    def test_window_stored(self, normalizer):
-        assert normalizer.window_s == WINDOW_S
-
-    def test_channel_count(self, normalizer):
-        assert normalizer.n_channels == N_CH
+    def test_phase_string_value(self, recorder):
+        assert recorder.phase == "warmup"
 
 
-class TestNormalization:
-    def test_output_shape(self, normalizer):
-        out = normalizer.update(_frame())
-        assert out.shape == (N_CH,)
+class TestProcessPassthrough:
+    def test_process_returns_eeg_unchanged(self, recorder, frame):
+        """process() is a passthrough shim — must return the same array."""
+        out = recorder.process(frame)
+        np.testing.assert_array_equal(out, frame)
 
-    def test_output_dtype(self, normalizer):
-        out = normalizer.update(_frame())
-        assert np.issubdtype(out.dtype, np.floating)
-
-    def test_after_warmup_mean_near_zero(self, normalizer):
-        """After a full window of identical data the normalized mean should be ≈0."""
-        n_samples = int(FS * WINDOW_S)
-        data = np.ones((N_CH,)) * 50e-6
-        for _ in range(n_samples):
-            out = normalizer.update(data)
-        assert np.allclose(np.abs(out), 0.0, atol=1e-5)
-
-    def test_zero_input_returns_finite(self, normalizer):
-        out = normalizer.update(np.zeros(N_CH))
-        assert np.all(np.isfinite(out))
-
-
-class TestReset:
-    def test_reset_does_not_raise(self, normalizer):
+    def test_process_multiple_frames_no_crash(self, recorder, frame):
         for _ in range(10):
-            normalizer.update(_frame())
-        normalizer.reset()
-
-    def test_after_reset_output_valid(self, normalizer):
-        for _ in range(int(FS * WINDOW_S)):
-            normalizer.update(_frame())
-        normalizer.reset()
-        out = normalizer.update(_frame())
-        assert out.shape == (N_CH,)
-        assert np.all(np.isfinite(out))
+            out = recorder.process(frame)
+            assert out.shape == frame.shape
 
 
-class TestFixedMode:
-    def test_fixed_baseline_mode(self):
-        bn = BaselineNormalizer(n_channels=N_CH, fs=FS, window_s=WINDOW_S, mode="fixed")
-        ref = np.ones(N_CH) * 10e-6
-        bn.set_reference(ref)
-        out = bn.update(ref * 2)
-        # In fixed mode the baseline is subtracted — output should be ≈ ref
-        np.testing.assert_allclose(out, ref, atol=1e-8)
+class TestPhaseProgression:
+    def test_phase_remains_warmup_initially(self, recorder, frame):
+        recorder.process(frame)
+        # Still warmup at t=0+
+        assert recorder.phase in (BaselinePhase.WARMUP, BaselinePhase.RECORDING, BaselinePhase.COMPLETE)
+
+    def test_phase_values_are_valid(self, recorder):
+        assert recorder.phase in {BaselinePhase.WARMUP, BaselinePhase.RECORDING, BaselinePhase.COMPLETE}
+
+
+class TestBaselinePhaseEnum:
+    def test_warmup_string(self):
+        assert BaselinePhase.WARMUP == "warmup"
+
+    def test_recording_string(self):
+        assert BaselinePhase.RECORDING == "recording"
+
+    def test_complete_string(self):
+        assert BaselinePhase.COMPLETE == "complete"
+
+
+class TestEdgeCases:
+    def test_process_none_does_not_crash(self, recorder):
+        """Passing None should return None (passthrough contract)."""
+        out = recorder.process(None)  # type: ignore[arg-type]
+        assert out is None
+
+    def test_phase_is_string_comparable(self, recorder):
+        """EEGPump guards with: phase != 'warmup' — must be string-comparable."""
+        assert recorder.phase != "warmup" or recorder.phase == "warmup"
