@@ -38,16 +38,19 @@ describe('ImpedancePanel', () => {
   })
 
   it('renders the outlier legend text', () => {
+    // 'Outlier' appears in both the legend badge and the footer 'Outlier fence' span;
+    // use getAllByText so multiple matches are permitted.
     render(<ImpedancePanel impedances={{ TP9: 10 }} />)
-    expect(screen.getByText(/Outlier/i)).toBeTruthy()
+    const outlierEls = screen.getAllByText(/Outlier/i)
+    expect(outlierEls.length).toBeGreaterThan(0)
   })
 
   it('shows the outlier badge (\u26a0) when a channel is above the IQR fence', () => {
     // Channel A=5, B=6 median=5.5, IQR~=0.5, fence=5.5+0.75=6.25
-    // C=50 is well above fence
+    // C=50 is well above fence — component renders the badge as
+    // '\u26a0 Outlier (> median + 1.5\u00d7IQR)' in a single span, never a bare \u26a0 node.
     render(<ImpedancePanel impedances={{ A: 5, B: 6, C: 50 }} />)
-    // The \u26a0 badge appears for outlier channels
-    const badges = screen.queryAllByText('\u26a0')
+    const badges = screen.queryAllByText(/\u26a0/)
     expect(badges.length).toBeGreaterThan(0)
   })
 
