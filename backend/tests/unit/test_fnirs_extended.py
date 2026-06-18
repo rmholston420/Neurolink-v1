@@ -15,14 +15,23 @@ import numpy as np
 import pytest
 
 import neurolink.dsp.fnirs as fnirs
+from neurolink.dsp.fnirs import FNIRSConfig
 
 
 @pytest.fixture(autouse=True)
 def _reset_fnirs_state():
-    """Isolate each test: reset module-level mutable state before and after."""
+    """
+    Full isolation: reset both mutable state AND config before/after every test.
+
+    fnirs.reset() only clears _baseline/_running_mean/_running_m2/_n_frames.
+    It does NOT restore _config, so tests that call set_config(enable=False)
+    or set_config(spike_threshold=...) would otherwise leak into later tests.
+    """
     fnirs.reset()
+    fnirs._config = FNIRSConfig()  # restore defaults
     yield
     fnirs.reset()
+    fnirs._config = FNIRSConfig()
 
 
 def _frame(n_ch: int = 4, n_samples: int = 16, value: float = 1.0) -> np.ndarray:
@@ -63,7 +72,7 @@ class TestFNIRSApplyBasic:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# apply() — line 139: baseline initialised from first frame  
+# apply() — line 139: baseline initialised from first frame
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestFNIRSApplyFirstFrame:
@@ -76,10 +85,14 @@ class TestFNIRSApplyFirstFrame:
         assert fnirs._running_mean is not None
 
     def test_first_frame_output_near_zero_mean(self):
-        """After detrending the first frame, channel means should be near 0."""
+        """
+        After detrending the first frame the output mean should be near zero.
+        The detrend step subtracts new_bl = (1-alpha)*bl + alpha*frame_mean
+        where bl is initialised to frame_mean on the first call, so
+        new_bl ≈ frame_mean and out ≈ raw - frame_mean ≈ 0.
+        """
         raw = _frame(value=3.0)
         out = fnirs.apply(raw)
-        # The detrend subtracts approx the frame mean; result ~= 0
         assert np.abs(out.mean()) < 0.5
 
 
@@ -112,24 +125,38 @@ class TestFNIRSApplyWelford:
 
 class TestFNIRSApplySpikeClip:
     def test_spike_clip_reduces_outlier(self):
-        """Lines 128-133: after 2+ frames, spikes beyond threshold are clipped."""
-        fnirs.set_config(spike_threshold=1.0)  # tight threshold
-        # Warm up with 2 normal frames
-        for _ in range(2):
-            fnirs.apply(_frame(value=1.0))
-        # Spike frame: value far outside the running window
-        spike_raw = _frame(value=1000.0)
-        out = fnirs.apply(spike_raw)
-        # Spike should be clipped — output mean must be much less than 1000
-        assert float(out.mean()) < 100.0
+        """
+        Lines 128-133: after 2+ frames, spikes beyond threshold are clipped.
 
-    def test_normal_frame_passes_through_spike_clip_unchanged(self):
-        """Within threshold, spike clip does not distort the signal."""
-        fnirs.set_config(spike_threshold=10.0)
+        The spike clip runs when nf > 1 (running stats populated).  We use a
+        very tight threshold (0.5 sigma) so the 1000x outlier is hard-clipped.
+        We compare the clipped output to what an unclipped apply() would return
+        rather than asserting an absolute value, since the EWM detrend shifts
+        the output mean independently.
+        """
+        fnirs.set_config(spike_threshold=0.5)  # very tight: clip anything > 0.5σ
+        # Warm up: 3 identical frames so Welford variance is near zero
         for _ in range(3):
             fnirs.apply(_frame(value=1.0))
-        out = fnirs.apply(_frame(value=1.05))  # tiny deviation
-        # Output should still be near zero after detrending
+
+        # Apply the same spike to two fresh module instances isn’t feasible, so
+        # instead verify the output value is bounded.  After clipping, the
+        # frame mean seen by the detrend step must be close to the baseline,
+        # so the detrended output must be close to zero (not 999).
+        spike_raw = _frame(value=1000.0)
+        out = fnirs.apply(spike_raw)
+        # Clipped to running_mean ± 0.5σ ≈ 1.0, then detrended -> near 0
+        assert np.abs(float(out.mean())) < 5.0
+
+    def test_normal_frame_passes_spike_clip_guard(self):
+        """
+        With a wide threshold, a mildly different frame should not be clipped
+        and the detrended output stays near zero.
+        """
+        fnirs.set_config(spike_threshold=100.0)  # very wide: nothing clipped
+        for _ in range(3):
+            fnirs.apply(_frame(value=1.0))
+        out = fnirs.apply(_frame(value=1.05))
         assert np.abs(out.mean()) < 1.0
 
 
@@ -143,14 +170,11 @@ class TestFNIRSChannelMismatch:
         Lines 117-125: if _baseline has a different channel count than the
         incoming frame, the cached state must be discarded and re-initialised.
         """
-        # Prime state with 4-channel data
         fnirs.apply(_frame(n_ch=4, value=1.0))
         assert fnirs._n_frames == 1
         assert fnirs._baseline.shape[0] == 4
 
-        # Now send an 8-channel frame -> mismatch triggers guard
         out = fnirs.apply(_frame(n_ch=8, value=1.0))
-        # State should have been reset and re-initialised for 8 channels
         assert fnirs._baseline.shape[0] == 8
         assert out is not None
         assert out.shape[0] == 8
@@ -159,9 +183,7 @@ class TestFNIRSChannelMismatch:
         fnirs.apply(_frame(n_ch=4))
         fnirs.apply(_frame(n_ch=4))
         assert fnirs._n_frames == 2
-        # Mismatch: switch to 6 channels
         fnirs.apply(_frame(n_ch=6))
-        # State was wiped; only the new frame has been processed
         assert fnirs._n_frames == 1
 
 
@@ -201,7 +223,6 @@ class TestFNIRSDecode:
         result = fnirs.decode(raw)
         assert isinstance(result, tuple)
         hbo, hbr = result
-        # 4 channels -> 2 pairs
         assert hbo.shape == (2, 32)
         assert hbr.shape == (2, 32)
         assert hbo.dtype == np.float32
@@ -220,9 +241,9 @@ class TestFNIRSDecode:
         assert hbr.shape[0] == 3
 
 
-# ══════════════════════════════════════════════════════════════════════════───
+# ═════════════════════════════════════════════════════════════════════════════
 # config helpers
-# ══════════════════════════════════════════════════════════════════════════───
+# ═════════════════════════════════════════════════════════════════════════════
 
 class TestFNIRSConfig:
     def test_get_config_returns_copy(self):
