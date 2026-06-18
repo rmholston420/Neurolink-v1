@@ -37,7 +37,7 @@ class ASRConfig:
     fs: float = 256.0
     calib_sec: float = ASR_CALIB_SEC
     burst_sd: float = ASR_BURST_SD
-    eeg_channels: list[int] = None
+    eeg_channels: list[int] | None = None
 
     def __post_init__(self) -> None:
         if self.eeg_channels is None:
@@ -72,7 +72,7 @@ class ArtifactSubspaceReconstructor:
         if eeg.ndim != 2 or eeg.shape[1] < 2:
             return eeg
 
-        eeg_idx = [i for i in cfg.eeg_channels if i < eeg.shape[0]]
+        eeg_idx = [i for i in (cfg.eeg_channels or []) if i < eeg.shape[0]]
         if not eeg_idx:
             return eeg
 
