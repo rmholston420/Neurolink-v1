@@ -100,6 +100,12 @@ _ACCEL_FS: float = 52.0
 _WATCHDOG_SEC: float = 10.0
 _EEG_SAMPLES_WINDOW: int = 64
 
+# Minimum PPG samples required before calling compute_ppg / neurokit2.
+# neurokit2's ppg_process() indexes peak arrays unconditionally; passing a
+# buffer shorter than this causes 'index 0 is out of bounds for axis 0'.
+# Matches _MIN_SAMPLES in dsp/ppg.py (15 s * 64 Hz = 960 samples).
+_MIN_PPG_SAMPLES: int = 960
+
 
 # ---------------------------------------------------------------------------
 # Module-level stub classes
@@ -480,8 +486,13 @@ class EEGPump:
             eeg_arr = self._stage1.apply(eeg_arr)
 
         # ── PPG (needed by Stage 6 and breathing) ──────────────────────
+        # Guard: only call compute_ppg once the ring buffer has accumulated
+        # at least _MIN_PPG_SAMPLES (960 = 15 s at 64 Hz).  neurokit2's
+        # ppg_process() indexes peak arrays unconditionally on short buffers
+        # and raises 'index 0 is out of bounds for axis 0 with size 0'
+        # before our own length guard in compute_ppg can intercept it.
         ppg_payload = None
-        if sample.ppg_buffer:
+        if sample.ppg_buffer and len(sample.ppg_buffer) >= _MIN_PPG_SAMPLES:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
