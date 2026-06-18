@@ -22,9 +22,35 @@ _PPG_FS: float = 64.0
 # reliably detect R-peaks at rest.  The previous 10 s threshold was too
 # short and caused 'index 0 is out of bounds' crashes on real hardware
 # while the ring buffer was still filling up.
+#
+# Two-tier guard pattern:
+#   Tier 1 (eeg_pump.py)  — len(ppg_buffer) < _MIN_PPG_SAMPLES: skip the
+#       compute_ppg() call entirely.  Prevents neurokit2 from running on
+#       a buffer that is too short to yield any peaks at all.
+#   Tier 2 (here)         — len(ppg_arr) < _MIN_SAMPLES: same check inside
+#       compute_ppg() for callers that bypass the pump guard (tests, etc.).
+#
+# Even with both guards in place, neurokit2.ppg_process() can return an
+# empty peaks array on a full-length buffer of low-quality signal (weak
+# electrode contact, motion artefacts during the settling window).  When
+# that happens the IndexError / ValueError it raises is an expected,
+# transient condition — not a bug.  It is caught below and logged at
+# DEBUG rather than WARNING so it is invisible at the default info
+# threshold.
 _MIN_SAMPLES: int = int(_PPG_FS * 15)  # 960 samples
 _HR_VALID_MIN: float = 30.0
 _HR_VALID_MAX: float = 200.0
+
+# neurokit2 raises one of these messages when the peaks array is empty
+# during the fill / settling window.  Matching on the message lets us
+# demote only the known-harmless case to DEBUG.
+_NK2_FILL_WINDOW_MSGS: tuple[str, ...] = (
+    "index 0 is out of bounds for axis 0 with size 0",
+    "index 0 is out of bounds",
+    "out of bounds for axis 0",
+    "too few peaks",
+    "Too few peaks",
+)
 
 
 @dataclass
@@ -53,6 +79,9 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
 
     Returns:
         PPGPayload with hr_bpm, hrv_rmssd, ibi_ms, and Poincare metrics.
+        Returns an empty payload (hr_bpm=0, hrv_rmssd=0, ibi_ms=[]) when
+        the buffer is too short, signal quality is too poor for peak
+        detection, or neurokit2 raises a known fill-window error.
     """
     empty = PPGPayload(hr_bpm=0.0, hrv_rmssd=0.0, ibi_ms=[])
 
@@ -120,7 +149,21 @@ def compute_ppg(ppg_arr: np.ndarray, fs: float = _PPG_FS) -> PPGPayload:
             ellipse_area=poincare.ellipse_area,
         )
 
+    except (IndexError, ValueError) as exc:
+        # neurokit2 raises IndexError("index 0 is out of bounds for axis 0
+        # with size 0") when ppg_process returns an empty peaks array and
+        # then tries to index into it.  This is expected during the ~15 s
+        # fill / settling window after connect — log at DEBUG so it is
+        # invisible at the default info threshold.
+        err_str = str(exc).lower()
+        if any(msg.lower() in err_str for msg in _NK2_FILL_WINDOW_MSGS):
+            log.debug("ppg_fill_window_skip", error=str(exc))
+        else:
+            log.warning("ppg_compute_error", error=str(exc))
+        return empty
+
     except Exception as exc:
+        # Genuinely unexpected error — keep at WARNING so it is visible.
         log.warning("ppg_compute_error", error=str(exc))
         return empty
 
