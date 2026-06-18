@@ -127,7 +127,18 @@ async def reset_filter_config(
         line_freq: 50 (EU/Asia/default) or 60 (Americas)
         fs:        EEG sampling rate
     """
-    registry.pre_warm(line_freq=line_freq, fs=fs)
+    new_cfg = registry.get_config().with_line_freq(line_freq)
+    # Propagate fs override if caller specified a non-default value
+    if fs != new_cfg.fs:
+        new_cfg = FilterConfig(
+            hz_highpass=new_cfg.hz_highpass,
+            hz_notch_freqs=new_cfg.hz_notch_freqs,
+            hz_lowpass=new_cfg.hz_lowpass,
+            notch_bw_hz=new_cfg.notch_bw_hz,
+            fs=fs,
+            filter_order=new_cfg.filter_order,
+        )
+    registry.set_config(new_cfg)
     log.info("stage1_config_reset", line_freq=line_freq, fs=fs)
     return _config_to_schema(registry.get_config())
 
@@ -139,7 +150,7 @@ async def get_filter_diagnostics(
 ) -> FilterDiagnosticsSchema:
     """Return a per-channel Welch PSD snapshot.
 
-    Reads the latest EEGSample from hub.latest_sample (if available)
+    Reads the latest EEGSample from hub.get_latest() (if available)
     and computes PSD so the front-end can verify that the notch filter
     is attenuating line noise.  Falls back to a zero-signal response
     when no sample is available yet.
@@ -155,11 +166,10 @@ async def get_filter_diagnostics(
     note = ""
 
     try:
-        from neurolink.dependencies import get_neurolink_service
+        from neurolink.hub import get_hub
 
-        service = get_neurolink_service()
-        hub = service.get_hub()
-        sample = hub.get_latest_sample() if hub else None
+        hub = get_hub()
+        sample = hub.get_latest() if hub else None
 
         if sample and sample.eeg_buffer:
             _min_len = min(len(b) for b in sample.eeg_buffer)
