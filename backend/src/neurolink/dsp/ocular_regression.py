@@ -89,7 +89,7 @@ class OcularRegressionConfig:
 
     enable: bool = True
     eog_channel_idx: int = 4  # Muse AUX jack / VEOG channel
-    eeg_channels: list[int] = None  # None → [0, 1, 2, 3]
+    eeg_channels: list[int] | None = None  # None → [0, 1, 2, 3]
     calib_window_samples: int = 1024
     recalib_frames: int = 512
     min_eog_variance: float = 0.1
@@ -167,7 +167,7 @@ class OcularRegressor:
                 self._frames_passed_through += 1
             return eeg
 
-        eeg_idx = [i for i in cfg.eeg_channels if i < n_ch]
+        eeg_idx = [i for i in (cfg.eeg_channels or []) if i < n_ch]
         if not eeg_idx:
             return eeg
 
