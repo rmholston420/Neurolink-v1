@@ -27,7 +27,7 @@ from neurolink.dsp.classifiers import classify_v01, classify_v2
 from neurolink.models.eeg import BandPowers
 
 # ===========================================================================
-# dsp/bandpower.py — uncovered guard branches
+# dsp/bandpower.py -- uncovered guard branches
 # ===========================================================================
 
 
@@ -66,76 +66,76 @@ def test_compute_band_powers_none_returns_zeros():
 
 
 # ===========================================================================
-# dsp/classifiers.py v01 — untested region branches
+# dsp/classifiers.py v01 -- untested region branches
 # ===========================================================================
 
 
 def test_v01_citrinitas_region_d():
-    """High theta + low alpha → Region D / Citrinitas."""
+    """High theta + low alpha -> Region D / Citrinitas."""
     region, stage = classify_v01(alpha=0.10, theta=0.25, beta=0.10, delta=0.10, gamma=0.05)
     assert region == "D"
     assert stage == "Citrinitas"
 
 
 def test_v01_albedo_region_c():
-    """Moderate alpha + low beta → Region C / Albedo."""
+    """Moderate alpha + low beta -> Region C / Albedo."""
     region, stage = classify_v01(alpha=0.25, theta=0.05, beta=0.10, delta=0.10, gamma=0.05)
     assert region == "C"
     assert stage == "Albedo"
 
 
 def test_v01_albedo_region_b():
-    """High beta → Region B / Albedo."""
+    """High beta -> Region B / Albedo."""
     region, stage = classify_v01(alpha=0.10, theta=0.05, beta=0.40, delta=0.10, gamma=0.05)
     assert region == "B"
     assert stage == "Albedo"
 
 
 def test_v01_multiplicatio_with_faa_gate():
-    """Very high alpha+theta with faa >= threshold → Multiplicatio."""
-    region, stage = classify_v01(alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05, faa=0.0)
+    """Very high alpha+theta with faa >= threshold -> Multiplicatio."""
+    _region, stage = classify_v01(alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05, faa=0.0)
     assert stage == "Multiplicatio"
 
 
 def test_v01_multiplicatio_faa_none():
     """faa=None still triggers Multiplicatio when alpha/theta meet threshold."""
-    region, stage = classify_v01(
+    _region, stage = classify_v01(
         alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05, faa=None
     )
     assert stage == "Multiplicatio"
 
 
 # ===========================================================================
-# dsp/classifiers.py v2 — untested branches
+# dsp/classifiers.py v2 -- untested branches
 # ===========================================================================
 
 
 def test_v2_citrinitas_balanced():
-    """Balanced alpha-theta (not high enough for Rubedo) → Citrinitas."""
-    region, stage = classify_v2(
+    """Balanced alpha-theta (not high enough for Rubedo) -> Citrinitas."""
+    _region, stage = classify_v2(
         BandPowers(alpha=0.22, theta=0.12, beta=0.10, delta=0.10, gamma=0.05)
     )
     assert stage == "Citrinitas"
 
 
 def test_v2_solutio_high_theta():
-    """High theta, low alpha → Solutio."""
-    region, stage = classify_v2(
+    """High theta, low alpha -> Solutio."""
+    _region, stage = classify_v2(
         BandPowers(alpha=0.10, theta=0.30, beta=0.10, delta=0.10, gamma=0.05)
     )
     assert stage == "Solutio"
 
 
 def test_v2_albedo_moderate_beta():
-    """Moderate beta (>= 0.28) → Albedo."""
-    region, stage = classify_v2(
+    """Moderate beta (>= 0.28) -> Albedo."""
+    _region, stage = classify_v2(
         BandPowers(alpha=0.10, theta=0.05, beta=0.30, delta=0.10, gamma=0.05)
     )
     assert stage == "Albedo"
 
 
 # ===========================================================================
-# eeg_pump._build_payload — empty eeg_buffer branch
+# eeg_pump._build_payload -- empty eeg_buffer branch
 # ===========================================================================
 
 
@@ -204,7 +204,7 @@ async def test_build_payload_partial_accel_skips_imu():
         address="mock",
         eeg_buffer=None,
         ppg_buffer=None,
-        accel_buffer=[[0.0, 0.0], [0.0, 0.0]],  # only 2 axes — len < 3
+        accel_buffer=[[0.0, 0.0], [0.0, 0.0]],  # only 2 axes -- len < 3
         gyro_buffer=None,
     )
     payload = await pump._build_payload(sample)
@@ -212,7 +212,7 @@ async def test_build_payload_partial_accel_skips_imu():
 
 
 # ===========================================================================
-# hub._schedule_redis_push — loop.is_running() True branch
+# hub._schedule_redis_push -- loop.is_running() True branch
 # ===========================================================================
 
 
@@ -242,7 +242,7 @@ def test_schedule_redis_push_runtime_error_is_suppressed():
 
 
 # ===========================================================================
-# hub._push_state_to_redis — coroutine body
+# hub._push_state_to_redis -- coroutine body
 # ===========================================================================
 
 
@@ -256,7 +256,7 @@ async def test_push_state_to_redis_calls_push_state():
 
 
 # ===========================================================================
-# service — is_connected and adapter_type properties
+# service -- is_connected and adapter_type properties
 # ===========================================================================
 
 
@@ -279,7 +279,7 @@ def test_service_adapter_type_default():
 
 
 # ===========================================================================
-# service._create_db_session — try body with factory set
+# service._create_db_session -- try body with factory set
 # ===========================================================================
 
 
@@ -325,7 +325,7 @@ async def test_create_db_session_exception_is_logged():
 
 
 # ===========================================================================
-# service._close_db_session — try body with factory + session_id set
+# service._close_db_session -- try body with factory + session_id set
 # ===========================================================================
 
 
@@ -371,7 +371,7 @@ async def test_close_db_session_exception_is_logged():
 
 
 # ===========================================================================
-# calibration — properties
+# calibration -- properties
 # ===========================================================================
 
 
@@ -394,7 +394,7 @@ def test_calibration_baseline_alpha_property():
 
 
 # ===========================================================================
-# adapter_factory — lsl else branch, lsl athena, ble gen1
+# adapter_factory -- lsl else branch, lsl athena, ble gen1
 # ===========================================================================
 
 
@@ -447,7 +447,7 @@ def test_create_adapter_ble_athena_branch():
 
 
 # ===========================================================================
-# hardware/mock.py — read_sample not-connected returns None
+# hardware/mock.py -- read_sample not-connected returns None
 # ===========================================================================
 
 

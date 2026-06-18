@@ -82,9 +82,9 @@ async def test_sse_stream_frame_format(async_client):
     for block in blocks:
         lines = block.splitlines()
         if lines[0].startswith(":"):
-            continue  # keepalive comment — valid SSE
-        assert any(l.startswith("event:") for l in lines), f"Block missing event: line: {block!r}"
-        assert any(l.startswith("data:") for l in lines), f"Block missing data: line: {block!r}"
+            continue  # keepalive comment -- valid SSE
+        assert any(ln.startswith("event:") for ln in lines), f"Block missing event: line: {block!r}"
+        assert any(ln.startswith("data:") for ln in lines), f"Block missing data: line: {block!r}"
 
 
 @pytest.mark.asyncio

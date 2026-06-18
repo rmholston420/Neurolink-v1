@@ -24,10 +24,10 @@ from neurolink.service import NeuroLinkService
 
 
 def _payload(source: str = "mock", **kw) -> IngestPayload:
-    defaults = dict(
-        source=source,
-        bands=BandPowers(alpha=0.30, theta=0.15, beta=0.15, delta=0.20, gamma=0.10),
-    )
+    defaults = {
+        "source": source,
+        "bands": BandPowers(alpha=0.30, theta=0.15, beta=0.15, delta=0.20, gamma=0.10),
+    }
     defaults.update(kw)
     return IngestPayload(**defaults)
 
@@ -94,7 +94,6 @@ async def test_service_calibration_already_running_idempotent():
     svc._adapter = adapter
 
     # Simulate a task that is not done
-    future = asyncio.get_event_loop().create_future()
     mock_task = MagicMock()
     mock_task.done.return_value = False
     svc._calibration_task = mock_task
@@ -142,7 +141,7 @@ def test_service_adapter_type_default():
 
 async def test_service_stream_state_timeout_yields_state():
     svc = _service()
-    # Don't register any SSE queue writers — the internal wait_for will timeout
+    # Don't register any SSE queue writers -- the internal wait_for will timeout
     gen = svc.stream_state()
     state = await gen.__anext__()
     assert isinstance(state, NeurolinkState)
@@ -166,7 +165,7 @@ async def test_service_stream_state_cancelled_exits():
 
 
 # ===========================================================================
-# hub.py — muse_ble v01 path
+# hub.py -- muse_ble v01 path
 # ===========================================================================
 
 
@@ -190,7 +189,7 @@ def test_hub_fanout_queue_full_drops_frame():
     hub.register_sse_queue(q)
     # Fill the queue
     q.put_nowait(NeurolinkState())
-    # Now update — _fanout tries put_nowait, gets QueueFull, logs warning
+    # Now update -- _fanout tries put_nowait, gets QueueFull, logs warning
     hub.update(_payload())
     hub.unregister_sse_queue(q)
 
@@ -234,7 +233,7 @@ def test_hub_snapshot_returns_dict():
 def test_hub_unregister_queue_not_present_is_noop():
     hub = EEGHub()
     q = asyncio.Queue()
-    hub.unregister_sse_queue(q)  # never registered — must not raise
+    hub.unregister_sse_queue(q)  # never registered -- must not raise
 
 
 # -- module-level delegates ------------------------------------------------
@@ -278,7 +277,7 @@ def test_hub_module_level_reset():
 
 
 # ===========================================================================
-# adapter_factory.py — non-mock branches (imports mocked)
+# adapter_factory.py -- non-mock branches (imports mocked)
 # ===========================================================================
 
 
@@ -292,7 +291,7 @@ def test_adapter_factory_ble_muse_s_gen1():
     ):
         from neurolink.adapter_factory import create_adapter
 
-        result = create_adapter(adapter_type="ble", device_model="muse_s_gen1", address="AA:BB")
+        create_adapter(adapter_type="ble", device_model="muse_s_gen1", address="AA:BB")
     mock_cls.assert_called_once_with(address="AA:BB")
 
 
@@ -306,7 +305,7 @@ def test_adapter_factory_ble_muse_s_athena():
     ):
         from neurolink.adapter_factory import create_adapter
 
-        result = create_adapter(adapter_type="ble", device_model="muse_s_athena")
+        create_adapter(adapter_type="ble", device_model="muse_s_athena")
     mock_cls.assert_called_once()
 
 
@@ -351,7 +350,7 @@ def test_adapter_factory_unknown_type_raises():
 
 
 # ===========================================================================
-# hardware/mock.py — read_sample when not connected
+# hardware/mock.py -- read_sample when not connected
 # ===========================================================================
 
 

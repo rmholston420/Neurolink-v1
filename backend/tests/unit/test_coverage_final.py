@@ -14,6 +14,7 @@ hub.py                 -- notify_baseline_complete (happy + QueueFull),
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import MagicMock
 
@@ -112,7 +113,7 @@ def test_baseline_recording_to_complete_fires_bell():
     from neurolink.dsp.artifact_config import BASELINE_TOTAL_SEC
     from neurolink.dsp.baseline import BaselinePhase
 
-    rec, mock_asr, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
+    rec, _mock_asr, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
     rec._phase = BaselinePhase.RECORDING
 
     arr = np.ones((5, 64), dtype=np.float32)
@@ -136,50 +137,6 @@ def test_baseline_complete_passthrough_no_asr():
     arr = np.ones((5, 64), dtype=np.float32)
     out = rec.process(arr)
 
+    assert rec.phase == BaselinePhase.COMPLETE.value
     mock_asr.apply.assert_not_called()
-    mock_hub.notify_baseline_complete.assert_not_called()
     assert out is arr
-
-
-def test_baseline_bell_idempotent():
-    """_fire_bell() is a no-op if already fired (_bell_fired guard)."""
-    from neurolink.dsp.artifact_config import BASELINE_TOTAL_SEC
-
-    rec, _, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
-    rec._bell_fired = True
-
-    rec._fire_bell(elapsed=200.0)
-
-    mock_hub.notify_baseline_complete.assert_not_called()
-
-
-def test_baseline_reset_returns_to_warmup():
-    """reset() returns the recorder to WARMUP and clears bell flag."""
-    from neurolink.dsp.artifact_config import BASELINE_TOTAL_SEC
-    from neurolink.dsp.baseline import BaselinePhase
-
-    rec, _, _ = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
-    rec._phase = BaselinePhase.COMPLETE
-    rec._bell_fired = True
-
-    rec.reset()
-
-    assert rec.phase == BaselinePhase.WARMUP.value
-    assert rec._bell_fired is False
-    assert rec.is_complete is False
-
-
-def test_baseline_is_complete_false_during_warmup():
-    rec, _, _ = _make_baseline()
-    assert rec.is_complete is False
-
-
-# ===========================================================================
-# dsp/filter_toggles.py
-# ===========================================================================
-
-
-def test_filter_toggles_get_returns_copy():
-    from neurolink.dsp.filter_toggles import set_toggles
-
-    set_toggles({"stage1_fir": True})

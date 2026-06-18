@@ -1,4 +1,4 @@
-"""Unit tests for dsp.derived_eeg — FAA, FMT, contact quality helpers."""
+"""Unit tests for dsp.derived_eeg -- FAA, FMT, contact quality helpers."""
 
 from __future__ import annotations
 
@@ -45,13 +45,12 @@ class TestComputeContactQuality:
     def test_good_contact_when_low_noise(self):
         result = compute_contact_quality(noise_rms=0.01)
         assert isinstance(result, str)
-        # We just assert it's a non-empty string — exact label is implementation-defined
+        # We just assert it's a non-empty string -- exact label is implementation-defined
         assert len(result) > 0
 
     def test_poor_contact_when_high_noise(self):
-        good = compute_contact_quality(noise_rms=0.01)
         bad = compute_contact_quality(noise_rms=100.0)
-        # Good should differ from bad or both should be valid strings
+        # Both should be valid strings
         assert isinstance(bad, str)
 
     def test_returns_string(self):

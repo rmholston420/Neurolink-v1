@@ -1,14 +1,14 @@
-"""Unit tests for hub.py — EEGHub singleton.
+"""Unit tests for hub.py -- EEGHub singleton.
 
 Covers:
-  • emit_settling() — sentinel shape, fan-out, counter increment
-  • get_stats() — keys, types, values
-  • notify_baseline_complete() — sentinel shape
-  • update() — state propagation, frame counter
-  • SSE queue management (register / unregister)
-  • reset() clears all counters
-  • module-level delegates (emit_settling, get_stats, reset)
-  • Thread safety for emit_settling + concurrent SSE writes
+  - emit_settling() -- sentinel shape, fan-out, counter increment
+  - get_stats() -- keys, types, values
+  - notify_baseline_complete() -- sentinel shape
+  - update() -- state propagation, frame counter
+  - SSE queue management (register / unregister)
+  - reset() clears all counters
+  - module-level delegates (emit_settling, get_stats, reset)
+  - Thread safety for emit_settling + concurrent SSE writes
 """
 
 from __future__ import annotations
@@ -42,16 +42,16 @@ def q() -> asyncio.Queue:
 
 def _minimal_payload(**kwargs) -> IngestPayload:
     """Minimal valid IngestPayload with sensible defaults."""
-    defaults: dict[str, Any] = dict(
-        source="muse_ble",
-        bands=BandPowers(delta=0.2, theta=0.2, alpha=0.2, beta=0.2, gamma=0.2),
-    )
+    defaults: dict[str, Any] = {
+        "source": "muse_ble",
+        "bands": BandPowers(delta=0.2, theta=0.2, alpha=0.2, beta=0.2, gamma=0.2),
+    }
     defaults.update(kwargs)
     return IngestPayload(**defaults)
 
 
 # ---------------------------------------------------------------------------
-# emit_settling() — sentinel structure
+# emit_settling() -- sentinel structure
 # ---------------------------------------------------------------------------
 
 
@@ -116,7 +116,7 @@ class TestEmitSettling:
         assert q2.get_nowait()["reason"] == "motion_settling"
 
     def test_no_queues_does_not_raise(self, hub):
-        hub.emit_settling()  # no queues registered — should be silent
+        hub.emit_settling()  # no queues registered -- should be silent
 
     def test_full_queue_does_not_raise(self, hub):
         """A full SSE queue must drop the event, not raise."""
@@ -233,7 +233,7 @@ class TestNotifyBaselineComplete:
 
 
 # ---------------------------------------------------------------------------
-# update() — state propagation
+# update() -- state propagation
 # ---------------------------------------------------------------------------
 
 

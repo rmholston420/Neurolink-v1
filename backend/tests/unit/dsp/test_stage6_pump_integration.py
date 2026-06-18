@@ -143,6 +143,7 @@ class TestStage6Runs:
 
         args, _kwargs = corrector.apply.call_args
         assert args[0] is post_stage5
+        assert result is post_stage5
 
     def test_corrector_return_value_is_forwarded(self):
         corrector = MagicMock()

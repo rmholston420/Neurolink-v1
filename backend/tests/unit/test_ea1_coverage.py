@@ -13,16 +13,16 @@ from neurolink.models.eeg import (
 
 
 def _payload(**kwargs) -> IngestPayload:
-    defaults = dict(
-        source="mock",
-        bands=BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.2, gamma=0.1),
-    )
+    defaults = {
+        "source": "mock",
+        "bands": BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.2, gamma=0.1),
+    }
     defaults.update(kwargs)
     return IngestPayload(**defaults)
 
 
 # ---------------------------------------------------------------------------
-# Ineligible path (default bands — unlikely to meet all thresholds)
+# Ineligible path (default bands -- unlikely to meet all thresholds)
 # ---------------------------------------------------------------------------
 
 
@@ -47,7 +47,7 @@ def test_score_ineligible_default_bands():
 
 
 def test_score_high_alpha_increases_criteria_met():
-    low_result = score(
+    score(
         _payload(bands=BandPowers(alpha=0.05, theta=0.6, beta=0.1, delta=0.15, gamma=0.1))
     )
     high_result = score(

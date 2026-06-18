@@ -383,29 +383,29 @@ def test_decode_imu_padding_to_9():
     from neurolink.dsp.decoders import decode_imu
 
     data = b"\x00\x00" + b"\x00\x01\x00\x02" + b"\x00" * 14
-    accel, gyro = decode_imu(data)
+    accel, _gyro = decode_imu(data)
     assert len(accel) == 9
 
 
 # ===========================================================================
-# eeg_pump.py — _build_payload branches
+# eeg_pump.py -- _build_payload branches
 # ===========================================================================
 
 
 def _make_sample(**overrides):
     from neurolink.hardware.base import EEGSample
 
-    defaults = dict(
-        channels=[0.0] * 5,
-        timestamp=0.0,
-        source="mock",
-        address="mock",
-        poor_contact=False,
-        eeg_buffer=[],
-        ppg_buffer=[],
-        accel_buffer=[],
-        gyro_buffer=[],
-    )
+    defaults = {
+        "channels": [0.0] * 5,
+        "timestamp": 0.0,
+        "source": "mock",
+        "address": "mock",
+        "poor_contact": False,
+        "eeg_buffer": [],
+        "ppg_buffer": [],
+        "accel_buffer": [],
+        "gyro_buffer": [],
+    }
     defaults.update(overrides)
     return EEGSample(**defaults)
 
