@@ -35,7 +35,7 @@ class TestFatigueDetector:
         assert fd.sample_count == 0
 
     def test_single_update_returns_zero_score(self):
-        """< 2 samples → score 0.0"""
+        """< 2 samples -> score 0.0"""
         fd = FatigueDetector()
         score = fd.update(theta=0.3, alpha=0.2)
         assert score == 0.0
@@ -47,7 +47,7 @@ class TestFatigueDetector:
         assert score > 0.0
 
     def test_high_theta_low_alpha_saturates_at_one(self):
-        """Ratio well above threshold → score caps at 1.0"""
+        """Ratio well above threshold -> score caps at 1.0"""
         fd = FatigueDetector()
         for _ in range(10):
             fd.update(theta=0.9, alpha=0.01)
@@ -64,7 +64,7 @@ class TestFatigueDetector:
         fd = FatigueDetector()
         for _ in range(5):
             fd.update(theta=0.0, alpha=0.0)
-        # ratio = 0 / epsilon ≈ 0 → score ≈ 0
+        # ratio = 0 / epsilon ~= 0 -> score ~= 0
         assert fd.score < 0.01
 
     def test_reset_clears_samples(self):
@@ -89,7 +89,7 @@ class TestFatigueDetector:
 
     def test_window_does_not_exceed_maxlen(self):
         fd = FatigueDetector(window=10)
-        for i in range(50):
+        for _i in range(50):  # B007: renamed i -> _i
             fd.update(theta=0.3, alpha=0.3)
         assert fd.sample_count == 10
 
@@ -101,8 +101,8 @@ class TestFatigueDetector:
 
     def test_score_normalised_in_range(self):
         fd = FatigueDetector()
-        for _ in range(30):
-            score = fd.update(theta=0.4, alpha=0.3)
+        for _ in range(30):  # F841: removed unused `score =`
+            fd.update(theta=0.4, alpha=0.3)
         assert 0.0 <= fd.score <= 1.0
 
     @pytest.mark.parametrize("theta,alpha", [

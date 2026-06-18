@@ -38,9 +38,9 @@ def _frame(n_ch: int = 4, n_samples: int = 16, value: float = 1.0) -> np.ndarray
     return np.full((n_ch, n_samples), value, dtype=np.float32)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# apply() — basic paths
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
+# apply() -- basic paths
+# =====================================================================
 
 class TestFNIRSApplyBasic:
     def test_none_input_returns_none(self):
@@ -64,16 +64,16 @@ class TestFNIRSApplyBasic:
         assert out is raw
 
     def test_returns_float32_copy(self):
-        """Output must be a float32 copy — never mutates input."""
+        """Output must be a float32 copy -- never mutates input."""
         raw = _frame(value=2.0)
         out = fnirs.apply(raw)
         assert out is not raw
         assert out.dtype == np.float32
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# apply() — line 139: baseline initialised from first frame
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
+# apply() -- line 139: baseline initialised from first frame
+# =====================================================================
 
 class TestFNIRSApplyFirstFrame:
     def test_first_frame_initialises_baseline(self):
@@ -89,16 +89,16 @@ class TestFNIRSApplyFirstFrame:
         After detrending the first frame the output mean should be near zero.
         The detrend step subtracts new_bl = (1-alpha)*bl + alpha*frame_mean
         where bl is initialised to frame_mean on the first call, so
-        new_bl ≈ frame_mean and out ≈ raw - frame_mean ≈ 0.
+        new_bl ~= frame_mean and out ~= raw - frame_mean ~= 0.
         """
         raw = _frame(value=3.0)
         out = fnirs.apply(raw)
         assert np.abs(out.mean()) < 0.5
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# apply() — lines 155-159: Welford online update on frame 2+
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
+# apply() -- lines 155-159: Welford online update on frame 2+
+# =====================================================================
 
 class TestFNIRSApplyWelford:
     def test_n_frames_increments_each_call(self):
@@ -119,33 +119,32 @@ class TestFNIRSApplyWelford:
         assert np.all(fnirs._running_m2 >= 0)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# apply() — lines 128-133: spike clip path (nf > 1, rm/rm2 populated)
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
+# apply() -- lines 128-133: spike clip path (nf > 1, rm/rm2 populated)
+# =====================================================================
 
 class TestFNIRSApplySpikeClip:
     def test_spike_clip_reduces_outlier(self):
         """
         Lines 128-133: after 2+ frames, spikes beyond threshold are clipped.
 
-        The spike clip runs when nf > 1 (running stats populated).  We use a
+        The spike clip runs when nf > 1 (running stats populated). We use a
         very tight threshold (0.5 sigma) so the 1000x outlier is hard-clipped.
         We compare the clipped output to what an unclipped apply() would return
         rather than asserting an absolute value, since the EWM detrend shifts
         the output mean independently.
         """
-        fnirs.set_config(spike_threshold=0.5)  # very tight: clip anything > 0.5σ
+        fnirs.set_config(spike_threshold=0.5)  # very tight: clip anything > 0.5 sigma
         # Warm up: 3 identical frames so Welford variance is near zero
         for _ in range(3):
             fnirs.apply(_frame(value=1.0))
 
-        # Apply the same spike to two fresh module instances isn’t feasible, so
-        # instead verify the output value is bounded.  After clipping, the
-        # frame mean seen by the detrend step must be close to the baseline,
-        # so the detrended output must be close to zero (not 999).
+        # Verify the output value is bounded after clipping.
+        # After clipping, the frame mean seen by the detrend step must be close
+        # to the baseline, so the detrended output must be close to zero (not 999).
         spike_raw = _frame(value=1000.0)
         out = fnirs.apply(spike_raw)
-        # Clipped to running_mean ± 0.5σ ≈ 1.0, then detrended -> near 0
+        # Clipped to running_mean +/- 0.5 sigma ~= 1.0, then detrended -> near 0
         assert np.abs(float(out.mean())) < 5.0
 
     def test_normal_frame_passes_spike_clip_guard(self):
@@ -160,9 +159,9 @@ class TestFNIRSApplySpikeClip:
         assert np.abs(out.mean()) < 1.0
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# apply() — lines 117-125: channel-count mismatch guard
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
+# apply() -- lines 117-125: channel-count mismatch guard
+# =====================================================================
 
 class TestFNIRSChannelMismatch:
     def test_channel_mismatch_resets_state_and_processes_new_frame(self):
@@ -187,9 +186,9 @@ class TestFNIRSChannelMismatch:
         assert fnirs._n_frames == 1
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# decode() — lines 173, 182-184
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
+# decode() -- lines 173, 182-184
+# =====================================================================
 
 class TestFNIRSDecode:
     def test_none_returns_none(self):
@@ -214,7 +213,7 @@ class TestFNIRSDecode:
         """n_ch < 2 always returns empty regardless of config."""
         fnirs.set_config(min_channels=1)
         raw = np.ones((1, 16), dtype=np.float32)
-        hbo, hbr = fnirs.decode(raw)
+        hbo, _hbr = fnirs.decode(raw)  # RUF059: prefix unused hbr with _
         assert hbo.shape[0] == 0
 
     def test_valid_4ch_frame_returns_hbo_hbr_arrays(self):
@@ -241,9 +240,9 @@ class TestFNIRSDecode:
         assert hbr.shape[0] == 3
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 # config helpers
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 
 class TestFNIRSConfig:
     def test_get_config_returns_copy(self):

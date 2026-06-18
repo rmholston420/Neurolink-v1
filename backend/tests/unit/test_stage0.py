@@ -21,9 +21,9 @@ from neurolink.stage0.environment import ENVIRONMENT_PROMPTS, _DRY_STABILISE_SEC
 from neurolink.hardware.base import EEGSample
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =====================================================================
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# =====================================================================
 
 def _make_sample(
     accel: list[list[float]] | None = None,
@@ -38,7 +38,7 @@ def _make_sample(
 
 
 def _still_accel(n: int = 10) -> list[list[float]]:
-    """3×N accel buffer representing near-zero motion (gravity on z only)."""
+    """3xN accel buffer representing near-zero motion (gravity on z only)."""
     return [
         [0.0] * n,          # ax
         [0.0] * n,          # ay
@@ -47,7 +47,7 @@ def _still_accel(n: int = 10) -> list[list[float]]:
 
 
 def _motion_accel(n: int = 10, magnitude: float = 0.5) -> list[list[float]]:
-    """3×N accel buffer with clear motion signal."""
+    """3xN accel buffer with clear motion signal."""
     return [
         [magnitude] * n,
         [magnitude] * n,
@@ -55,9 +55,9 @@ def _motion_accel(n: int = 10, magnitude: float = 0.5) -> list[list[float]]:
     ]
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 # ImpedanceGuard
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 
 class TestImpedanceGuardInit:
     def test_default_electrode_type_is_dry(self):
@@ -94,7 +94,7 @@ class TestImpedanceGuardInit:
         labels = [ch["label"] for ch in status["channels"]]
         assert labels[:5] == MUSE_CHANNELS
 
-    def test_extra_channels_labelled_chN(self):
+    def test_extra_channels_labelled_ch_n(self):  # N802: renamed from chN to ch_n
         g = ImpedanceGuard(n_channels=7)
         status = g.summary_dict()
         assert status["channels"][5]["label"] == "CH5"
@@ -196,9 +196,9 @@ class TestImpedanceGuardSummaryDict:
         assert g.channel_status("DOES_NOT_EXIST") is None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 # IMUGate
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 
 class TestIMUGateInit:
     def test_initial_not_flagged(self):
@@ -305,9 +305,9 @@ class TestIMUGateStatusDict:
         assert d["motion_rms_g"] > 0.0
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 # EnvironmentChecklist
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 
 class TestEnvironmentChecklistInit:
     def test_dry_stabilise_duration(self):
@@ -360,7 +360,6 @@ class TestEnvironmentChecklistAcknowledge:
 class TestEnvironmentChecklistStabilise:
     def test_stabilise_complete_when_time_elapsed(self):
         ec = EnvironmentChecklist(electrode_type="dry")
-        # Backdate start time so countdown has expired
         ec._start_ts = time.time() - (_DRY_STABILISE_SEC + 1.0)
         assert ec.stabilise_complete is True
         assert ec.stabilise_remaining_s == 0.0
@@ -437,9 +436,9 @@ class TestEnvironmentChecklistStatusDict:
         assert d["acked_steps"] == sorted(d["acked_steps"])
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 # Stage0Guard facade
-# ═════════════════════════════════════════════════════════════════════════════
+# =====================================================================
 
 class TestStage0GuardInit:
     def test_creates_sub_components(self):
@@ -475,14 +474,12 @@ class TestStage0GuardGateSample:
 class TestStage0GuardAcquisitionReady:
     def test_not_ready_initially(self):
         g = Stage0Guard()
-        # Environment countdown not elapsed, steps not acked
         assert g.acquisition_ready is False
 
     def test_ready_when_impedance_ok_and_environment_ready(self):
         g = Stage0Guard(electrode_type="dry")
         g.environment.acknowledge_all()
         g.environment._start_ts = time.time() - (_DRY_STABILISE_SEC + 1.0)
-        # Impedance defaults to all_channels_ok = True
         assert g.acquisition_ready is True
 
     def test_not_ready_when_impedance_bad(self):

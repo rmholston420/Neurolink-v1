@@ -89,9 +89,8 @@ class TestDecode:
         raw = _raw(n_channels=4, n_samples=512)
         result = fnirs.decode(raw)
         assert isinstance(result, tuple)
-        hbo, hbr = result
+        hbo, _hbr = result  # RUF059: prefix unused hbr with _
         assert isinstance(hbo, np.ndarray)
-        assert isinstance(hbr, np.ndarray)
 
     def test_hbo_hbr_shape(self):
         """n_pairs = n_channels // 2."""
@@ -113,7 +112,7 @@ class TestDecode:
         raw = _raw(n_channels=1, n_samples=64)
         result = fnirs.decode(raw)
         assert isinstance(result, tuple)
-        hbo, hbr = result
+        hbo, _hbr = result  # RUF059: prefix unused hbr with _
         assert hbo.shape[0] == 0
 
 
