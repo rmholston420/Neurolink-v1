@@ -9,6 +9,7 @@ Uses a MockAdapter with injected samples so no real hardware is needed.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -29,7 +30,6 @@ from neurolink.hub import EEGHub
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_sample(alpha_power: float = 0.4):
-    """Return a mock EEGSample whose eeg_buffer yields a known alpha signal."""
     sample = MagicMock()
     t = np.linspace(0, 1, 256)
     channel = np.sin(2 * np.pi * 10 * t) * alpha_power
@@ -48,7 +48,7 @@ def _make_adapter(sample=None, return_none: bool = False):
 
 
 def _fast_monotonic(times: list):
-    """Return a callable that steps through *times*, clamping at the last value."""
+    """Step through *times*, clamping at the last value when exhausted."""
     state = {"idx": 0}
 
     def _fn():
@@ -57,6 +57,20 @@ def _fast_monotonic(times: list):
         return val
 
     return _fn
+
+
+@asynccontextmanager
+async def _patch_calibration(times: list):
+    """
+    Patch both time.monotonic AND asyncio.sleep inside neurolink.calibration
+    so the run() loop completes instantly without real waits.
+    """
+    async def _noop_sleep(_delay=0):
+        pass
+
+    with patch("neurolink.calibration.time.monotonic", side_effect=_fast_monotonic(times)), \
+         patch("neurolink.calibration.asyncio.sleep", side_effect=_noop_sleep):
+        yield
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -92,11 +106,9 @@ class TestCalibrationSessionInit:
 class TestCalibrationIdempotency:
     @pytest.mark.asyncio
     async def test_second_run_call_while_running_returns_none(self):
-        """A second run() on an already-running session returns None immediately."""
         hub = EEGHub()
         adapter = _make_adapter()
         cal = CalibrationSession(adapter, hub)
-
         cal._running = True
         result = await cal.run()
         assert result is None
@@ -104,7 +116,7 @@ class TestCalibrationIdempotency:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fast-forwarded run using mocked time.monotonic
+# Fast-forwarded run using mocked time.monotonic + asyncio.sleep
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestCalibrationFastForward:
@@ -113,10 +125,7 @@ class TestCalibrationFastForward:
         hub = EEGHub()
         adapter = _make_adapter()
 
-        with patch(
-            "neurolink.calibration.time.monotonic",
-            side_effect=_fast_monotonic([0.0, 31.0, TOTAL_DURATION_SEC + 1.0]),
-        ):
+        async with _patch_calibration([0.0, 31.0, TOTAL_DURATION_SEC + 1.0]):
             cal = CalibrationSession(adapter, hub)
             await cal.run()
 
@@ -128,11 +137,8 @@ class TestCalibrationFastForward:
         hub = EEGHub()
         adapter = _make_adapter(return_none=True)
 
-        with patch(
-            "neurolink.calibration.time.monotonic",
-            side_effect=_fast_monotonic(
-                [0.0, WARMUP_SEC + 1.0, TOTAL_DURATION_SEC + 1.0]
-            ),
+        async with _patch_calibration(
+            [0.0, WARMUP_SEC + 1.0, TOTAL_DURATION_SEC + 1.0]
         ):
             cal = CalibrationSession(adapter, hub)
             result = await cal.run()
@@ -143,26 +149,16 @@ class TestCalibrationFastForward:
     @pytest.mark.asyncio
     async def test_cancellation_sets_phase_complete(self):
         """
-        Verify the finally-block invariants (phase='complete', is_running=False)
-        by injecting CancelledError directly into read_sample.
-
-        This avoids any real-time or scheduling dependency: read_sample raises
-        CancelledError on its first call, which propagates to the except clause
-        in run(), then the finally block fires synchronously.
+        Inject CancelledError via read_sample so the except/finally block
+        fires instantly with no scheduling or sleep dependency.
         """
         hub = EEGHub()
         adapter = MagicMock()
         adapter.read_sample = AsyncMock(side_effect=asyncio.CancelledError)
 
-        cal = CalibrationSession(adapter, hub)
-
-        # Patch monotonic so elapsed stays in warmup (never breaks the loop
-        # via the time-check), ensuring the CancelledError is what exits it.
-        with patch(
-            "neurolink.calibration.time.monotonic",
-            side_effect=_fast_monotonic([0.0, 1.0]),
-        ):
+        async with _patch_calibration([0.0, 1.0]):
             try:
+                cal = CalibrationSession(adapter, hub)
                 await cal.run()
             except asyncio.CancelledError:
                 pass
