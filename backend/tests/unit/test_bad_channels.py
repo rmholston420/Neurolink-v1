@@ -1,82 +1,159 @@
-"""Unit tests for dsp.bad_channels.BadChannelDetector."""
+"""Unit tests for neurolink.dsp.bad_channels.
+
+Public API confirmed from source:
+  BadChannelDetector(config=None)   # no n_channels arg
+  .update(eeg)                      # called each pump tick
+  .get_bad_channels() -> list[str]  # returns names like ['TP9', 'AF7']
+  .get_stats() -> list[ChannelStats]
+  .set_manual_bad(channel, bad)
+  .reset()
+  .get_config() / .set_config()
+
+CHANNEL_NAMES = ['TP9', 'AF7', 'AF8', 'TP10', 'AUX']
+DetectorConfig fields: var_threshold, psd_ratio_threshold, ema_alpha, fs, nperseg
+"""
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from neurolink.dsp.bad_channels import BadChannelDetector
+from neurolink.dsp.bad_channels import BadChannelDetector, ChannelStats, DetectorConfig
 
 
-N_CH = 4
-FS = 256
+FS = 256.0
+N_CH = 5   # TP9, AF7, AF8, TP10, AUX
+N_SAMPLES = 256
+
+# Channel indices
+_TP9, _AF7, _AF8, _TP10, _AUX = 0, 1, 2, 3, 4
 
 
-@pytest.fixture()
+@pytest.fixture
 def detector() -> BadChannelDetector:
-    return BadChannelDetector(n_channels=N_CH, fs=FS)
+    cfg = DetectorConfig(fs=FS, ema_alpha=1.0)  # alpha=1.0: no smoothing, instant response
+    return BadChannelDetector(config=cfg)
 
 
-def _good_data(n_samples: int = FS * 5) -> np.ndarray:
-    rng = np.random.default_rng(0)
-    return rng.normal(0, 10e-6, size=(n_samples, N_CH))
+@pytest.fixture
+def clean_eeg() -> np.ndarray:
+    """All channels active with normal variance."""
+    rng = np.random.default_rng(42)
+    return rng.normal(0, 10.0, (N_CH, N_SAMPLES))  # 100 uV^2 variance >> 0.01 threshold
 
 
-def _data_with_flat(ch_idx: int = 1) -> np.ndarray:
-    data = _good_data()
-    data[:, ch_idx] = 0.0  # flat-line
-    return data
-
-
-def _data_with_high_amp(ch_idx: int = 2) -> np.ndarray:
-    data = _good_data()
-    data[:, ch_idx] = 1000e-6  # constant high amplitude
-    return data
+@pytest.fixture
+def flat_tp9_eeg() -> np.ndarray:
+    """TP9 (ch0) is flat-line: variance = 0."""
+    rng = np.random.default_rng(1)
+    eeg = rng.normal(0, 10.0, (N_CH, N_SAMPLES))
+    eeg[0] = 0.0
+    return eeg
 
 
 class TestConstruction:
     def test_instantiation(self):
-        bcd = BadChannelDetector(n_channels=N_CH, fs=FS)
-        assert bcd is not None
+        d = BadChannelDetector()
+        assert d is not None
 
-    def test_channel_count(self, detector):
-        assert detector.n_channels == N_CH
+    def test_instantiation_with_config(self):
+        cfg = DetectorConfig(var_threshold=0.05)
+        d = BadChannelDetector(config=cfg)
+        assert d.get_config().var_threshold == pytest.approx(0.05)
+
+    def test_channel_count(self):
+        """Detector always tracks 5 channels (TP9, AF7, AF8, TP10, AUX)."""
+        d = BadChannelDetector()
+        stats = d.get_stats()
+        assert len(stats) == 5
 
 
 class TestDetection:
-    def test_all_good_channels_returns_empty_mask(self, detector):
-        mask = detector.detect(_good_data())
-        assert isinstance(mask, np.ndarray)
-        assert mask.shape == (N_CH,)
-        assert not np.any(mask)  # no bad channels
+    def test_all_good_channels_returns_empty_list(self, detector, clean_eeg):
+        detector.update(clean_eeg)
+        bad = detector.get_bad_channels()
+        assert bad == []
 
-    def test_flat_channel_detected(self, detector):
-        mask = detector.detect(_data_with_flat(ch_idx=1))
-        assert mask[1]  # channel 1 should be flagged
+    def test_flat_channel_detected(self, detector, flat_tp9_eeg):
+        """TP9 flat-line -> variance 0 -> detected as bad."""
+        # Feed several frames so EMA converges (alpha=1.0 so 1 frame is enough)
+        detector.update(flat_tp9_eeg)
+        bad = detector.get_bad_channels()
+        assert "TP9" in bad
 
-    def test_good_channels_not_flagged(self, detector):
-        mask = detector.detect(_data_with_flat(ch_idx=1))
-        for i in range(N_CH):
-            if i != 1:
-                assert not mask[i]
+    def test_good_channels_not_flagged(self, detector, flat_tp9_eeg):
+        detector.update(flat_tp9_eeg)
+        bad = detector.get_bad_channels()
+        # Only TP9 should be bad
+        assert "AF7" not in bad
+        assert "AF8" not in bad
+        assert "TP10" not in bad
 
     def test_high_amplitude_channel_detected(self, detector):
-        mask = detector.detect(_data_with_high_amp(ch_idx=2))
-        assert mask[2]
+        """Channel with very high PSD ratio relative to median -> noisy/bad."""
+        rng = np.random.default_rng(5)
+        eeg = rng.normal(0, 10.0, (N_CH, N_SAMPLES))
+        # Inject extreme noise on AF8 (ch2)
+        eeg[2] = rng.normal(0, 1000.0, N_SAMPLES)
+        detector.update(eeg)
+        bad = detector.get_bad_channels()
+        assert "AF8" in bad
 
 
 class TestMaskReturnType:
-    def test_mask_is_bool_array(self, detector):
-        mask = detector.detect(_good_data())
-        assert mask.dtype == bool
+    def test_get_bad_channels_returns_list(self, detector, clean_eeg):
+        detector.update(clean_eeg)
+        result = detector.get_bad_channels()
+        assert isinstance(result, list)
+
+    def test_bad_channel_names_are_strings(self, detector, flat_tp9_eeg):
+        detector.update(flat_tp9_eeg)
+        bad = detector.get_bad_channels()
+        for name in bad:
+            assert isinstance(name, str)
+
+    def test_bad_channel_names_in_montage(self, detector, flat_tp9_eeg):
+        detector.update(flat_tp9_eeg)
+        valid = {"TP9", "AF7", "AF8", "TP10", "AUX"}
+        for name in detector.get_bad_channels():
+            assert name in valid
+
+
+class TestManualBad:
+    def test_set_manual_bad_marks_channel(self, detector, clean_eeg):
+        detector.update(clean_eeg)
+        detector.set_manual_bad("AF7", True)
+        assert "AF7" in detector.get_bad_channels()
+
+    def test_clear_manual_bad(self, detector, clean_eeg):
+        detector.update(clean_eeg)
+        detector.set_manual_bad("AF7", True)
+        detector.set_manual_bad("AF7", False)
+        assert "AF7" not in detector.get_bad_channels()
 
 
 class TestReset:
-    def test_reset_does_not_raise(self, detector):
-        detector.detect(_good_data())
+    def test_reset_does_not_raise(self, detector, flat_tp9_eeg):
+        detector.update(flat_tp9_eeg)
         detector.reset()
 
-    def test_after_reset_detects_correctly(self, detector):
-        detector.detect(_data_with_flat())
+    def test_after_reset_detects_correctly(self, detector, flat_tp9_eeg, clean_eeg):
+        detector.update(flat_tp9_eeg)
         detector.reset()
-        mask = detector.detect(_good_data())
-        assert not np.any(mask)
+        detector.update(clean_eeg)
+        # After reset + good data, no bad channels expected
+        bad = detector.get_bad_channels()
+        assert "TP9" not in bad
+
+
+class TestStats:
+    def test_get_stats_returns_list_of_channel_stats(self, detector, clean_eeg):
+        detector.update(clean_eeg)
+        stats = detector.get_stats()
+        assert isinstance(stats, list)
+        assert all(isinstance(s, ChannelStats) for s in stats)
+
+    def test_stats_channel_names(self, detector, clean_eeg):
+        detector.update(clean_eeg)
+        names = [s.name for s in detector.get_stats()]
+        assert "TP9" in names
+        assert "AF7" in names

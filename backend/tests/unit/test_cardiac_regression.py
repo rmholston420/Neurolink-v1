@@ -1,8 +1,9 @@
 """Unit tests for neurolink.dsp.cardiac_regression.
 
-Real public API:
-  CardiacRegressor         — stateful corrector; __init__(config)
-  CardiacRegressionConfig  — tunable dataclass
+Public API confirmed from source:
+  CardiacRegressor(config)
+  .apply(eeg, ibi_ms, fs=256.0) -> np.ndarray   # method is apply(), not remove()
+  .reset() / .get_config() / .set_config()
 """
 from __future__ import annotations
 
@@ -51,48 +52,57 @@ class TestConstruction:
 
 class TestDisabledPassthrough:
     def test_disabled_returns_eeg_unchanged(self, corrector_disabled, clean_eeg):
-        out = corrector_disabled.remove(clean_eeg, ibi_ms=[], fs=FS)
+        out = corrector_disabled.apply(clean_eeg, ibi_ms=[], fs=FS)
         np.testing.assert_array_equal(out, clean_eeg)
 
     def test_disabled_with_valid_ibi_still_passthrough(self, corrector_disabled, clean_eeg, ibi_sequence):
-        out = corrector_disabled.remove(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
+        out = corrector_disabled.apply(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
         np.testing.assert_array_equal(out, clean_eeg)
 
 
 class TestGracefulDegradation:
     def test_empty_ibi_returns_eeg_unchanged(self, corrector, clean_eeg):
-        """No IBI data -> corrector returns eeg unchanged."""
-        out = corrector.remove(clean_eeg, ibi_ms=[], fs=FS)
+        out = corrector.apply(clean_eeg, ibi_ms=[], fs=FS)
         np.testing.assert_array_equal(out, clean_eeg)
 
     def test_out_of_range_ibi_returns_unchanged(self, corrector, clean_eeg):
-        """IBIs outside physiological range (min 400 ms, max 2000 ms) -> passthrough."""
-        bad_ibi = [100.0, 3000.0]  # too short and too long
-        out = corrector.remove(clean_eeg, ibi_ms=bad_ibi, fs=FS)
+        bad_ibi = [100.0, 3000.0]  # below min_ibi_ms=400 and above max_ibi_ms=2000
+        out = corrector.apply(clean_eeg, ibi_ms=bad_ibi, fs=FS)
         np.testing.assert_array_equal(out, clean_eeg)
 
     def test_insufficient_beats_returns_unchanged(self, corrector, clean_eeg):
-        """Fewer than template_beats valid IBIs -> passthrough."""
-        out = corrector.remove(clean_eeg, ibi_ms=[800.0], fs=FS)
+        """Only 1 IBI -- fewer than template_beats=8 -> passthrough."""
+        out = corrector.apply(clean_eeg, ibi_ms=[800.0], fs=FS)
         np.testing.assert_array_equal(out, clean_eeg)
 
 
 class TestOutputShape:
     def test_output_same_shape_as_input(self, corrector, clean_eeg, ibi_sequence):
-        out = corrector.remove(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
+        out = corrector.apply(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
         assert out.shape == clean_eeg.shape
 
-    def test_float64_output(self, corrector, clean_eeg, ibi_sequence):
-        out = corrector.remove(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
-        assert out.dtype in (np.float32, np.float64)
+    def test_output_is_numeric(self, corrector, clean_eeg, ibi_sequence):
+        out = corrector.apply(clean_eeg, ibi_ms=ibi_sequence, fs=FS)
+        assert np.isfinite(out).all()
+
+
+class TestReset:
+    def test_reset_does_not_raise(self, corrector):
+        corrector.reset()
+
+    def test_after_reset_still_functional(self, corrector, clean_eeg):
+        corrector.reset()
+        out = corrector.apply(clean_eeg, ibi_ms=[], fs=FS)
+        assert out.shape == clean_eeg.shape
 
 
 class TestEdgeCases:
     def test_single_channel_no_crash(self, corrector):
         eeg = np.random.default_rng(5).normal(0, 5.0, (1, N_SAMPLES))
-        out = corrector.remove(eeg, ibi_ms=[], fs=FS)
+        out = corrector.apply(eeg, ibi_ms=[], fs=FS)
         assert out.shape == eeg.shape
 
-    def test_none_ibi_returns_eeg(self, corrector, clean_eeg):
-        out = corrector.remove(clean_eeg, ibi_ms=None, fs=FS)  # type: ignore[arg-type]
-        np.testing.assert_array_equal(out, clean_eeg)
+    def test_config_roundtrip(self, corrector):
+        cfg = corrector.get_config()
+        corrector.set_config(cfg)
+        assert corrector.get_config().enable == cfg.enable

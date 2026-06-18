@@ -1,11 +1,11 @@
 """Unit tests for neurolink.dsp.ocular_regression.
 
-Real public API:
-  OcularRegressor         — stateful corrector; __init__(config)
-  OcularRegressionConfig  — tunable dataclass
+Public API confirmed from source:
+  OcularRegressor(config)
+  .apply(eeg) -> np.ndarray   # method is apply(), not remove()
+  .reset() / .get_stats() / .get_config() / .set_config()
 
-Graceful degradation: when no EOG channel is present
-(eog_channel_idx >= n_channels) the corrector returns the array unchanged.
+Graceful degradation: eog_channel_idx >= n_channels -> passthrough unchanged.
 """
 from __future__ import annotations
 
@@ -16,21 +16,21 @@ from neurolink.dsp.ocular_regression import OcularRegressor, OcularRegressionCon
 
 
 FS = 256.0
-N_CH_EEG = 4  # TP9, AF7, AF8, TP10
-N_CH_WITH_AUX = 5  # +1 AUX channel as EOG reference
+N_CH_EEG = 4     # TP9, AF7, AF8, TP10
+N_CH_WITH_AUX = 5
 N_SAMPLES = 256
 
 
 @pytest.fixture
 def regressor_no_aux() -> OcularRegressor:
-    """EOG channel index beyond available channels -> graceful degradation."""
-    cfg = OcularRegressionConfig(eog_channel_idx=4)  # AUX absent -> 4-ch array
+    """EOG channel index 4, only 4-ch array provided -> graceful degradation."""
+    cfg = OcularRegressionConfig(eog_channel_idx=4)
     return OcularRegressor(config=cfg)
 
 
 @pytest.fixture
 def regressor_with_aux() -> OcularRegressor:
-    """EOG channel is ch 4 (AUX) which is present in 5-ch array."""
+    """EOG channel is ch4 (AUX), present in 5-ch array."""
     cfg = OcularRegressionConfig(eog_channel_idx=4)
     return OcularRegressor(config=cfg)
 
@@ -52,9 +52,9 @@ def eeg_5ch_blink() -> np.ndarray:
     eeg = rng.normal(0, 5.0, (N_CH_WITH_AUX, N_SAMPLES))
     t = np.linspace(0, 1, N_SAMPLES)
     blink = 120.0 * np.sin(2 * np.pi * 1.0 * t)
-    eeg[4] = blink          # AUX = EOG reference
-    eeg[1] += 0.8 * blink   # AF7 contaminated
-    eeg[2] += 0.7 * blink   # AF8 contaminated
+    eeg[4] = blink
+    eeg[1] += 0.8 * blink  # AF7
+    eeg[2] += 0.7 * blink  # AF8
     return eeg
 
 
@@ -71,57 +71,78 @@ class TestConstruction:
 
 class TestDisabledPassthrough:
     def test_disabled_returns_array_unchanged(self, regressor_disabled, eeg_4ch):
-        out = regressor_disabled.remove(eeg_4ch)
+        out = regressor_disabled.apply(eeg_4ch)
         np.testing.assert_array_equal(out, eeg_4ch)
 
 
 class TestGracefulDegradation:
     def test_missing_eog_channel_passthrough(self, regressor_no_aux, eeg_4ch):
-        """EOG channel index 4 beyond 4-channel array -> passthrough."""
-        out = regressor_no_aux.remove(eeg_4ch)
+        """EOG channel 4 beyond 4-ch array -> returns input unchanged."""
+        out = regressor_no_aux.apply(eeg_4ch)
         np.testing.assert_array_equal(out, eeg_4ch)
 
     def test_output_shape_preserved_no_aux(self, regressor_no_aux, eeg_4ch):
-        out = regressor_no_aux.remove(eeg_4ch)
+        out = regressor_no_aux.apply(eeg_4ch)
         assert out.shape == eeg_4ch.shape
 
 
 class TestWithEOGReference:
     def test_output_same_shape_as_input(self, regressor_with_aux, eeg_5ch_blink):
-        out = regressor_with_aux.remove(eeg_5ch_blink)
+        out = regressor_with_aux.apply(eeg_5ch_blink)
         assert out.shape == eeg_5ch_blink.shape
 
-    def test_frontal_amplitude_reduced_after_many_frames(self, regressor_with_aux, eeg_5ch_blink):
-        """After several frames the regressor should reduce blink amplitude."""
+    def test_output_is_finite(self, regressor_with_aux, eeg_5ch_blink):
+        out = regressor_with_aux.apply(eeg_5ch_blink)
+        assert np.isfinite(out).all()
+
+    def test_frontal_amplitude_reduced_after_warmup(self, regressor_with_aux):
+        """After enough frames the regressor should reduce blink amplitude."""
         rng = np.random.default_rng(1)
         t = np.linspace(0, 1, N_SAMPLES)
         blink = 120.0 * np.sin(2 * np.pi * 1.0 * t)
 
-        original_af7_ptp = np.ptp(eeg_5ch_blink[1])
+        # Build a fresh contaminated frame for measurement
+        eeg_test = rng.normal(0, 5.0, (N_CH_WITH_AUX, N_SAMPLES))
+        eeg_test[4] = blink
+        eeg_test[1] += 0.8 * blink
+        original_ptp = np.ptp(eeg_test[1])
 
-        # Warm up the adaptive regression
-        for _ in range(20):
+        # Warm up with 30 frames
+        for _ in range(30):
             frame = rng.normal(0, 5.0, (N_CH_WITH_AUX, N_SAMPLES))
             frame[4] = blink
             frame[1] += 0.8 * blink
-            regressor_with_aux.remove(frame)
+            regressor_with_aux.apply(frame)
 
-        out = regressor_with_aux.remove(eeg_5ch_blink)
-        corrected_af7_ptp = np.ptp(out[1])
-        # Amplitude should be reduced (not necessarily perfect, but less)
-        assert corrected_af7_ptp < original_af7_ptp * 1.1  # at most 10% larger
+        out = regressor_with_aux.apply(eeg_test)
+        corrected_ptp = np.ptp(out[1])
+        assert corrected_ptp < original_ptp * 1.1
+
+
+class TestStats:
+    def test_get_stats_returns_dict(self, regressor_with_aux, eeg_5ch_blink):
+        regressor_with_aux.apply(eeg_5ch_blink)
+        stats = regressor_with_aux.get_stats()
+        assert isinstance(stats, dict)
+
+
+class TestReset:
+    def test_reset_does_not_raise(self, regressor_with_aux):
+        regressor_with_aux.reset()
+
+    def test_after_reset_still_functional(self, regressor_with_aux, eeg_5ch_blink):
+        regressor_with_aux.reset()
+        out = regressor_with_aux.apply(eeg_5ch_blink)
+        assert out.shape == eeg_5ch_blink.shape
 
 
 class TestEdgeCases:
     def test_single_sample_no_crash(self, regressor_with_aux):
         eeg = np.zeros((N_CH_WITH_AUX, 1))
-        out = regressor_with_aux.remove(eeg)
+        out = regressor_with_aux.apply(eeg)
         assert out.shape == eeg.shape
 
-    def test_1d_array_no_crash(self, regressor_no_aux):
-        eeg_1d = np.zeros((N_CH_EEG,))
-        # Should not raise — return unchanged or handle gracefully
-        try:
-            out = regressor_no_aux.remove(eeg_1d)  # type: ignore[arg-type]
-        except Exception:
-            pass  # acceptable: 1-D is not the contract, just must not segfault
+    def test_config_roundtrip(self, regressor_with_aux):
+        cfg = regressor_with_aux.get_config()
+        regressor_with_aux.set_config(cfg)
+        assert regressor_with_aux.get_config().enable == cfg.enable
