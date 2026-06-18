@@ -69,7 +69,6 @@ class TestSingleBadChannel:
         np.testing.assert_array_equal(out[3], flat_tp9_eeg[3])  # TP10
 
     def test_af7_bad_channel(self, clean_eeg):
-        rng = np.random.default_rng(2)
         eeg = clean_eeg.copy()
         eeg[1] = 0.0  # AF7 flat
         out = interpolate_bad_channels(eeg, ["AF7"])

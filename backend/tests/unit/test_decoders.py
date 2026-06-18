@@ -185,7 +185,7 @@ class TestDecodePPG:
         packet = _make_ppg_packet(vals)
         result = decode_ppg(packet)
         assert len(result) == 6
-        for got, expected in zip(result, vals):
+        for got, expected in zip(result, vals, strict=False):
             assert got == pytest.approx(float(expected))
 
     def test_known_single_value(self):
