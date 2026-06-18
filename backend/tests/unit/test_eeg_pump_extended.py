@@ -24,15 +24,15 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 import numpy as np
 import pytest
 
-from neurolink.eeg_pump import EEGPump, _wire_stubs
+from neurolink.eeg_pump import EEGPump, _wire_stubs, _MIN_PPG_SAMPLES
 from neurolink.hub import EEGHub
 from neurolink.hardware.base import EEGSample
 from neurolink.dsp.filter_toggles import FilterToggleConfig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _make_eeg_sample(
     source: str = "mock",
@@ -57,7 +57,11 @@ def _make_eeg_sample(
     else:
         sample.eeg_buffer = None
 
-    sample.ppg_buffer = ([[0.5] * 32] if ppg else None)
+    # PPG buffer must be >= _MIN_PPG_SAMPLES (960) to clear the warmup guard
+    # introduced in eeg_pump.py.  A shorter buffer causes ppg_payload=None
+    # which is the correct runtime behaviour during warmup, but tests that
+    # want to exercise the PPG code path need a full-length buffer.
+    sample.ppg_buffer = ([0.5] * _MIN_PPG_SAMPLES if ppg else None)
     sample.accel_buffer = ([[0.01] * 10, [0.01] * 10, [1.0] * 10] if accel else None)
     sample.gyro_buffer = ([[0.0] * 10, [0.0] * 10, [0.0] * 10] if gyro else None)
     return sample
@@ -334,35 +338,60 @@ class TestBuildPayloadDSPPaths:
 
     @pytest.mark.asyncio
     async def test_ppg_buffer_produces_ppg_payload(self):
-        """Lines 435-446: ppg_buffer present -> compute_ppg called, ppg payload not None."""
-        sample = _make_eeg_sample(ppg=True)
+        """Lines 435-446: ppg_buffer >= _MIN_PPG_SAMPLES -> compute_ppg called, ppg not None.
+
+        compute_ppg is patched so this test does not depend on neurokit2
+        peak detection succeeding with synthetic data.
+        """
+        sample = _make_eeg_sample(ppg=True)  # buffer is now _MIN_PPG_SAMPLES long
         pump = _make_pump()
 
         toggles = _all_toggles_off()
 
-        with patch("neurolink.eeg_pump.filter_toggles") as ft:
+        from neurolink.dsp.ppg import PPGPayload
+        fake_ppg = PPGPayload(hr_bpm=60.0, ibi_ms=[833.0], sdnn_ms=20.0, rmssd_ms=18.0)
+
+        with patch("neurolink.eeg_pump.filter_toggles") as ft, \
+             patch("neurolink.eeg_pump._build_payload.__globals__", {}) as _dummy, \
+             patch("neurolink.dsp.ppg.compute_ppg", return_value=fake_ppg), \
+             patch("neurolink.eeg_pump.compute_ppg" if hasattr(__import__("neurolink.eeg_pump", fromlist=["compute_ppg"]), "compute_ppg") else "neurolink.dsp.ppg.compute_ppg", return_value=fake_ppg, create=True):
             ft.get_toggles.return_value = toggles
-            payload = await pump._build_payload(sample)
+            # Patch the local import of compute_ppg inside _build_payload
+            import neurolink.dsp.ppg as _ppg_mod
+            orig = _ppg_mod.compute_ppg
+            _ppg_mod.compute_ppg = lambda arr, fs: fake_ppg
+            try:
+                payload = await pump._build_payload(sample)
+            finally:
+                _ppg_mod.compute_ppg = orig
 
         assert payload.ppg is not None
 
     @pytest.mark.asyncio
     async def test_cardiac_regression_called_with_ibis(self):
         """Lines 449-451: stage6 cardiac regression runs when ppg+ibis present."""
-        sample = _make_eeg_sample(ppg=True)
+        sample = _make_eeg_sample(ppg=True)  # buffer is now _MIN_PPG_SAMPLES long
         pump = _make_pump()
 
         toggles = FilterToggleConfig(**{**_all_toggles_off().__dict__, "stage6_cardiac": True})
 
-        with patch("neurolink.eeg_pump.filter_toggles") as ft, \
-             patch("neurolink.eeg_pump.cardiac_regression") as cr:
-            ft.get_toggles.return_value = toggles
-            cr.apply.return_value = np.zeros((4, 64), dtype=np.float32)
-            await pump._build_payload(sample)
+        from neurolink.dsp.ppg import PPGPayload
+        fake_ppg = PPGPayload(hr_bpm=60.0, ibi_ms=[833.0], sdnn_ms=20.0, rmssd_ms=18.0)
+
+        import neurolink.dsp.ppg as _ppg_mod
+        orig = _ppg_mod.compute_ppg
+        _ppg_mod.compute_ppg = lambda arr, fs: fake_ppg
+        try:
+            with patch("neurolink.eeg_pump.filter_toggles") as ft, \
+                 patch("neurolink.eeg_pump.cardiac_regression") as cr:
+                ft.get_toggles.return_value = toggles
+                cr.apply.return_value = np.zeros((4, 64), dtype=np.float32)
+                await pump._build_payload(sample)
+        finally:
+            _ppg_mod.compute_ppg = orig
 
         cr.apply.assert_called_once()
         _, kwargs = cr.apply.call_args
-        # ibis must be passed (possibly empty list if PPG had no peaks)
         assert "ibis" in kwargs
 
     @pytest.mark.asyncio
