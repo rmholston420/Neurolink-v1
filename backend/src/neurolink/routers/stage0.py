@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 log = structlog.get_logger(__name__)
@@ -65,7 +66,7 @@ class ReadinessResponse(BaseModel):
     reason: str = ""
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _get_guard(request: Request):
@@ -76,7 +77,7 @@ def _get_guard(request: Request):
     return guard
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────
+# ── Endpoints ────────────────────────────────────────────────────────────────
 
 
 @router.get("/status", response_model=Stage0StatusResponse)
@@ -136,15 +137,13 @@ async def acknowledge_step(
 
 
 @router.get("/environment/ready")
-async def environment_ready(request: Request) -> ReadinessResponse:
+async def environment_ready(request: Request) -> Response:
     """Poll-friendly readiness check.
 
     Returns HTTP 200 with ready=True when stabilisation is complete and all
     steps are acknowledged.  Returns HTTP 202 (Accepted / not yet ready)
     otherwise so clients can differentiate without parsing the body.
     """
-    from fastapi.responses import JSONResponse
-
     guard = _get_guard(request)
     env = guard.environment
     ready = env.is_ready
