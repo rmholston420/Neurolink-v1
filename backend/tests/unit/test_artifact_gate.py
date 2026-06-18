@@ -5,7 +5,10 @@ Public API confirmed from source:
   .evaluate(eeg, accel=None) -> ArtifactDecision   # NO fs parameter
   .get_stats() / .reset_stats() / .get_config() / .set_config()
 
-ArtifactDecision has: .keep (bool), .reasons (list[str]).
+ArtifactDecision fields:
+  .reject  (bool)  — True when the frame is contaminated
+  .reasons (list[str])
+  .clean   (property) — returns `not self.reject`
 """
 from __future__ import annotations
 
@@ -61,27 +64,31 @@ class TestCleanEEG:
     def test_clean_frame_passes(self, gate, clean_eeg):
         decision = gate.evaluate(clean_eeg)
         assert isinstance(decision, ArtifactDecision)
-        assert decision.keep is True
+        assert decision.clean is True
 
     def test_clean_frame_no_reject_reasons(self, gate, clean_eeg):
         decision = gate.evaluate(clean_eeg)
-        assert decision.keep is True
+        assert decision.reject is False
 
 
 class TestAmplitudeGate:
     def test_high_amplitude_rejected(self, gate, high_amplitude_eeg):
         decision = gate.evaluate(high_amplitude_eeg)
-        assert decision.keep is False
+        assert decision.reject is True
+
+    def test_high_amplitude_has_reason(self, gate, high_amplitude_eeg):
+        decision = gate.evaluate(high_amplitude_eeg)
+        assert len(decision.reasons) >= 1
 
 
 class TestMotionGate:
     def test_motion_rejects(self, gate, clean_eeg, motion_accel):
         decision = gate.evaluate(clean_eeg, accel=motion_accel)
-        assert decision.keep is False
+        assert decision.reject is True
 
     def test_no_accel_does_not_reject(self, gate, clean_eeg):
         decision = gate.evaluate(clean_eeg, accel=None)
-        assert decision.keep is True
+        assert decision.clean is True
 
 
 class TestStats:
@@ -107,3 +114,7 @@ class TestEdgeCases:
         eeg = np.random.default_rng(3).normal(0, 5.0, (5, N_SAMPLES))
         decision = gate.evaluate(eeg)
         assert isinstance(decision, ArtifactDecision)
+
+    def test_none_eeg_returns_clean(self, gate):
+        decision = gate.evaluate(None)  # type: ignore[arg-type]
+        assert decision.clean is True
