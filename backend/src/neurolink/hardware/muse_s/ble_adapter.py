@@ -139,6 +139,11 @@ class MuseSBleAdapter(HardwareAdapter):
 
         Idempotent: if already connected, returns immediately.
         Called both from service.connect() and from the reconnect supervisor.
+
+        Raises:
+            ConnectionError: if the BLE connection attempt times out or is
+                rejected by BlueZ.  The message includes the device address
+                and timeout value so callers can surface it to the user.
         """
         if self._connected:
             return
@@ -164,7 +169,19 @@ class MuseSBleAdapter(HardwareAdapter):
             timeout=BLE_CONNECT_TIMEOUT,
             disconnected_callback=self._on_ble_disconnect,
         )
-        await self._client.connect()
+        try:
+            await self._client.connect()
+        except TimeoutError as exc:
+            # bleak's async_timeout raises TimeoutError when BLE_CONNECT_TIMEOUT
+            # is exceeded during the ACL/GATT handshake.  Re-raise as
+            # ConnectionError so every layer above gets a single consistent
+            # exception type regardless of the underlying BlueZ failure mode.
+            raise ConnectionError(
+                f"BLE connect timed out after {BLE_CONNECT_TIMEOUT:.0f} s "
+                f"({self._address}, rssi={rssi}). "
+                "Move the headband closer to the host and retry."
+            ) from exc
+
         self._connected = True
         # Mark that a full session has been established.  _on_ble_disconnect
         # uses this to distinguish mid-session drops from handshake-phase drops.

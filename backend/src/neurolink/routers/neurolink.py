@@ -63,12 +63,35 @@ async def connect(
     body: ConnectRequest,
     service: ServiceDep,
 ) -> ConnectResponse:
-    """Connect to an EEG adapter and start streaming."""
-    return await service.connect(
-        adapter_type=body.adapter_type,
-        device_model=body.device_model,
-        address=body.address,
-    )
+    """Connect to an EEG adapter and start streaming.
+
+    Returns a structured ConnectResponse in all cases:
+      ok=True   — adapter connected, streaming started.
+      ok=False  — connection failed (BLE timeout, device not found, etc.).
+                  message contains a human-readable explanation.
+
+    A 500 is only returned for unexpected server-side errors (programming
+    bugs, import failures, etc.) that fall outside the BLE error path.
+    """
+    try:
+        return await service.connect(
+            adapter_type=body.adapter_type,
+            device_model=body.device_model,
+            address=body.address,
+        )
+    except TimeoutError as exc:
+        addr = body.address or "(no address)"
+        msg = (
+            f"BLE connect timed out waiting for {addr}. "
+            "The headband may be out of range or the BlueZ connection "
+            "attempt exceeded the timeout window. Move closer and retry."
+        )
+        log.warning("connect_timeout", address=addr, error=str(exc))
+        return ConnectResponse(ok=False, source="", message=msg)
+    except ConnectionError as exc:
+        addr = body.address or "(no address)"
+        log.warning("connect_error", address=addr, error=str(exc))
+        return ConnectResponse(ok=False, source="", message=str(exc))
 
 
 @router.post("/disconnect", response_model=DisconnectResponse)
@@ -137,7 +160,7 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
         hub = service._hub
         hub.register_sse_queue(q)
         try:
-            # Emit current state immediately so tests always receive≥ 1 frame.
+            # Emit current state immediately so tests always receive >= 1 frame.
             yield _encode_sse_item(hub.get_state())
 
             while True:
