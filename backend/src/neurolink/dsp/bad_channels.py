@@ -1,14 +1,14 @@
-"""Stage 2 — Bad channel detection.
+"""Stage 2 -- Bad channel detection.
 
 Detects two classes of bad channels on a running basis:
 
-1. Flat-line  — variance of the channel buffer drops below a threshold
-                 (default 0.01 µV²).  Caused by electrode lift-off,
+1. Flat-line  -- variance of the channel buffer drops below a threshold
+                 (default 0.01 uV^2).  Caused by electrode lift-off,
                  broken lead, or fully dried gel.
 
-2. Noisy      — mean broadband PSD of the channel exceeds
-                 psd_ratio_threshold × median across all channels
-                 (default 5×).  Caused by EMG, cable artefact, or
+2. Noisy      -- mean broadband PSD of the channel exceeds
+                 psd_ratio_threshold x median across all channels
+                 (default 5x).  Caused by EMG, cable artefact, or
                  poor skin-electrode contact producing high impedance.
 
 Both detectors use an exponentially-weighted running estimate updated
@@ -19,11 +19,11 @@ A manual override list lets the REST layer flag / un-flag channels
 independently of the automatic decision.  Manual flags take priority.
 
 Channel order follows EEGSample.channels:
-    index 0 → TP9
-    index 1 → AF7
-    index 2 → AF8
-    index 3 → TP10
-    index 4 → AUX   (non-EEG; excluded from PSD comparison)
+    index 0 -> TP9
+    index 1 -> AF7
+    index 2 -> AF8
+    index 3 -> TP10
+    index 4 -> AUX   (non-EEG; excluded from PSD comparison)
 """
 
 from __future__ import annotations
@@ -47,9 +47,9 @@ _EEG_IDX: list[int] = [0, 1, 2, 3]
 class DetectorConfig:
     """Tunable thresholds for BadChannelDetector."""
 
-    var_threshold: float = 0.01  # µV²  — below this → flat-line bad
-    psd_ratio_threshold: float = 5.0  # ×median PSD → noisy bad
-    ema_alpha: float = 0.1  # EMA smoothing (0.1 →20-frame half-life)
+    var_threshold: float = 0.01  # uV^2 -- below this -> flat-line bad
+    psd_ratio_threshold: float = 5.0  # x median PSD -> noisy bad
+    ema_alpha: float = 0.1  # EMA smoothing (0.1 -> 20-frame half-life)
     fs: float = 256.0
     nperseg: int = 128
 

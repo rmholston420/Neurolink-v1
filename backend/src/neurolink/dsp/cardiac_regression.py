@@ -1,4 +1,4 @@
-"""Stage 6 — PPG-referenced cardiac artifact regression (AAS method).
+"""Stage 6 -- PPG-referenced cardiac artifact regression (AAS method).
 
 Method: Average Artifact Subtraction
 --------------------------------------
@@ -10,8 +10,8 @@ and subtract it on every beat.
 
 Why AAS over ICA for cardiac removal
 --------------------------------------
-ICA requires ≥64 channels for reliable source separation.  Muse hardware
-has 4 EEG channels — at that density ICA frequently confuses cardiac and
+ICA requires >=64 channels for reliable source separation.  Muse hardware
+has 4 EEG channels -- at that density ICA frequently confuses cardiac and
 neural components.  AAS is validated at low channel counts, requires no
 matrix decomposition, and runs in O(n_channels) per frame.
 
@@ -46,7 +46,7 @@ class CardiacRegressionConfig:
     Attributes
     ----------
     enable:
-        Master switch.  False → corrector is a no-op.
+        Master switch.  False -> corrector is a no-op.
     eeg_channels:
         Channel indices to correct.  Default [0,1,2,3] = TP9/AF7/AF8/TP10.
     half_win_ms:
@@ -54,7 +54,7 @@ class CardiacRegressionConfig:
         full cardiac waveform even at 40 bpm.
     template_beats:
         Number of successive beats averaged to build the template.
-        8 beats ≈ ~6 s at 75 bpm — enough for a stable trimmed mean.
+        8 beats ~= ~6 s at 75 bpm -- enough for a stable trimmed mean.
     recalib_beats:
         Refresh the template after this many beats.  Default 8 so the
         template is always built from the most recent window.
@@ -102,7 +102,7 @@ class CardiacRegressor:
         # Rolling ring of EEG sample columns (~2 s at 256 Hz)
         self._eeg_ring: deque[np.ndarray] = deque(maxlen=512)
 
-    # ── Public API ────────────────────────────────────────────────────────────────
+    # Public API
 
     def apply(
         self,
@@ -136,7 +136,7 @@ class CardiacRegressor:
             return eeg
 
         fs = float(fs)
-        half_win = int(round(cfg.half_win_ms * fs / 1000.0))
+        half_win = round(cfg.half_win_ms * fs / 1000.0)
         n_samples = eeg.shape[1]
         n_ch = eeg.shape[0]
 
@@ -148,7 +148,7 @@ class CardiacRegressor:
         if ring_len < 2 * half_win + 1:
             return eeg
 
-        last_ibi_samples = int(round(valid_ibis[-1] * fs / 1000.0))
+        last_ibi_samples = round(valid_ibis[-1] * fs / 1000.0)
         beat_pos = ring_len - 1 - max(0, last_ibi_samples // 2)
         start = beat_pos - half_win
         end = beat_pos + half_win + 1
@@ -232,7 +232,7 @@ class CardiacRegressor:
             self._cfg = config
         log.info("cardiac_regressor_config_updated")
 
-    # ── Internal ────────────────────────────────────────────────────────────────
+    # Internal
 
     @staticmethod
     def _build_template(

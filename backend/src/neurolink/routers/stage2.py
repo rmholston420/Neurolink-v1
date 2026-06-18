@@ -1,4 +1,4 @@
-"""Stage 2 — Bad channel detection REST endpoints.
+"""Stage 2 -- Bad channel detection REST endpoints.
 
 Mounted at /api/v1/stage2 by main.py.
 
@@ -53,8 +53,8 @@ class MarkChannelRequest(BaseModel):
 
 
 class DetectorConfigSchema(BaseModel):
-    var_threshold: float = Field(0.01, description="Flat-line threshold µV²")
-    psd_ratio_threshold: float = Field(5.0, description="Noisy channel: PSD > N × median")
+    var_threshold: float = Field(0.01, description="Flat-line threshold uV^2")
+    psd_ratio_threshold: float = Field(5.0, description="Noisy channel: PSD > N x median")
     ema_alpha: float = Field(0.1, description="EMA smoothing factor")
     fs: float = Field(256.0, description="Sampling rate Hz")
     nperseg: int = Field(128, description="Welch PSD nperseg")

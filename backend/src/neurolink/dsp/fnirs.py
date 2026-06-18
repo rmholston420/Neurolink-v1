@@ -1,17 +1,17 @@
-"""Stage 7 — fNIRS (functional near-infrared spectroscopy) preprocessing.
+"""Stage 7 -- fNIRS (functional near-infrared spectroscopy) preprocessing.
 
 Overview
 --------
 Muse-compatible fNIRS accessories deliver raw optical-density (OD) data at
-two wavelengths (~760 nm and ~850 nm) across 4–8 source-detector pairs.
+two wavelengths (~760 nm and ~850 nm) across 4-8 source-detector pairs.
 This module provides:
 
-  apply(raw)   — preprocessing pipeline:
+  apply(raw)   -- preprocessing pipeline:
                    1. Spike / motion artifact clipping
                    2. Exponential-weighted baseline detrending (DC removal)
                    3. Returns float32 copy (never mutates input)
 
-  decode(raw)  — modified Beer–Lambert Law conversion to oxygenated (HbO)
+  decode(raw)  -- modified Beer-Lambert Law conversion to oxygenated (HbO)
                  and deoxygenated (HbR) haemoglobin concentration changes.
 
 Thread safety
@@ -30,7 +30,7 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-# Beer–Lambert extinction coefficients (cm⁻¹ / mM) at 760 nm and 850 nm
+# Beer-Lambert extinction coefficients (cm^-1 / mM) at 760 nm and 850 nm
 _EPS_HBO_760: float = 0.328
 _EPS_HBO_850: float = 1.590
 _EPS_HBR_760: float = 3.910
@@ -100,7 +100,7 @@ def apply(raw: np.ndarray | None) -> np.ndarray | None:
     if not isinstance(raw, np.ndarray) or raw.ndim != 2 or raw.shape[0] == 0:
         return raw
 
-    n_ch, n_samples = raw.shape
+    n_ch, _n_samples = raw.shape
     out = raw.astype(np.float32, copy=True)
 
     # Spike clip
@@ -162,7 +162,7 @@ def apply(raw: np.ndarray | None) -> np.ndarray | None:
 
 
 def decode(raw: np.ndarray | None) -> tuple[np.ndarray, np.ndarray] | np.ndarray | None:
-    """Apply modified Beer–Lambert Law to convert OD to HbO / HbR."""
+    """Apply modified Beer-Lambert Law to convert OD to HbO / HbR."""
     if raw is None:
         return None
 

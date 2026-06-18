@@ -1,4 +1,4 @@
-"""BaselineRecorder — 150-second eyes-closed resting baseline manager.
+"""BaselineRecorder -- 150-second eyes-closed resting baseline manager.
 
 Purpose
 -------
@@ -25,9 +25,9 @@ baseline that serves two independent goals:
 
 State machine
 -------------
-  WARMUP    — electrode stabilisation; frames discarded, nothing forwarded
-  RECORDING — phase gate lifted; ASR receives frames via main pipeline
-  COMPLETE  — bell event fired once via hub; phase gate remains lifted
+  WARMUP    -- electrode stabilisation; frames discarded, nothing forwarded
+  RECORDING -- phase gate lifted; ASR receives frames via main pipeline
+  COMPLETE  -- bell event fired once via hub; phase gate remains lifted
 
 Bell notification
 -----------------
@@ -41,7 +41,7 @@ Usage (EEGPump)
     # Once at startup:
     self._baseline = BaselineRecorder(asr=self._stage4, hub=hub)
 
-    # Every clean tick (Stage 4b — runs BEFORE Stage 4 / ASR):
+    # Every clean tick (Stage 4b -- runs BEFORE Stage 4 / ASR):
     eeg_arr = self._baseline.process(eeg_arr)
 
     # Stage 4 guard (in the same tick, after Stage 4b):
@@ -58,7 +58,7 @@ from __future__ import annotations
 
 import threading
 import time
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -72,8 +72,8 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
-class BaselinePhase(str, Enum):
-    WARMUP = "warmup"  # electrodes stabilising — ASR gate closed
+class BaselinePhase(StrEnum):
+    WARMUP = "warmup"  # electrodes stabilising -- ASR gate closed
     RECORDING = "recording"  # ASR gate open; baseline window accumulating
     COMPLETE = "complete"  # baseline done; bell has fired; ASR gate open
 
@@ -96,7 +96,7 @@ class BaselineRecorder:
     def __init__(
         self,
         asr: ArtifactSubspaceReconstructor,
-        hub,  # EEGHub — avoid circular import with TYPE_CHECKING only
+        hub,  # EEGHub -- avoid circular import with TYPE_CHECKING only
     ) -> None:
         self._asr = asr  # kept for API compatibility; not called here
         self._hub = hub
@@ -104,7 +104,7 @@ class BaselineRecorder:
         self._start_ts: float = time.monotonic()
         self._bell_fired: bool = False
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # Public API
 
     @property
     def phase(self) -> str:
@@ -122,14 +122,14 @@ class BaselineRecorder:
         and MUST be called before Stage 4 (ASR) each tick so the phase
         gate is up-to-date when the pump evaluates it.
 
-        Returns eeg_arr unchanged in all phases — this is a pure side-effect
+        Returns eeg_arr unchanged in all phases -- this is a pure side-effect
         shim so the downstream pipeline requires no branching.
 
         Phase transitions
         -----------------
-        WARMUP     → RECORDING  when elapsed >= BASELINE_DISCARD_SEC
-        RECORDING  → COMPLETE   when elapsed >= BASELINE_TOTAL_SEC
-        COMPLETE   → COMPLETE   (terminal state)
+        WARMUP     -> RECORDING  when elapsed >= BASELINE_DISCARD_SEC
+        RECORDING  -> COMPLETE   when elapsed >= BASELINE_TOTAL_SEC
+        COMPLETE   -> COMPLETE   (terminal state)
 
         Note
         ----
@@ -147,7 +147,7 @@ class BaselineRecorder:
                     elapsed_s=round(elapsed, 1),
                     discard_s=BASELINE_DISCARD_SEC,
                 )
-            # WARMUP: return early — ASR gate remains closed this tick.
+            # WARMUP: return early -- ASR gate remains closed this tick.
             return eeg_arr
 
         if self._phase is BaselinePhase.RECORDING:
@@ -165,7 +165,7 @@ class BaselineRecorder:
         self._bell_fired = False
         log.info("baseline_recorder_reset")
 
-    # ── Internal ──────────────────────────────────────────────────────────────
+    # Internal
 
     def _fire_bell(self, elapsed: float) -> None:
         """Fire the bell SSE event exactly once."""

@@ -1,8 +1,8 @@
-"""Stage 1 — Online zero-phase FIR filter chain.
+"""Stage 1 -- Online zero-phase FIR filter chain.
 
 Design goals
 ------------
-* Zero-phase filtering via ``scipy.signal.filtfilt`` — no group-delay
+* Zero-phase filtering via ``scipy.signal.filtfilt`` -- no group-delay
   distortion in event-locked signals (Muse alpha/theta peaks land at
   the correct sample).
 * Notch default 60 Hz (US mains); set ``NEUROLINK_LINE_FREQ_HZ=50`` env var
@@ -15,24 +15,24 @@ Design goals
   from the very next EEGPump tick.
 * Graceful degradation: if the buffer is shorter than the minimum
   filtfilt length (3 * filter_order) the raw data is returned
-  unchanged and a structured warning is emitted — the pump never
+  unchanged and a structured warning is emitted -- the pump never
   raises.
 
 Filter order
 -----------
-  default_filter_order = 128  (at 256 Hz → 0.5 s one-sided kernel)
+  default_filter_order = 128  (at 256 Hz -> 0.5 s one-sided kernel)
   Transition bands (firwin Hamming window, Kaiser not needed):
-    high-pass  0.5 Hz  → transition width ~0.4 Hz
-    notch      2 Hz BW (each) → sharp notch at 60/120 Hz (US default)
-    low-pass  55 Hz   → preserves gamma band; raise to 65 Hz if needed
+    high-pass  0.5 Hz  -> transition width ~0.4 Hz
+    notch      2 Hz BW (each) -> sharp notch at 60/120 Hz (US default)
+    low-pass  55 Hz   -> preserves gamma band; raise to 65 Hz if needed
 
 Public API
 ----------
-  FilterConfig              — dataclass of all tunable knobs
-  OnlineFilterChain         — stateless filter operator
-  FilterChainRegistry       — module-level singleton / cache
-  apply_online_filters()    — one-call entry point used by eeg_pump
-  get_default_line_freq()   — locale-aware default (env var or 60 Hz)
+  FilterConfig              -- dataclass of all tunable knobs
+  OnlineFilterChain         -- stateless filter operator
+  FilterChainRegistry       -- module-level singleton / cache
+  apply_online_filters()    -- one-call entry point used by eeg_pump
+  get_default_line_freq()   -- locale-aware default (env var or 60 Hz)
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ class FilterConfig:
     """All tunable parameters for the online filter chain.
 
     Attributes:
-        hz_highpass:    High-pass cut-off (Hz).  0 or None → skip.
+        hz_highpass:    High-pass cut-off (Hz).  0 or None -> skip.
         hz_notch_freqs: List of notch centre frequencies (Hz).
                         Default [60.0, 120.0] for US (60 Hz mains + 2nd harmonic).
                         Set NEUROLINK_LINE_FREQ_HZ=50 env var for EU/Asia.
@@ -116,7 +116,6 @@ class FilterConfig:
     fs: float = 256.0
     filter_order: int = 128
 
-    # ------------------------------------------------------------------ #
     def with_line_freq(self, line_freq: float) -> FilterConfig:
         """Return a copy with notch freqs set to line_freq and 2nd harmonic."""
         return FilterConfig(
@@ -152,7 +151,6 @@ class OnlineFilterChain:
         self._min_samples: int = 0
         self._build()
 
-    # ------------------------------------------------------------------ #
     def _build(self) -> None:
         """Design all FIR kernels from the current config."""
         cfg = self.config
@@ -195,7 +193,6 @@ class OnlineFilterChain:
             order=order,
         )
 
-    # ------------------------------------------------------------------ #
     def apply(self, eeg: np.ndarray) -> np.ndarray:
         """Apply the filter chain to a (channels, samples) array.
 
@@ -222,7 +219,7 @@ class OnlineFilterChain:
             return eeg
 
         out = eeg.astype(np.float64, copy=True)
-        for kern, label in zip(self._kernels, self._labels):
+        for kern, label in zip(self._kernels, self._labels, strict=False):
             try:
                 for ch in range(out.shape[0]):
                     out[ch] = sp_signal.filtfilt(kern, [1.0], out[ch])
@@ -251,7 +248,6 @@ class FilterChainRegistry:
         self._config: FilterConfig = FilterConfig()  # defaults: 60 Hz notch, LP 55 Hz
         self._chain: OnlineFilterChain = OnlineFilterChain(self._config)
 
-    # ------------------------------------------------------------------ #
     def set_config(self, config: FilterConfig) -> None:
         """Replace the active filter config and rebuild the chain."""
         with self._lock:

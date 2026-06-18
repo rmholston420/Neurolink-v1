@@ -1,14 +1,14 @@
-"""Stage 3b — Multi-type EEG artifact detector and correction router.
+"""Stage 3b -- Multi-type EEG artifact detector and correction router.
 
 This module sits in the pipeline **after** the coarse ArtifactGate
 (Stage 3, epoch-level reject/keep) and **before** the correction stages:
 
-    Stage 1 : online_filter       — FIR high-pass / low-pass / notch
-    Stage 2 : bad_channels        — bad channel detection + spline interp
-    Stage 3 : artifact_gate       — coarse amplitude / IMU / kurtosis gate
-    Stage 3b: artifact_detector   ← THIS MODULE
-    Stage 4 : asr                 — Artifact Subspace Reconstruction
-    Stage 5 : ocular_regression   — Gratton-Coles EOG regression
+    Stage 1 : online_filter       -- FIR high-pass / low-pass / notch
+    Stage 2 : bad_channels        -- bad channel detection + spline interp
+    Stage 3 : artifact_gate       -- coarse amplitude / IMU / kurtosis gate
+    Stage 3b: artifact_detector   <- THIS MODULE
+    Stage 4 : asr                 -- Artifact Subspace Reconstruction
+    Stage 5 : ocular_regression   -- Gratton-Coles EOG regression
 
 Motivation
 ----------
@@ -20,20 +20,20 @@ frequency or amplitude characteristics with the artifact.
 
 This module provides that categorisation layer.  It classifies up to
 7 artifact types per frame, assigns per-type confidence scores, and
-returns a CorrectionPlan that tells Stages 4–5 exactly which corrector
-to invoke — so ocular artifacts go to ocular_regression, burst
+returns a CorrectionPlan that tells Stages 4-5 exactly which corrector
+to invoke -- so ocular artifacts go to ocular_regression, burst
 artifacts go to ASR, line noise goes to the notch filter, and pure
 motion frames are hard-rejected before any corrector wastes CPU on them.
 
 Artifact types detected
 -----------------------
-BLINK           — Frontal high-amplitude slow transient (EOG blink)
-HORIZONTAL_EOG  — Lateral asymmetry between AF7/AF8 (saccade)
-EMG             — High-frequency broadband muscle noise (>30 Hz)
-CARDIAC         — ~1.2 Hz pulse visible at temporal channels
-ELECTRODE_POP   — Abrupt single-channel step / impedance transient
-LINE_NOISE      — Power at the notch-band (50 or 60 Hz ± 2 Hz)
-MOTION          — IMU-corroborated movement (requires accel array)
+BLINK           -- Frontal high-amplitude slow transient (EOG blink)
+HORIZONTAL_EOG  -- Lateral asymmetry between AF7/AF8 (saccade)
+EMG             -- High-frequency broadband muscle noise (>30 Hz)
+CARDIAC         -- ~1.2 Hz pulse visible at temporal channels
+ELECTRODE_POP   -- Abrupt single-channel step / impedance transient
+LINE_NOISE      -- Power at the notch-band (50 or 60 Hz +/- 2 Hz)
+MOTION          -- IMU-corroborated movement (requires accel array)
 
 Detection strategy
 ------------------
@@ -41,7 +41,7 @@ Each type uses a dedicated feature extractor that operates in the
 frequency domain, time domain, or both.  Spatial priors from Muse's
 4-channel montage (TP9=left-temporal, AF7=left-frontal,
 AF8=right-frontal, TP10=right-temporal) are used as discriminating
-constraints — e.g. true eye blinks are largest at AF7/AF8, while
+constraints -- e.g. true eye blinks are largest at AF7/AF8, while
 temporal-only high amplitude is more likely electrode pop or EMG.
 
 All thresholds are sourced from ``neurolink.dsp.artifact_config`` and
@@ -59,7 +59,7 @@ Motion detection note
 ---------------------
 _detect_motion computes RMS on the *AC component* of the accelerometer
 (after subtracting the per-axis mean).  This removes steady-state
-gravity (≈1 g on the Z axis) so that a device sitting still does not
+gravity (~1 g on the Z axis) so that a device sitting still does not
 trigger a false motion rejection.  Only genuine dynamic acceleration
 (shaking, nodding, walking) exceeds the threshold.
 
@@ -73,7 +73,7 @@ Usage
     report = detector.classify(eeg_frame, accel=accel_frame, fs=256.0)
 
     if report.correction_plan.hard_reject:
-        continue  # motion or unrecoverable — skip frame entirely
+        continue  # motion or unrecoverable -- skip frame entirely
 
     if report.correction_plan.apply_ocular_regression:
         eeg_frame = ocular_regression.remove(eeg_frame)
@@ -127,7 +127,7 @@ _CH_TP9 = 0  # left-temporal
 _CH_AF7 = 1  # left-frontal
 _CH_AF8 = 2  # right-frontal
 _CH_TP10 = 3  # right-temporal
-_CH_AUX = 4  # auxiliary — excluded from all EEG analysis
+_CH_AUX = 4  # auxiliary -- excluded from all EEG analysis
 
 _FRONTAL = [_CH_AF7, _CH_AF8]
 _TEMPORAL = [_CH_TP9, _CH_TP10]
@@ -143,10 +143,10 @@ _CH_NAMES = {_CH_TP9: "TP9", _CH_AF7: "AF7", _CH_AF8: "AF8", _CH_TP10: "TP10"}
 class ArtifactType(Enum):
     """Enumeration of detectable artifact categories."""
 
-    BLINK = auto()  # eye-blink — frontal slow transient
-    HORIZONTAL_EOG = auto()  # lateral saccade — AF7 vs AF8 asymmetry
-    EMG = auto()  # muscle burst — broadband high-frequency
-    CARDIAC = auto()  # cardiac pulse — ~1.2 Hz temporal
+    BLINK = auto()  # eye-blink -- frontal slow transient
+    HORIZONTAL_EOG = auto()  # lateral saccade -- AF7 vs AF8 asymmetry
+    EMG = auto()  # muscle burst -- broadband high-frequency
+    CARDIAC = auto()  # cardiac pulse -- ~1.2 Hz temporal
     ELECTRODE_POP = auto()  # electrode pop / impedance transient
     LINE_NOISE = auto()  # 50 / 60 Hz power-line interference
     MOTION = auto()  # IMU-corroborated movement artifact
@@ -167,39 +167,39 @@ class DetectorConfig:
     tick without restarting the process.
     """
 
-    # ── Blink detection ────────────────────────────────────────────────
-    blink_frontal_uv: float = ARTIFACT_BLINK_FRONTAL_UV  # 80 µV at AF7/AF8
+    # Blink detection
+    blink_frontal_uv: float = ARTIFACT_BLINK_FRONTAL_UV  # 80 uV at AF7/AF8
     blink_freq_hz_max: float = BLINK_FREQ_HZ_MAX  # 10.0 Hz
     blink_low_freq_ratio_min: float = BLINK_LOW_FREQ_RATIO_MIN  # 0.50
-    blink_frontal_ratio: float = BLINK_FRONTAL_RATIO  # 2.0×
+    blink_frontal_ratio: float = BLINK_FRONTAL_RATIO  # 2.0x
 
-    # ── Horizontal EOG ─────────────────────────────────────────────────
-    heog_asymmetry_uv: float = ARTIFACT_HEOG_ASYMMETRY_UV  # 30.0 µV
+    # Horizontal EOG
+    heog_asymmetry_uv: float = ARTIFACT_HEOG_ASYMMETRY_UV  # 30.0 uV
     heog_freq_hz_max: float = HEOG_FREQ_HZ_MAX  # 4.0 Hz
 
-    # ── EMG / muscle ───────────────────────────────────────────────────
+    # EMG / muscle
     emg_hf_ratio: float = ARTIFACT_EMG_HF_RATIO  # 0.30
     emg_freq_low_hz: float = EMG_FREQ_LOW_HZ  # 30.0 Hz
     emg_freq_high_hz: float = EMG_FREQ_HIGH_HZ  # 100.0 Hz
 
-    # ── Cardiac pulse ──────────────────────────────────────────────────
+    # Cardiac pulse
     cardiac_freq_low_hz: float = CARDIAC_FREQ_LOW_HZ  # 0.8 Hz
     cardiac_freq_high_hz: float = CARDIAC_FREQ_HIGH_HZ  # 1.8 Hz
-    cardiac_temporal_uv: float = CARDIAC_TEMPORAL_UV  # 15.0 µV
+    cardiac_temporal_uv: float = CARDIAC_TEMPORAL_UV  # 15.0 uV
 
-    # ── Electrode pop ──────────────────────────────────────────────────
-    pop_step_uv: float = ELECTRODE_POP_STEP_UV  # 60.0 µV
+    # Electrode pop
+    pop_step_uv: float = ELECTRODE_POP_STEP_UV  # 60.0 uV
     pop_isolation_ratio: float = ELECTRODE_POP_ISOLATION_RATIO  # 3.0
 
-    # ── Line noise ─────────────────────────────────────────────────────
+    # Line noise
     line_freq_hz: float = ARTIFACT_LINE_FREQ_HZ  # 60.0 Hz
     line_band_hz: float = ARTIFACT_LINE_BAND_HZ  # 2.0 Hz
     line_power_ratio: float = ARTIFACT_LINE_POWER_RATIO  # 0.15
 
-    # ── Motion (IMU) ───────────────────────────────────────────────────
+    # Motion (IMU)
     motion_accel_rms_g: float = ARTIFACT_ACCEL_RMS_G  # 0.15 g
 
-    # ── Global feature switches ────────────────────────────────────────
+    # Global feature switches
     enable_blink: bool = True
     enable_heog: bool = True
     enable_emg: bool = True
@@ -208,7 +208,7 @@ class DetectorConfig:
     enable_line_noise: bool = True
     enable_motion: bool = True
 
-    # ── Minimum samples for frequency-domain features ─────────────────
+    # Minimum samples for frequency-domain features
     min_samples_for_fft: int = 64
 
 
@@ -222,7 +222,7 @@ class ArtifactAnnotation:
     """One detected artifact instance."""
 
     artifact_type: ArtifactType
-    confidence: float  # 0.0–1.0
+    confidence: float  # 0.0-1.0
     channels: list[str]  # channel names where artifact was detected
     feature_value: float  # the raw feature that triggered detection
     feature_name: str  # human-readable feature label
@@ -330,7 +330,7 @@ class ArtifactDetector:
         eeg : np.ndarray
             Shape (n_channels, n_samples).  Channels 0-3 are TP9, AF7,
             AF8, TP10.  Channel 4 (AUX) is ignored if present.
-            Values are in microvolts (µV).
+            Values are in microvolts (uV).
         accel : np.ndarray | None
             Accelerometer data.  Shape (3, n_samples) or (n_samples,).
             Values in *g*.  Required for MOTION detection.
@@ -364,7 +364,7 @@ class ArtifactDetector:
         n_samples = eeg_f64.shape[1]
         has_fft = n_samples >= cfg.min_samples_for_fft
 
-        # ── Pre-compute shared features ──────────────────────────────
+        # Pre-compute shared features
         pk2pk = np.ptp(eeg_f64, axis=1)  # (n_valid_ch,)
         ch_means = np.mean(eeg_f64, axis=1)  # (n_valid_ch,)
 
@@ -373,7 +373,7 @@ class ArtifactDetector:
         if has_fft:
             freqs, psd = self._compute_psd(eeg_f64, fs)
 
-        # ── Run detectors ─────────────────────────────────────────────
+        # Run detectors
         if cfg.enable_motion and accel is not None:
             self._detect_motion(accel, cfg, report)
 
@@ -405,10 +405,10 @@ class ArtifactDetector:
                 if cfg.enable_line_noise:
                     self._detect_line_noise(freqs, psd, valid_eeg_idx, cfg, report)
 
-        # ── Build correction plan ─────────────────────────────────────
+        # Build correction plan
         self._build_correction_plan(report)
 
-        # ── Update stats ──────────────────────────────────────────────
+        # Update stats
         with self._stats_lock:
             self._total_frames += 1
             for art_type in report.artifact_types:
@@ -474,7 +474,7 @@ class ArtifactDetector:
         Returns
         -------
         freqs : (n_freqs,) array
-        psd   : (n_channels, n_freqs) array — power in µV²/Hz
+        psd   : (n_channels, n_freqs) array -- power in uV^2/Hz
         """
         n_samples = eeg_f64.shape[1]
         # nperseg: use at most half the window, minimum 32 samples
@@ -507,7 +507,7 @@ class ArtifactDetector:
 
     @staticmethod
     def _total_power(freqs: np.ndarray, psd: np.ndarray) -> np.ndarray:
-        """Total broadband power per channel (1–100 Hz)."""
+        """Total broadband power per channel (1-100 Hz)."""
         mask = (freqs >= 1.0) & (freqs <= 100.0)
         if not mask.any():
             return np.sum(psd, axis=1)
@@ -533,11 +533,11 @@ class ArtifactDetector:
 
         Criteria (all must pass):
         1. Frontal pk2pk >= blink_frontal_uv
-        2. Frontal low-frequency power ratio (0–blink_freq_hz_max Hz)
+        2. Frontal low-frequency power ratio (0-blink_freq_hz_max Hz)
            >= blink_low_freq_ratio_min (sourced from artifact_config;
            default 0.50).  Prevents broadband EMG bursts that happen
            to be large from being misclassified as blinks.
-        3. Frontal pk2pk >= blink_frontal_ratio × temporal pk2pk
+        3. Frontal pk2pk >= blink_frontal_ratio x temporal pk2pk
            (ensures the large amplitude is genuinely frontal, not global)
         """
         frontal_pk2pk = pk2pk[frontal_idx]
@@ -547,7 +547,7 @@ class ArtifactDetector:
         if max_frontal_pk2pk < cfg.blink_frontal_uv:
             return
 
-        # Criterion 2: spectral — blink energy concentrated below blink_freq_hz_max
+        # Criterion 2: spectral -- blink energy concentrated below blink_freq_hz_max
         frontal_low = float(
             np.mean(self._band_power(freqs, psd[frontal_idx], 0.5, cfg.blink_freq_hz_max))
         )
@@ -558,7 +558,7 @@ class ArtifactDetector:
         if low_freq_ratio < cfg.blink_low_freq_ratio_min:
             return
 
-        # Criterion 3: topographic — frontal much larger than temporal
+        # Criterion 3: topographic -- frontal much larger than temporal
         if temporal_idx:
             temporal_pk2pk = pk2pk[temporal_idx]
             median_temporal = float(np.median(temporal_pk2pk))
@@ -607,7 +607,7 @@ class ArtifactDetector:
         af8_pos = valid_eeg_idx.index(_CH_AF8)
 
         # Low-pass at cfg.heog_freq_hz_max to isolate slow component
-        # (simple mean approximation — avoids heavy FIR in hot path)
+        # (simple mean approximation -- avoids heavy FIR in hot path)
         af7_mean = float(ch_means[af7_pos])
         af8_mean = float(ch_means[af8_pos])
         asymmetry = abs(af7_mean - af8_mean)
@@ -643,8 +643,8 @@ class ArtifactDetector:
     ) -> None:
         """Detect EMG / muscle artifact.
 
-        A high ratio of power in the 30–100 Hz band relative to total
-        broadband power (1–100 Hz) indicates broadband muscle noise.
+        A high ratio of power in the 30-100 Hz band relative to total
+        broadband power (1-100 Hz) indicates broadband muscle noise.
         Evaluated per channel; any channel exceeding the threshold
         triggers a detection.
         """
@@ -694,7 +694,7 @@ class ArtifactDetector:
         proximity to temporal arteries.
 
         Criteria:
-        1. Cardiac-band (0.8–1.8 Hz) power at temporal channels is
+        1. Cardiac-band (0.8-1.8 Hz) power at temporal channels is
            a significant fraction of their total low-frequency power
         2. Temporal pk2pk exceeds cardiac_temporal_uv threshold
         """
@@ -706,7 +706,7 @@ class ArtifactDetector:
         contaminated: list[str] = []
         max_ratio = 0.0
 
-        for li, vi in zip(temporal_idx, [_CH_TP9, _CH_TP10]):
+        for _li, vi in zip(temporal_idx, [_CH_TP9, _CH_TP10], strict=False):
             if vi not in valid_eeg_idx:
                 continue
             vi_pos = valid_eeg_idx.index(vi)
@@ -745,7 +745,7 @@ class ArtifactDetector:
 
         An electrode pop is characterised by:
         1. An abrupt single-sample step change >= pop_step_uv on one channel
-        2. The affected channel's pk2pk is >= pop_isolation_ratio × median
+        2. The affected channel's pk2pk is >= pop_isolation_ratio x median
            of all other channels (spatially isolated, not global)
         """
         n_samples = eeg_f64.shape[1]
@@ -798,7 +798,7 @@ class ArtifactDetector:
     ) -> None:
         """Detect power-line interference (50 or 60 Hz).
 
-        Measures the fraction of broadband power (1–100 Hz) concentrated
+        Measures the fraction of broadband power (1-100 Hz) concentrated
         in a narrow band around the line frequency.  Because Stage 1
         (online_filter) should already attenuate line noise, a high ratio
         here indicates either filter bypass or extremely strong coupling.
@@ -852,7 +852,7 @@ class ArtifactDetector:
         This is the most reliable motion detector because it uses a
         direct physical measurement rather than inferring motion from
         the EEG signal itself.  A detected MOTION artifact sets
-        hard_reject=True in the CorrectionPlan — the frame is
+        hard_reject=True in the CorrectionPlan -- the frame is
         discarded before any corrector is invoked.
         """
         accel_arr = np.asarray(accel, dtype=np.float64)
@@ -889,15 +889,15 @@ class ArtifactDetector:
         """Map detected artifact types to corrector routing flags.
 
         Routing logic (applied in priority order):
-        - MOTION          → hard_reject (already set by _detect_motion)
-        - ELECTRODE_POP   → hard_reject (spatially isolated, uncorrectable)
-        - BLINK / H_EOG   → apply_ocular_regression
-        - EMG             → apply_asr (broadband, ASR handles it best)
-        - CARDIAC         → apply_cardiac_regression (future) + apply_asr
-        - LINE_NOISE      → apply_notch
+        - MOTION          -> hard_reject (already set by _detect_motion)
+        - ELECTRODE_POP   -> hard_reject (spatially isolated, uncorrectable)
+        - BLINK / H_EOG   -> apply_ocular_regression
+        - EMG             -> apply_asr (broadband, ASR handles it best)
+        - CARDIAC         -> apply_cardiac_regression (future) + apply_asr
+        - LINE_NOISE      -> apply_notch
         """
         if report.correction_plan.hard_reject:
-            return  # already decided — no further routing
+            return  # already decided -- no further routing
 
         types = report.artifact_types
 

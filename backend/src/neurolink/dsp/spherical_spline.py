@@ -1,4 +1,4 @@
-"""Stage 2 — Spherical spline interpolation for bad EEG channels.
+"""Stage 2 -- Spherical spline interpolation for bad EEG channels.
 
 Implements the Perrin et al. (1989) spherical spline method used by
 MNE-Python's ``raw.interpolate_bads()``.  This is a pure-NumPy
@@ -16,7 +16,7 @@ Positions are approximate standard-10-20 directions projected onto
 the unit sphere.  The Muse has four EEG electrodes; AUX is a
 non-cortical reference and is excluded from the spline.
 
-Channel index → name → (x, y, z) unit vector
+Channel index -> name -> (x, y, z) unit vector
     0  TP9   left  posterior temporal
     1  AF7   left  prefrontal
     2  AF8   right prefrontal
@@ -25,7 +25,7 @@ Channel index → name → (x, y, z) unit vector
 
 Legendre series
 ---------------
-Truncated at degree N=7 (Perrin recommends 4–10 for sparse arrays;
+Truncated at degree N=7 (Perrin recommends 4-10 for sparse arrays;
 7 balances smoothness and accuracy for 4 sites).  The regularisation
 parameter lambda=1e-5 matches MNE defaults.
 """
@@ -37,14 +37,12 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Electrode positions — approximate 10-20 unit-sphere vectors for Muse S
+# Electrode positions -- approximate 10-20 unit-sphere vectors for Muse S
 # Computed as: pos / ||pos|| from standard 10-20 Cartesian coordinates.
-# TP9  ≈ T9  (left posterior temporal)
-# AF7  ≈ AF7 (left anterior prefrontal)
-# AF8  ≈ AF8 (right anterior prefrontal)
-# TP10 ≈ T10 (right posterior temporal)
-# ──────────────────────────────────────────────────────────────────────────────
+# TP9  ~= T9  (left posterior temporal)
+# AF7  ~= AF7 (left anterior prefrontal)
+# AF8  ~= AF8 (right anterior prefrontal)
+# TP10 ~= T10 (right posterior temporal)
 _MUSE_POSITIONS: dict[str, np.ndarray] = {
     "TP9": np.array([-0.5878, -0.3090, 0.7431], dtype=np.float64),
     "AF7": np.array([-0.5440, 0.6550, 0.5240], dtype=np.float64),
@@ -57,11 +55,6 @@ _N_LEGENDRE: int = 7  # Legendre series truncation degree
 _LAMBDA: float = 1e-5  # Tikhonov regularisation (MNE default)
 _EEG_CHANNELS: list[str] = ["TP9", "AF7", "AF8", "TP10"]
 _CHANNEL_IDX: dict[str, int] = {"TP9": 0, "AF7": 1, "AF8": 2, "TP10": 3, "AUX": 4}
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Legendre polynomial helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def _g_function(cos_dist: np.ndarray, n_legendre: int = _N_LEGENDRE) -> np.ndarray:
@@ -93,7 +86,7 @@ def _g_function(cos_dist: np.ndarray, n_legendre: int = _N_LEGENDRE) -> np.ndarr
 
 
 def _cosine_matrix(positions: np.ndarray) -> np.ndarray:
-    """Compute N×N cosine-distance matrix for an array of unit vectors.
+    """Compute NxN cosine-distance matrix for an array of unit vectors.
 
     Args:
         positions: (N, 3) array of unit-sphere coordinates.
@@ -103,11 +96,6 @@ def _cosine_matrix(positions: np.ndarray) -> np.ndarray:
     """
     # Clamp to [-1, 1] to guard against floating-point overshoot in acos
     return np.clip(positions @ positions.T, -1.0, 1.0)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Public interpolation function
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def interpolate_bad_channels(
@@ -147,7 +135,7 @@ def interpolate_bad_channels(
 
     out = eeg.copy()
 
-    # ── Fallback: not enough good channels for a spline ─────────────────────
+    # Fallback: not enough good channels for a spline
     if len(good_eeg) < 2:
         log.warning(
             "stage2_spline_fallback_mean",
@@ -164,7 +152,7 @@ def interpolate_bad_channels(
             out[_CHANNEL_IDX[ch]] = mean_sig
         return out
 
-    # ── Build spline system ──────────────────────────────────────────────────
+    # Build spline system
     # Use only good-channel positions to solve for spline coefficients,
     # then evaluate at bad-channel positions.
     n_good = len(good_eeg)
@@ -175,14 +163,13 @@ def interpolate_bad_channels(
     G_good = _g_function(cos_good)  # (n_good, n_good)
 
     # Perrin 1989 augmented system:
-    # [ G+λI   1 ] [ c ] = [ v ]
-    # [   1^T   0 ] [ d ]   [ 0 ]
+    # [ G+lI   1 ] [ c ] = [ v ]
+    # [   1^T  0 ] [ d ]   [ 0 ]
     size = n_good + 1
     A = np.zeros((size, size), dtype=np.float64)
     A[:n_good, :n_good] = G_good + _LAMBDA * np.eye(n_good)
     A[:n_good, n_good] = 1.0
     A[n_good, :n_good] = 1.0
-    # A[n_good, n_good] stays 0
 
     # Right-hand side: good-channel signal (n_good, n_samples)
     good_idx = [_CHANNEL_IDX[ch] for ch in good_eeg]
@@ -203,7 +190,7 @@ def interpolate_bad_channels(
     c = coefs[:n_good]  # spline weights  (n_good, n_samples)
     d = coefs[n_good]  # constant term   (n_samples,)
 
-    # ── Evaluate spline at bad-channel positions ──────────────────────────
+    # Evaluate spline at bad-channel positions
     for bad_ch in bad_eeg:
         bad_pos = _MUSE_POSITIONS[bad_ch]  # (3,)
         # Cosine distances from bad electrode to all good electrodes

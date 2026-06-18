@@ -1,4 +1,4 @@
-"""Stage 0 — IMU Motion Gate.
+"""Stage 0 -- IMU Motion Gate.
 
 Records accelerometer/gyroscope as a parallel channel and flags EEG segments
 where motion magnitude exceeds a threshold before any neural analysis.
@@ -26,9 +26,9 @@ import numpy as np
 
 from neurolink.hardware.base import EEGSample
 
-# Default threshold: 0.15 g  (standing-still baseline is ~0.01–0.05 g)
+# Default threshold: 0.15 g  (standing-still baseline is ~0.01-0.05 g)
 _DEFAULT_THRESHOLD_G: float = 0.15
-# Window length in IMU samples (Muse IMU is ~52 Hz; 26 samples ≈ 500 ms)
+# Window length in IMU samples (Muse IMU is ~52 Hz; 26 samples ~= 500 ms)
 _DEFAULT_WINDOW: int = 26
 
 
@@ -51,10 +51,6 @@ class IMUGate:
         self._last_rms: float = 0.0
         self._flagged: bool = False
         self._last_ts: float = 0.0
-
-    # ------------------------------------------------------------------
-    # Primary entry: called by Stage0Guard.gate_sample()
-    # ------------------------------------------------------------------
 
     def flag_segment(self, sample: EEGSample) -> EEGSample:
         """Evaluate motion in *sample* and annotate extra{} in-place.
@@ -79,15 +75,11 @@ class IMUGate:
         sample.extra["motion_ts"] = self._last_ts
         return sample
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _compute_rms(accel_buffer: list[list[float]]) -> float:
         """Compute scalar RMS acceleration magnitude for one buffer snapshot.
 
-        accel_buffer shape: (3, N)  — rows are [ax, ay, az].
+        accel_buffer shape: (3, N)  -- rows are [ax, ay, az].
         Gravity is removed by subtracting the mean of the z-axis.
         """
         ax = np.array(accel_buffer[0], dtype=np.float32)
@@ -100,10 +92,6 @@ class IMUGate:
         # Vector magnitude sample-wise, then RMS
         mag = np.sqrt(ax**2 + ay**2 + az_demeaned**2)
         return float(np.sqrt(np.mean(mag**2)))
-
-    # ------------------------------------------------------------------
-    # Accessors
-    # ------------------------------------------------------------------
 
     @property
     def is_flagged(self) -> bool:

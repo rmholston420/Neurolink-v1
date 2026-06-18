@@ -1,4 +1,4 @@
-"""Stage 3 — Artifact gate REST endpoints.
+"""Stage 3 -- Artifact gate REST endpoints.
 
 Mounted at /api/v1/stage3 by main.py.
 
@@ -8,15 +8,6 @@ GET  /config   Return the active GateConfig thresholds.
 POST /config   Replace/merge thresholds (all fields optional).
 GET  /stats    Return running frame counters and rejection rate.
 POST /reset    Reset frame counters (call at session start).
-
-Design notes
-------------
-* The gate singleton lives on ``app.state.artifact_gate`` (injected by
-  main.py lifespan, identical pattern to ``bad_channel_detector``).
-* All threshold defaults come from ``artifact_config.py``; the router
-  never hard-codes numerics.
-* Config changes take effect on the very next EEGPump tick — no restart
-  required, mirrors the pattern in filters.py / stage2.py.
 """
 
 from __future__ import annotations
@@ -45,12 +36,12 @@ router = APIRouter(prefix="/stage3", tags=["Stage3"])
 
 
 class GateConfigSchema(BaseModel):
-    """All fields optional on POST — send only what you want to change."""
+    """All fields optional on POST -- send only what you want to change."""
 
     pk2pk_uv: float | None = Field(
         None,
         description=(
-            f"Peak-to-peak amplitude threshold (µV). "
+            f"Peak-to-peak amplitude threshold (uV). "
             f"Default={ARTIFACT_PK2PK_UV}. "
             "Frames with any EEG channel exceeding this are amplitude-rejected."
         ),
@@ -97,12 +88,12 @@ class GateStatsResponse(BaseModel):
     total_frames: int
     rejected_frames: int
     rejection_rate: float = Field(
-        ..., description="Fraction of frames rejected since last reset (0–1)."
+        ..., description="Fraction of frames rejected since last reset (0-1)."
     )
 
 
 # ---------------------------------------------------------------------------
-# Dependency — fetch gate from app.state
+# Dependency -- fetch gate from app.state
 # ---------------------------------------------------------------------------
 
 
@@ -111,7 +102,7 @@ def _get_gate(request: Request) -> ArtifactGate:
     if gate is None:
         raise HTTPException(
             status_code=503,
-            detail="Stage3 artifact gate not initialised — is the EEGPump running?",
+            detail="Stage3 artifact gate not initialised -- is the EEGPump running?",
         )
     return gate
 
@@ -125,8 +116,6 @@ GateDep = Annotated[ArtifactGate, Depends(_get_gate)]
 
 
 def _cfg_to_response(cfg: GateConfig) -> GateConfigResponse:
-    # cfg.pk2pk_uv is float | None; __post_init__ always sets it to a float,
-    # but mypy can't prove that, so we provide a safe fallback.
     pk2pk_uv: float = cfg.pk2pk_uv if cfg.pk2pk_uv is not None else ARTIFACT_PK2PK_UV
     return GateConfigResponse(
         pk2pk_uv=pk2pk_uv,
@@ -154,15 +143,10 @@ async def update_config(
     gate: GateDep,
     body: Annotated[GateConfigSchema, Body()],
 ) -> GateConfigResponse:
-    """Merge supplied thresholds into the live config.
-
-    Send only the fields you want to change; omit the rest.
-    Changes take effect on the next EEGPump tick.
-    """
+    """Merge supplied thresholds into the live config."""
     current = gate.get_config()
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
-        # Nothing to change — return current state unchanged
         return _cfg_to_response(current)
 
     new_cfg = GateConfig(

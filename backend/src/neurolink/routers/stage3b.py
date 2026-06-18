@@ -1,4 +1,4 @@
-"""Stage 3b — Artifact detector REST endpoints.
+"""Stage 3b -- Artifact detector REST endpoints.
 
 Mounted at /api/v1/stage3b by main.py.
 
@@ -12,13 +12,13 @@ POST /reset    Reset all counters (call at session start).
 Design notes
 ------------
 * The detector singleton lives on ``app.state.artifact_detector``
-  (injected by main.py lifespan — identical pattern to the Stage 3
+  (injected by main.py lifespan -- identical pattern to the Stage 3
   artifact_gate and Stage 2 bad_channel_detector).
 * All threshold defaults come from DetectorConfig; the router never
   hard-codes numerics.
-* Config changes take effect on the very next EEGPump tick — no
+* Config changes take effect on the very next EEGPump tick -- no
   restart required, mirrors the pattern in stage3.py / filters.py.
-* PUT /config is used instead of POST to signal idempotency —
+* PUT /config is used instead of POST to signal idempotency --
   sending the same body twice produces the same result.
 """
 
@@ -47,13 +47,13 @@ router = APIRouter(prefix="/stage3b", tags=["Stage3b"])
 
 
 class DetectorConfigSchema(BaseModel):
-    """All fields optional on PUT — send only what you want to change."""
+    """All fields optional on PUT -- send only what you want to change."""
 
     # Blink
     blink_frontal_uv: float | None = Field(
         None,
         description=(
-            f"Frontal pk2pk threshold for blink detection (µV). "
+            f"Frontal pk2pk threshold for blink detection (uV). "
             f"Default={round(ARTIFACT_PK2PK_UV * 0.80, 1)}."
         ),
     )
@@ -69,7 +69,7 @@ class DetectorConfigSchema(BaseModel):
     # Horizontal EOG
     heog_asymmetry_uv: float | None = Field(
         None,
-        description="|AF7 mean − AF8 mean| threshold for saccade detection (µV). Default=30.0.",
+        description="|AF7 mean - AF8 mean| threshold for saccade detection (uV). Default=30.0.",
     )
     heog_freq_hz_max: float | None = Field(
         None,
@@ -79,7 +79,7 @@ class DetectorConfigSchema(BaseModel):
     # EMG
     emg_hf_ratio: float | None = Field(
         None,
-        description="HF (30–100 Hz) / broadband power ratio threshold for muscle noise. Default=0.30.",
+        description="HF (30-100 Hz) / broadband power ratio threshold for muscle noise. Default=0.30.",
     )
     emg_freq_low_hz: float | None = Field(
         None,
@@ -101,13 +101,13 @@ class DetectorConfigSchema(BaseModel):
     )
     cardiac_temporal_uv: float | None = Field(
         None,
-        description="pk2pk amplitude threshold at temporal channels for cardiac detection (µV). Default=15.0.",
+        description="pk2pk amplitude threshold at temporal channels for cardiac detection (uV). Default=15.0.",
     )
 
     # Electrode pop
     pop_step_uv: float | None = Field(
         None,
-        description="Single-sample step-change threshold for electrode pop detection (µV). Default=60.0.",
+        description="Single-sample step-change threshold for electrode pop detection (uV). Default=60.0.",
     )
     pop_isolation_ratio: float | None = Field(
         None,
@@ -124,7 +124,7 @@ class DetectorConfigSchema(BaseModel):
     )
     line_band_hz: float | None = Field(
         None,
-        description="±bandwidth around line_freq_hz used to measure line-noise power (Hz). Default=2.0.",
+        description="+/-bandwidth around line_freq_hz used to measure line-noise power (Hz). Default=2.0.",
     )
     line_power_ratio: float | None = Field(
         None,
@@ -181,7 +181,7 @@ class DetectorConfigResponse(BaseModel):
 class ArtifactTypeStats(BaseModel):
     count: int
     rate: float = Field(
-        ..., description="Fraction of frames where this artifact type was detected (0–1)."
+        ..., description="Fraction of frames where this artifact type was detected (0-1)."
     )
 
 
@@ -198,7 +198,7 @@ class DetectorStatsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Dependency — fetch detector from app.state
+# Dependency -- fetch detector from app.state
 # ---------------------------------------------------------------------------
 
 
@@ -207,7 +207,7 @@ def _get_detector(request: Request) -> ArtifactDetector:
     if detector is None:
         raise HTTPException(
             status_code=503,
-            detail=("Stage3b artifact detector not initialised — is the EEGPump running?"),
+            detail=("Stage3b artifact detector not initialised -- is the EEGPump running?"),
         )
     return detector
 
@@ -272,7 +272,7 @@ def _stats_to_response(raw: dict) -> DetectorStatsResponse:
 async def get_config(detector: DetectorDep) -> DetectorConfigResponse:
     """Return the current Stage 3b artifact-detector thresholds.
 
-    All values are live — changes made via PUT /config are reflected
+    All values are live -- changes made via PUT /config are reflected
     here immediately.
     """
     return _cfg_to_response(detector.get_config())
@@ -290,16 +290,7 @@ async def update_config(
     """Merge supplied thresholds into the live detector config.
 
     Send only the fields you want to change; omit the rest.
-    Changes take effect on the next EEGPump tick — no restart required.
-
-    Typical use-cases
-    -----------------
-    * Raise ``blink_frontal_uv`` for a subject who naturally has large
-      frontal alpha to reduce false-positive blink detections.
-    * Lower ``emg_hf_ratio`` in a noisy environment to be more
-      aggressive about rejecting muscle contamination.
-    * Disable ``enable_cardiac`` if no temporal channels are connected.
-    * Switch ``line_freq_hz`` to 50.0 when deploying in Europe / Asia.
+    Changes take effect on the next EEGPump tick -- no restart required.
     """
     current = detector.get_config()
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -343,13 +334,7 @@ async def update_config(
     summary="Get per-type artifact detection stats",
 )
 async def get_stats(detector: DetectorDep) -> DetectorStatsResponse:
-    """Return per-type detection counters and rates since last reset.
-
-    ``rate`` for each type is ``count / total_frames`` rounded to 4
-    decimal places.  A high BLINK rate (> 0.05) during a session
-    suggests the subject is fatigued or the blink threshold is too
-    low.  A high EMG rate suggests jaw clenching or cable noise.
-    """
+    """Return per-type detection counters and rates since last reset."""
     return _stats_to_response(detector.get_stats())
 
 
@@ -358,11 +343,7 @@ async def get_stats(detector: DetectorDep) -> DetectorStatsResponse:
     summary="Reset artifact detection counters",
 )
 async def reset_stats(detector: DetectorDep) -> dict:
-    """Reset all per-type counters to zero.
-
-    Call this at the start of each session so that GET /stats
-    reflects activity for the current session only.
-    """
+    """Reset all per-type counters to zero."""
     detector.reset_stats()
     log.info("stage3b_stats_reset_via_api")
     return {"ok": True, "message": "Stage3b artifact detector counters reset"}
