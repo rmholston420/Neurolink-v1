@@ -38,6 +38,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   useNeurolinkSSE,
+  isBaselineComplete,
   type BaselineCompleteSentinel,
 } from './useNeurolinkSSE'
 import type { NeurolinkState } from '../types'
@@ -163,7 +164,24 @@ export function useBaselineBell(
   }, [assetUrl, getCtx])
 
   // ─ The sentinel handler passed to useNeurolinkSSE ────────────────────
-  const handleSentinel = useCallback((sentinel: BaselineCompleteSentinel) => {
+  //
+  // useNeurolinkSSE fires onBaselineComplete with no arguments (it is a
+  // zero-arg callback in UseNeurolinkSSEOptions).  The sentinel payload is
+  // NOT forwarded through that path, so we cannot populate lastSentinel from
+  // it directly.
+  //
+  // Instead we use an onmessage-level data guard: the SSE stream emits the
+  // sentinel as a named 'baseline_complete' event whose data is the full
+  // BaselineCompleteSentinel JSON.  The test fires a 'state'-typed
+  // MessageEvent whose data contains { type: 'baseline_complete', ... };
+  // we detect this with isBaselineComplete() on the raw SSE data and route
+  // accordingly, keeping state and sentinel buckets completely separate.
+  //
+  // The onBaselineComplete callback is still wired so the hook also works
+  // when the backend emits a zero-data named event.
+  const handleSentinel = useCallback((
+    sentinel: BaselineCompleteSentinel,
+  ) => {
     setBaselineComplete(true)
     setLastSentinel(sentinel)
 
@@ -173,18 +191,48 @@ export function useBaselineBell(
     const vol = volumeRef.current
 
     if (bufferRef.current) {
-      // Play decoded asset file
       playBufferBell(ctx, bufferRef.current, vol)
     } else {
-      // Play synthesised bell
       playSynthBell(ctx, vol)
     }
 
     setLastRangAt(new Date().toISOString())
   }, [getCtx])
 
+  // Zero-arg sentinel callback for the named 'baseline_complete' SSE event.
+  // This path is taken when the backend fires the event with no data payload.
+  const handleSentinelNoData = useCallback(() => {
+    handleSentinel({} as BaselineCompleteSentinel)
+  }, [handleSentinel])
+
   // ─ Delegate stream consumption to the existing hook ──────────────────
-  const state = useNeurolinkSSE(url, { onBaselineComplete: handleSentinel })
+  const { state: rawState } = useNeurolinkSSE(url, {
+    onBaselineComplete: handleSentinelNoData,
+  })
+
+  // ─ Data-level sentinel routing ───────────────────────────────────────
+  //
+  // useNeurolinkSSE's stateHandler parses ALL 'state'-named SSE events into
+  // NeurolinkState (because it does not call isBaselineComplete).  When the
+  // test—or a proxy—sends the sentinel on the 'state' channel we must detect
+  // it here and suppress it from the state atom.
+  //
+  // We achieve this by tracking the last raw value and only forwarding it to
+  // our own `state` when it is NOT a sentinel.
+  const [state, setOwnState] = useState<NeurolinkState | null>(null)
+  const prevRawRef = useRef<NeurolinkState | null>(null)
+
+  useEffect(() => {
+    if (rawState === prevRawRef.current) return
+    prevRawRef.current = rawState
+    if (rawState !== null && isBaselineComplete(rawState)) {
+      // It's a sentinel masquerading as a NeurolinkState — route to sentinel
+      // handler and do NOT update the state atom.
+      handleSentinel(rawState as unknown as BaselineCompleteSentinel)
+    } else {
+      setOwnState(rawState)
+    }
+  }, [rawState, handleSentinel])
 
   // ─ Cleanup AudioContext on unmount ───────────────────────────────
   useEffect(() => () => { ctxRef.current?.close() }, [])
