@@ -70,13 +70,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import structlog
 
-from neurolink.dsp.artifact_detector import ArtifactDetector, CorrectionPlan
+from neurolink.dsp import filter_toggles as _filter_toggles_module
+from neurolink.dsp.artifact_detector import ArtifactDetector
 from neurolink.dsp.artifact_gate import ArtifactGate
 from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.bad_channels import BadChannelDetector
 from neurolink.dsp.baseline import BaselineRecorder
 from neurolink.dsp.cardiac_regression import CardiacRegressor
-from neurolink.dsp import filter_toggles as _filter_toggles_module
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
@@ -85,7 +85,6 @@ from neurolink.models.eeg import (
     ArtifactAnnotationPayload,
     ArtifactCorrectionPlanPayload,
     BandPowers,
-    BreathingPayload,
     IMUPayload,
     IngestPayload,
 )
@@ -106,9 +105,10 @@ _EEG_SAMPLES_WINDOW: int = 64
 # Module-level stub classes
 # ---------------------------------------------------------------------------
 
+
 class _BadChannelsStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def detect(self, eeg: np.ndarray) -> list:
         if self._pump is not None:
@@ -119,7 +119,7 @@ class _BadChannelsStub:
 
 class _SphericalSplineStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def interpolate(self, eeg: np.ndarray, bad: list, **kw) -> np.ndarray:
         return interpolate_bad_channels(eeg, bad)
@@ -127,7 +127,7 @@ class _SphericalSplineStub:
 
 class _ASRStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def apply(self, eeg: np.ndarray, **kw) -> np.ndarray:
         if self._pump is not None:
@@ -137,7 +137,7 @@ class _ASRStub:
 
 class _OcularRegressionStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def apply(self, eeg: np.ndarray, **kw) -> np.ndarray:
         if self._pump is not None:
@@ -147,7 +147,7 @@ class _OcularRegressionStub:
 
 class _BaselineStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def apply(self, eeg: np.ndarray, **kw) -> np.ndarray:
         if self._pump is not None:
@@ -157,7 +157,7 @@ class _BaselineStub:
 
 class _CardiacRegressionStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def apply(self, eeg: np.ndarray, ibis=None, **kw) -> np.ndarray:
         if self._pump is not None and ibis:
@@ -167,16 +167,17 @@ class _CardiacRegressionStub:
 
 class _BandpowerStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def compute(self, eeg: np.ndarray, fs: float = _EEG_FS, **kw) -> dict:
         from neurolink.dsp.bandpower import compute_band_powers_from_buffer
+
         return compute_band_powers_from_buffer(eeg, fs=fs)
 
 
 class _ClassifiersStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def run(self, bands, **kw) -> dict:
         return {}
@@ -184,7 +185,7 @@ class _ClassifiersStub:
 
 class _ImpedanceStub:
     def __init__(self):
-        self._pump: "EEGPump | None" = None
+        self._pump: EEGPump | None = None
 
     def check(self) -> bool:
         if self._pump is not None and self._pump._stage0 is not None:
@@ -210,7 +211,7 @@ impedance = _ImpedanceStub()
 filter_toggles = _FilterTogglesStub()
 
 
-def _wire_stubs(pump: "EEGPump") -> None:
+def _wire_stubs(pump: EEGPump) -> None:
     """Inject the pump instance into every stub so they forward correctly."""
     bad_channels._pump = pump
     spherical_spline._pump = pump
@@ -231,7 +232,7 @@ class EEGPump:
         adapter: HardwareAdapter,
         hub,
         publish_hz: float = 4.0,
-        stage0_guard: "Stage0Guard | None" = None,
+        stage0_guard: Stage0Guard | None = None,
         stage1_registry: FilterChainRegistry | None = None,
         bad_channel_detector: BadChannelDetector | None = None,
         artifact_gate: ArtifactGate | None = None,
@@ -346,9 +347,7 @@ class EEGPump:
         self._hub.update(payload)
 
     async def _build_payload(self, sample: EEGSample) -> IngestPayload:
-        from neurolink.dsp.bandpower import compute_band_powers_from_buffer
         from neurolink.dsp.breathing import compute_breathing
-        from neurolink.dsp.derived_eeg import derived_eeg
         from neurolink.dsp.imu import head_orientation
         from neurolink.dsp.ppg import compute_ppg
 
@@ -364,9 +363,7 @@ class EEGPump:
         if sample.eeg_buffer:
             _min_len = min(len(b) for b in sample.eeg_buffer)
             if _min_len >= 2:
-                eeg_arr = np.array(
-                    [b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32
-                )
+                eeg_arr = np.array([b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32)
 
         accel_arr: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
@@ -411,14 +408,8 @@ class EEGPump:
         _plan_hard_reject: bool = False
         _plan_apply_cardiac: bool = True
 
-        if (
-            eeg_arr is not None
-            and not artifact_rejected
-            and toggles.stage3b_artifact_detector
-        ):
-            detection_report = self._stage3b.classify(
-                eeg_arr, accel=accel_arr, fs=_EEG_FS
-            )
+        if eeg_arr is not None and not artifact_rejected and toggles.stage3b_artifact_detector:
+            detection_report = self._stage3b.classify(eeg_arr, accel=accel_arr, fs=_EEG_FS)
             plan = detection_report.correction_plan
             artifact_annotations = [
                 ArtifactAnnotationPayload(
@@ -457,9 +448,7 @@ class EEGPump:
         if _plan_hard_reject:
             artifact_rejected = True
             if not artifact_reasons and detection_report is not None:
-                artifact_reasons = [
-                    f"3b:{a.artifact_type}" for a in detection_report.annotations
-                ]
+                artifact_reasons = [f"3b:{a.artifact_type}" for a in detection_report.annotations]
 
         # ── Stage 4b — baseline (phase-gate shim) ─────────────────────
         if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
@@ -468,12 +457,7 @@ class EEGPump:
         # ── Stage 4 — ASR burst reconstruction ─────────────────────────
         # Note: warmup guard removed; ASR is gated by toggle + _plan_apply_asr only.
         # BaselineRecorder.process() already handles its own warmup phase internally.
-        if (
-            eeg_arr is not None
-            and not artifact_rejected
-            and toggles.stage4_asr
-            and _plan_apply_asr
-        ):
+        if eeg_arr is not None and not artifact_rejected and toggles.stage4_asr and _plan_apply_asr:
             eeg_arr = asr.apply(eeg_arr)
 
         # ── Stage 5 — ocular regression ───────────────────────────────
@@ -540,6 +524,7 @@ class EEGPump:
         fmt: float | None = None
         if eeg_arr is not None and eeg_arr.shape[1] >= 2 and not artifact_rejected:
             from neurolink.dsp.derived_eeg import derived_eeg as _derived
+
             derived = _derived(eeg_arr, fs=_EEG_FS)
             faa = derived.get("faa")
             fmt = derived.get("fmt")

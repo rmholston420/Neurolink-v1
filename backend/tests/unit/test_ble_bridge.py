@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from neurolink.ble_bridge import BLEBridge
 
@@ -22,9 +20,11 @@ def _make_adapter(connected: bool = True):
 async def test_start_creates_task():
     adapter = _make_adapter(connected=True)
     bridge = BLEBridge(adapter)
+
     # Patch _supervisor so it exits immediately
     async def _noop():
         pass
+
     bridge._supervisor = _noop
     await bridge.start()
     assert bridge._task is not None

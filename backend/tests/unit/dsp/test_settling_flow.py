@@ -20,12 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from unittest.mock import MagicMock, call
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Fake acquisition guard — mirrors pump Stage 0 condition checks
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _SensorConditions:
@@ -68,9 +66,12 @@ def _run_tick(cond: _SensorConditions, hub) -> bool:
 # Reason code selection
 # ---------------------------------------------------------------------------
 
+
 class TestReasonCodeSelection:
     def test_impedance_unstable_when_impedance_not_ok(self):
-        assert _acquisition_guard_reason(_SensorConditions(impedance_ok=False)) == "impedance_unstable"
+        assert (
+            _acquisition_guard_reason(_SensorConditions(impedance_ok=False)) == "impedance_unstable"
+        )
 
     def test_motion_settling_when_motion_not_ok(self):
         assert _acquisition_guard_reason(_SensorConditions(motion_ok=False)) == "motion_settling"
@@ -101,6 +102,7 @@ class TestReasonCodeSelection:
 # ---------------------------------------------------------------------------
 # Tick behaviour — settling path
 # ---------------------------------------------------------------------------
+
 
 class TestTickSettlingPath:
     def test_emit_settling_called_on_impedance_fail(self):
@@ -138,6 +140,7 @@ class TestTickSettlingPath:
 # No state update on settling frame
 # ---------------------------------------------------------------------------
 
+
 class TestNoStateUpdateOnSettling:
     def test_hub_update_not_called_on_settling(self):
         hub = MagicMock()
@@ -157,6 +160,7 @@ class TestNoStateUpdateOnSettling:
 # Repeated settling ticks accumulate
 # ---------------------------------------------------------------------------
 
+
 class TestRepeatedSettlingTicks:
     def test_settling_called_once_per_failing_tick(self):
         hub = MagicMock()
@@ -175,9 +179,9 @@ class TestRepeatedSettlingTicks:
         hub = MagicMock()
         conditions = [
             _SensorConditions(impedance_ok=False),  # settling
-            _SensorConditions(),                    # clean
-            _SensorConditions(motion_ok=False),      # settling
-            _SensorConditions(),                    # clean
+            _SensorConditions(),  # clean
+            _SensorConditions(motion_ok=False),  # settling
+            _SensorConditions(),  # clean
         ]
         results = [_run_tick(c, hub) for c in conditions]
         assert results == [False, True, False, True]

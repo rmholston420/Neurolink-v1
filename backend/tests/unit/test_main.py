@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 def test_create_app_returns_fastapi_app(app):
     from fastapi import FastAPI
+
     assert isinstance(app, FastAPI.__class__) or hasattr(app, "routes")
 
 

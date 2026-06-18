@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Literal, Sequence
+from typing import Literal
 
 import numpy as np
 import structlog
@@ -65,9 +65,9 @@ ElectrodeType = Literal["dry", "wet", "semi"]
 # Dry electrodes have higher contact impedance and produce more mechanical
 # noise, so a tighter gate reduces false-clean frames during sweat transients.
 _ELECTRODE_PK2PK_DEFAULTS: dict[str, float] = {
-    "dry":  75.0,            # Muse-class wearables — dry gel or foam contact
-    "semi": 90.0,            # hybrid (saline-tip); intermediate noise floor
-    "wet":  ARTIFACT_PK2PK_UV,  # 100 µV — traditional gel; EEGLAB default
+    "dry": 75.0,  # Muse-class wearables — dry gel or foam contact
+    "semi": 90.0,  # hybrid (saline-tip); intermediate noise floor
+    "wet": ARTIFACT_PK2PK_UV,  # 100 µV — traditional gel; EEGLAB default
 }
 
 
@@ -90,9 +90,7 @@ def _detect_electrode_type() -> ElectrodeType:
         )
         electrode_type: ElectrodeType = getattr(adapter, "electrode_type", "dry")
         if electrode_type not in _ELECTRODE_PK2PK_DEFAULTS:
-            log.warning(
-                "unknown_electrode_type_fallback", electrode_type=electrode_type
-            )
+            log.warning("unknown_electrode_type_fallback", electrode_type=electrode_type)
             return "dry"
         return electrode_type  # type: ignore[return-value]
     except Exception as exc:
@@ -217,8 +215,7 @@ class ArtifactGate:
             if bad_mask.any():
                 bad_names = [_CH_NAMES[i] for i in np.where(bad_mask)[0]]
                 decision.add_reason(
-                    f"amplitude>{cfg.pk2pk_uv:.0f}uV "
-                    f"ch={bad_names} electrode={cfg.electrode_type}"
+                    f"amplitude>{cfg.pk2pk_uv:.0f}uV ch={bad_names} electrode={cfg.electrode_type}"
                 )
                 log.debug(
                     "stage3_amplitude_reject",
@@ -237,7 +234,7 @@ class ArtifactGate:
                 accel_arr = accel_arr[np.newaxis, :]
             # Subtract per-axis mean to remove DC / gravity component.
             accel_ac = accel_arr - accel_arr.mean(axis=1, keepdims=True)
-            rms = float(np.sqrt(np.mean(accel_ac ** 2)))
+            rms = float(np.sqrt(np.mean(accel_ac**2)))
             if rms > cfg.accel_rms_g:
                 decision.add_reason(f"imu_rms_ac={rms:.3f}g>{cfg.accel_rms_g}g")
                 log.debug("stage3_imu_reject", rms_ac_g=rms)
@@ -285,6 +282,7 @@ class ArtifactGate:
     def get_config(self) -> GateConfig:
         with self._lock:
             import copy
+
             return copy.copy(self._cfg)
 
     def set_config(self, config: GateConfig) -> None:

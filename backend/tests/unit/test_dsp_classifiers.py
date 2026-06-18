@@ -12,6 +12,7 @@ def _bands(alpha=0.0, theta=0.0, beta=0.0, delta=0.0, gamma=0.0) -> BandPowers:
 
 # ── v2 classifier ────────────────────────────────────────────────────────────
 
+
 def test_v2_nigredo_default():
     region, stage = classify_v2(_bands(alpha=0.1, theta=0.05, beta=0.1, delta=0.1, gamma=0.05))
     assert region == "A"
@@ -62,6 +63,7 @@ def test_v2_albedo_moderate_beta():
 
 # ── v01 classifier ───────────────────────────────────────────────────────────
 
+
 def test_v01_region_e_rubedo():
     region, stage = classify_v01(alpha=0.32, theta=0.16, beta=0.10, delta=0.1, gamma=0.05)
     assert region == "E"
@@ -81,6 +83,7 @@ def test_v01_region_a_default():
 
 
 # ── S-space ──────────────────────────────────────────────────────────────────
+
 
 def test_s_space_coords_in_range():
     coords = compute_s_space(_bands(alpha=0.3, theta=0.2, beta=0.15, delta=0.2, gamma=0.1))

@@ -1,10 +1,9 @@
 """Coverage tests for EEGPump."""
+
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock
 
 from neurolink.eeg_pump import EEGPump
 from neurolink.hub import EEGHub
@@ -22,6 +21,7 @@ def _pump(hub=None, adapter=None, hz=4.0) -> EEGPump:
 # __init__ field inspection
 # ---------------------------------------------------------------------------
 
+
 def test_pump_init_fields():
     hub = _hub()
     adapter = AsyncMock()
@@ -36,6 +36,7 @@ def test_pump_init_fields():
 # stop() while task is None (not started)
 # ---------------------------------------------------------------------------
 
+
 async def test_stop_while_not_started_is_noop():
     pump = _pump()
     await pump.stop()  # _task is None, must not raise
@@ -45,6 +46,7 @@ async def test_stop_while_not_started_is_noop():
 # ---------------------------------------------------------------------------
 # _tick() with None sample (continue branch)
 # ---------------------------------------------------------------------------
+
 
 async def test_tick_none_sample_is_noop():
     """_tick() returns immediately when adapter.read_sample() returns None."""
@@ -59,6 +61,7 @@ async def test_tick_none_sample_is_noop():
 # ---------------------------------------------------------------------------
 # _tick() with a real MockAdapter sample
 # ---------------------------------------------------------------------------
+
 
 async def test_tick_real_sample_updates_hub():
     """_tick() with a real EEGSample updates the hub frame_count."""
@@ -76,6 +79,7 @@ async def test_tick_real_sample_updates_hub():
 # ---------------------------------------------------------------------------
 # start() creates background task; stop() cancels it
 # ---------------------------------------------------------------------------
+
 
 async def test_start_and_stop():
     from neurolink.hardware.mock import MockAdapter
@@ -96,6 +100,7 @@ async def test_start_and_stop():
 # ---------------------------------------------------------------------------
 # _pump_loop watchdog branch (last_frame_ts set, then time passes)
 # ---------------------------------------------------------------------------
+
 
 async def test_pump_loop_tick_error_is_logged_not_raised():
     """Errors inside _tick are caught by _pump_loop and logged, not re-raised."""

@@ -14,7 +14,6 @@ from neurolink.dsp.bad_channels import (
     DetectorConfig,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -47,6 +46,7 @@ def _warm(
 # DetectorConfig
 # ---------------------------------------------------------------------------
 
+
 class TestDetectorConfig:
     def test_defaults(self):
         cfg = DetectorConfig()
@@ -60,6 +60,7 @@ class TestDetectorConfig:
 # ---------------------------------------------------------------------------
 # ChannelStats
 # ---------------------------------------------------------------------------
+
 
 class TestChannelStats:
     def test_clean_channel_not_bad(self):
@@ -100,6 +101,7 @@ class TestChannelStats:
 # BadChannelDetector.update() — guards
 # ---------------------------------------------------------------------------
 
+
 class TestBadChannelDetectorGuards:
     def test_none_input_does_not_raise(self):
         det = BadChannelDetector()
@@ -118,6 +120,7 @@ class TestBadChannelDetectorGuards:
 # ---------------------------------------------------------------------------
 # BadChannelDetector.update() — flat-line detection
 # ---------------------------------------------------------------------------
+
 
 class TestFlatLineDetection:
     def test_flat_channel_flagged_after_warmup(self):
@@ -144,6 +147,7 @@ class TestFlatLineDetection:
 # BadChannelDetector.update() — noisy detection
 # ---------------------------------------------------------------------------
 
+
 class TestNoisyDetection:
     def test_high_amplitude_channel_flagged_noisy(self):
         """Channel with 100× amplitude should dominate PSD → noisy=True."""
@@ -160,6 +164,7 @@ class TestNoisyDetection:
 # ---------------------------------------------------------------------------
 # BadChannelDetector.get_bad_channels()
 # ---------------------------------------------------------------------------
+
 
 class TestGetBadChannels:
     def test_returns_list(self):
@@ -184,6 +189,7 @@ class TestGetBadChannels:
 # ---------------------------------------------------------------------------
 # BadChannelDetector.get_stats()
 # ---------------------------------------------------------------------------
+
 
 class TestGetStats:
     def test_returns_list_of_five(self):
@@ -212,6 +218,7 @@ class TestGetStats:
 # ---------------------------------------------------------------------------
 # BadChannelDetector.set_manual_bad()
 # ---------------------------------------------------------------------------
+
 
 class TestSetManualBad:
     def test_flag_channel_bad(self):
@@ -249,6 +256,7 @@ class TestSetManualBad:
 # BadChannelDetector.reset()
 # ---------------------------------------------------------------------------
 
+
 class TestBadChannelDetectorReset:
     def test_reset_clears_manual_flags(self):
         det = BadChannelDetector()
@@ -272,6 +280,7 @@ class TestBadChannelDetectorReset:
 # get_config / set_config
 # ---------------------------------------------------------------------------
 
+
 class TestBadChannelDetectorConfig:
     def test_get_config_returns_copy(self):
         det = BadChannelDetector()
@@ -289,6 +298,7 @@ class TestBadChannelDetectorConfig:
 # Thread safety
 # ---------------------------------------------------------------------------
 
+
 class TestBadChannelDetectorThreadSafety:
     def test_concurrent_update_and_get_does_not_raise(self):
         det = BadChannelDetector()
@@ -298,7 +308,7 @@ class TestBadChannelDetectorThreadSafety:
             try:
                 for _ in range(20):
                     det.update(_eeg())
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         def getter():
@@ -306,13 +316,12 @@ class TestBadChannelDetectorThreadSafety:
                 for _ in range(20):
                     _ = det.get_bad_channels()
                     _ = det.get_stats()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=updater) for _ in range(3)]
-            + [threading.Thread(target=getter) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=updater) for _ in range(3)] + [
+            threading.Thread(target=getter) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:

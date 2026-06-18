@@ -1,4 +1,5 @@
 """Coverage tests for calibration.py (CalibrationSession)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,7 @@ def _eeg_sample() -> EEGSample:
 # Already running — returns None immediately
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_already_running_returns_none():
     session = CalibrationSession(adapter=AsyncMock(), hub=EEGHub())
     session._running = True
@@ -43,6 +45,7 @@ async def test_calibration_already_running_returns_none():
 # ---------------------------------------------------------------------------
 # Happy path — short duration, adapter returns real samples
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_happy_path():
     adapter = AsyncMock()
@@ -67,6 +70,7 @@ async def test_calibration_happy_path():
 # CancelledError exits cleanly
 # ---------------------------------------------------------------------------
 
+
 async def test_calibration_cancelled_exits_cleanly():
     async def blocking_read():
         await asyncio.sleep(60)
@@ -89,6 +93,7 @@ async def test_calibration_cancelled_exits_cleanly():
 # ---------------------------------------------------------------------------
 # Too few frames — returns None, baseline unchanged
 # ---------------------------------------------------------------------------
+
 
 async def test_calibration_too_few_frames_returns_none():
     adapter = AsyncMock()

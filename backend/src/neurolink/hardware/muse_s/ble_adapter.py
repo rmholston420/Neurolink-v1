@@ -24,33 +24,33 @@ log = structlog.get_logger(__name__)
 # -- FIXED BLE PROTOCOL CONSTANTS ------------------------------------------------
 MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
 
-CHAR_EEG_TP9      = "273e0003-4c4d-454d-96be-f03bac821358"
-CHAR_EEG_AF7      = "273e0004-4c4d-454d-96be-f03bac821358"
-CHAR_EEG_AF8      = "273e0005-4c4d-454d-96be-f03bac821358"
-CHAR_EEG_TP10     = "273e0006-4c4d-454d-96be-f03bac821358"
+CHAR_EEG_TP9 = "273e0003-4c4d-454d-96be-f03bac821358"
+CHAR_EEG_AF7 = "273e0004-4c4d-454d-96be-f03bac821358"
+CHAR_EEG_AF8 = "273e0005-4c4d-454d-96be-f03bac821358"
+CHAR_EEG_TP10 = "273e0006-4c4d-454d-96be-f03bac821358"
 CHAR_EEG_RIGHTAUX = "273e0007-4c4d-454d-96be-f03bac821358"
-CHAR_CONTROL      = "273e0001-4c4d-454d-96be-f03bac821358"
-CHAR_TELEMETRY    = "273e000b-4c4d-454d-96be-f03bac821358"
-CHAR_ACCEL        = "273e000a-4c4d-454d-96be-f03bac821358"
-CHAR_GYRO         = "273e0009-4c4d-454d-96be-f03bac821358"
-CHAR_PPG_AMBIENT  = "273e000f-4c4d-454d-96be-f03bac821358"
-CHAR_PPG_IR       = "273e0010-4c4d-454d-96be-f03bac821358"
-CHAR_PPG_RED      = "273e0011-4c4d-454d-96be-f03bac821358"
+CHAR_CONTROL = "273e0001-4c4d-454d-96be-f03bac821358"
+CHAR_TELEMETRY = "273e000b-4c4d-454d-96be-f03bac821358"
+CHAR_ACCEL = "273e000a-4c4d-454d-96be-f03bac821358"
+CHAR_GYRO = "273e0009-4c4d-454d-96be-f03bac821358"
+CHAR_PPG_AMBIENT = "273e000f-4c4d-454d-96be-f03bac821358"
+CHAR_PPG_IR = "273e0010-4c4d-454d-96be-f03bac821358"
+CHAR_PPG_RED = "273e0011-4c4d-454d-96be-f03bac821358"
 
 CMD_PRESET_20 = b"\x02\x31\x30\x0a"
-CMD_DATA      = b"\x02\x64\x0a"
-CMD_STOP      = b"\x02\x68\x0a"
+CMD_DATA = b"\x02\x64\x0a"
+CMD_STOP = b"\x02\x68\x0a"
 CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
-CMD_DATA_DELAY_SEC: float   = 0.250
+CMD_DATA_DELAY_SEC: float = 0.250
 # Reduced from 30.0 s - the Muse S BLE supervision window is 2000 ms (0x00c8).
 # A 30 s interval left the link silent long enough for the Muse to time out
 # (~28 s, confirmed via btmon: Disconnect Complete reason 0x08).
 # 5 s is safely within the supervision window while avoiding unnecessary
 # GATT traffic on the 15 ms connection interval.
-KEEPALIVE_SEC: float        = 5.0
-RECONNECT_WAIT_SEC: float   = 20.0   # spec-mandated wait before BLE reconnect attempt
-MAX_RECONNECT_ATTEMPTS: int = 10     # give up after this many consecutive failures
+KEEPALIVE_SEC: float = 5.0
+RECONNECT_WAIT_SEC: float = 20.0  # spec-mandated wait before BLE reconnect attempt
+MAX_RECONNECT_ATTEMPTS: int = 10  # give up after this many consecutive failures
 
 # Raised from 30 s - GATT discovery at weak RSSI (-92 to -94 dBm) needs extra
 # headroom before BlueZ gives up on the ATT Bearer negotiation.
@@ -75,8 +75,8 @@ PRE_SCAN_SEC: float = 10.0
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
 
 _RING_SECS: float = 4.0
-_EEG_FS: float    = 256.0
-_N_EEG: int       = int(_EEG_FS * _RING_SECS)
+_EEG_FS: float = 256.0
+_N_EEG: int = int(_EEG_FS * _RING_SECS)
 
 
 class MuseSBleAdapter(HardwareAdapter):
@@ -150,7 +150,7 @@ class MuseSBleAdapter(HardwareAdapter):
         # -- Connect ------------------------------------------------------------
         self._client = BleakClient(
             found,  # pass the BLEDevice object directly - avoids a second
-                    # address-lookup inside bleak and reuses the warm cache entry
+            # address-lookup inside bleak and reuses the warm cache entry
             timeout=BLE_CONNECT_TIMEOUT,
             disconnected_callback=self._on_ble_disconnect,
         )
@@ -274,10 +274,10 @@ class MuseSBleAdapter(HardwareAdapter):
         if not self._connected:
             return None
 
-        eeg_buf   = [list(ring) for ring in self._eeg_rings]
-        ppg_buf   = list(self._ppg_ring)
+        eeg_buf = [list(ring) for ring in self._eeg_rings]
+        ppg_buf = list(self._ppg_ring)
         accel_buf = [list(ring) for ring in self._accel_ring]
-        gyro_buf  = [list(ring) for ring in self._gyro_ring]
+        gyro_buf = [list(ring) for ring in self._gyro_ring]
 
         channels = [buf[-1] if buf else 0.0 for buf in eeg_buf]
 

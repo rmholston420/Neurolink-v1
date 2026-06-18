@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from neurolink.focus_state import classify_focus, compute_focus_score
 
 

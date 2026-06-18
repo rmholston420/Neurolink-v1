@@ -73,9 +73,9 @@ log = structlog.get_logger(__name__)
 
 
 class BaselinePhase(str, Enum):
-    WARMUP = "warmup"       # electrodes stabilising — ASR gate closed
-    RECORDING = "recording" # ASR gate open; baseline window accumulating
-    COMPLETE = "complete"   # baseline done; bell has fired; ASR gate open
+    WARMUP = "warmup"  # electrodes stabilising — ASR gate closed
+    RECORDING = "recording"  # ASR gate open; baseline window accumulating
+    COMPLETE = "complete"  # baseline done; bell has fired; ASR gate open
 
 
 class BaselineRecorder:

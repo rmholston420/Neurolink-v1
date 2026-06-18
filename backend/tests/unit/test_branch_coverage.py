@@ -10,6 +10,7 @@ Covers:
 - dsp.classifiers v01 Region B (high beta), Citrinitas (theta flow), faa gate
 - dsp.classifiers v2 Citrinitas branch
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,10 +25,10 @@ from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload, NeurolinkState
 from neurolink.service import NeuroLinkService
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _payload(**kw) -> IngestPayload:
     defaults = dict(
@@ -54,6 +55,7 @@ _REPO_PATH = "neurolink.db.repository.SessionLogRepository"
 # hub._schedule_redis_push — loop.is_running() == True path
 # ===========================================================================
 
+
 async def test_schedule_redis_push_running_loop():
     """When called from a running event loop, ensure_future is called."""
     hub = EEGHub()
@@ -75,9 +77,11 @@ async def test_schedule_redis_push_runtime_error_suppressed():
 # hub._push_state_to_redis — coroutine path
 # ===========================================================================
 
+
 async def test_push_state_to_redis_calls_cache():
     """_push_state_to_redis must call cache.push_state with the state dict."""
     from neurolink import hub as hub_module
+
     with patch("neurolink.cache.redis_client.push_state", new=AsyncMock()) as mock_push:
         await hub_module._push_state_to_redis({"frame_count": 1})
         mock_push.assert_called_once_with({"frame_count": 1})
@@ -86,6 +90,7 @@ async def test_push_state_to_redis_calls_cache():
 # ===========================================================================
 # service._create_db_session — success path
 # ===========================================================================
+
 
 async def test_create_db_session_success():
     """_create_db_session stores the returned entry.id in _db_session_id."""
@@ -127,6 +132,7 @@ async def test_create_db_session_exception_is_swallowed():
 # service._close_db_session — success path with real session_id
 # ===========================================================================
 
+
 async def test_close_db_session_with_session_id():
     """_close_db_session calls repo.end_session when factory + id are set."""
     svc = _service()
@@ -164,13 +170,14 @@ async def test_close_db_session_exception_is_swallowed():
 # service.get_sessions — factory path
 # ===========================================================================
 
+
 async def test_get_sessions_with_factory():
     """get_sessions returns a SessionSummary list built from repo rows."""
     svc = _service()
 
     mock_row = MagicMock()
     mock_row.id = 1
-    mock_row.started_at = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    mock_row.started_at = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
     mock_row.ended_at = None
     mock_row.device_model = "muse_s_gen1"
     mock_row.adapter_type = "mock"
@@ -197,6 +204,7 @@ async def test_get_sessions_with_factory():
 # ===========================================================================
 # eeg_pump._build_payload — None eeg_buffer branch
 # ===========================================================================
+
 
 async def test_build_payload_no_eeg_buffer():
     """_build_payload with no eeg_buffer should produce zero BandPowers."""
@@ -228,6 +236,7 @@ async def test_build_payload_no_eeg_buffer():
 # eeg_pump._build_payload — fnirs_oxy/deoxy from extra dict
 # ===========================================================================
 
+
 async def test_build_payload_fnirs_extra():
     """fnirs_oxy and fnirs_deoxy should be pulled from sample.extra."""
     from neurolink.eeg_pump import EEGPump
@@ -256,11 +265,13 @@ async def test_build_payload_fnirs_extra():
 # eeg_pump._build_payload — accel_buffer present but no gyro_buffer
 # ===========================================================================
 
+
 async def test_build_payload_accel_no_gyro_no_imu():
     """accel_buffer (3,N) present but gyro_buffer=None → imu_payload is None."""
+    import numpy as np
+
     from neurolink.eeg_pump import EEGPump
     from neurolink.hardware.base import EEGSample
-    import numpy as np
 
     hub = EEGHub()
     pump = EEGPump(adapter=AsyncMock(), hub=hub)
@@ -285,6 +296,7 @@ async def test_build_payload_accel_no_gyro_no_imu():
 # ===========================================================================
 # eeg_pump._pump_loop — watchdog warning branch
 # ===========================================================================
+
 
 async def test_pump_loop_watchdog_fires():
     """If last_frame_ts is old, the watchdog log.warning branch executes."""
@@ -317,10 +329,9 @@ async def test_pump_loop_watchdog_fires():
 # dsp.classifiers.classify_v01 — Region B (high beta)
 # ===========================================================================
 
+
 def test_v01_region_b_high_beta():
-    region, stage = classify_v01(
-        alpha=0.10, theta=0.10, beta=0.35, delta=0.10, gamma=0.05
-    )
+    region, stage = classify_v01(alpha=0.10, theta=0.10, beta=0.35, delta=0.10, gamma=0.05)
     assert region == "B"
     assert stage == "Albedo"
 
@@ -329,10 +340,9 @@ def test_v01_region_b_high_beta():
 # dsp.classifiers.classify_v01 — Region D Citrinitas (theta-dominant flow)
 # ===========================================================================
 
+
 def test_v01_region_d_citrinitas():
-    region, stage = classify_v01(
-        alpha=0.10, theta=0.25, beta=0.10, delta=0.05, gamma=0.05
-    )
+    region, stage = classify_v01(alpha=0.10, theta=0.25, beta=0.10, delta=0.05, gamma=0.05)
     assert region == "D"
     assert stage == "Citrinitas"
 
@@ -341,9 +351,14 @@ def test_v01_region_d_citrinitas():
 # dsp.classifiers.classify_v01 — faa gate blocks Multiplicatio → Rubedo
 # ===========================================================================
 
+
 def test_v01_multiplicatio_faa_gate_blocks():
     region, stage = classify_v01(
-        alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05,
+        alpha=0.40,
+        theta=0.20,
+        beta=0.10,
+        delta=0.05,
+        gamma=0.05,
         faa=-0.10,  # below _V01_MULTIPLICATIO_FAA threshold of -0.05
     )
     assert region == "E"
@@ -353,6 +368,7 @@ def test_v01_multiplicatio_faa_gate_blocks():
 # ===========================================================================
 # dsp.classifiers.classify_v2 — Citrinitas branch
 # ===========================================================================
+
 
 def test_v2_citrinitas():
     region, stage = classify_v2(

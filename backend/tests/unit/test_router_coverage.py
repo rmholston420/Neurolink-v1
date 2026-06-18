@@ -14,22 +14,22 @@ Covers uncovered branches in:
 - neurolink/adapter_factory.py  (lsl else / unknown-type raise)
 - neurolink/hardware/mock.py   (read_sample not-connected None return)
 """
+
 from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.bandpower import bandpower, compute_band_powers_from_buffer
 from neurolink.dsp.classifiers import classify_v01, classify_v2
-from neurolink.models.eeg import BandPowers, IngestPayload
-
+from neurolink.models.eeg import BandPowers
 
 # ===========================================================================
 # dsp/bandpower.py — uncovered guard branches
 # ===========================================================================
+
 
 def test_bandpower_none_signal_returns_zero():
     """bandpower(None, ...) hits the `sig is None` guard."""
@@ -69,6 +69,7 @@ def test_compute_band_powers_none_returns_zeros():
 # dsp/classifiers.py v01 — untested region branches
 # ===========================================================================
 
+
 def test_v01_citrinitas_region_d():
     """High theta + low alpha → Region D / Citrinitas."""
     region, stage = classify_v01(alpha=0.10, theta=0.25, beta=0.10, delta=0.10, gamma=0.05)
@@ -92,9 +93,7 @@ def test_v01_albedo_region_b():
 
 def test_v01_multiplicatio_with_faa_gate():
     """Very high alpha+theta with faa >= threshold → Multiplicatio."""
-    region, stage = classify_v01(
-        alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05, faa=0.0
-    )
+    region, stage = classify_v01(alpha=0.40, theta=0.20, beta=0.10, delta=0.05, gamma=0.05, faa=0.0)
     assert stage == "Multiplicatio"
 
 
@@ -109,6 +108,7 @@ def test_v01_multiplicatio_faa_none():
 # ===========================================================================
 # dsp/classifiers.py v2 — untested branches
 # ===========================================================================
+
 
 def test_v2_citrinitas_balanced():
     """Balanced alpha-theta (not high enough for Rubedo) → Citrinitas."""
@@ -137,6 +137,7 @@ def test_v2_albedo_moderate_beta():
 # ===========================================================================
 # eeg_pump._build_payload — empty eeg_buffer branch
 # ===========================================================================
+
 
 async def test_build_payload_empty_eeg_buffer():
     """_build_payload with eeg_buffer=None skips DSP and returns valid payload."""
@@ -203,7 +204,7 @@ async def test_build_payload_partial_accel_skips_imu():
         address="mock",
         eeg_buffer=None,
         ppg_buffer=None,
-        accel_buffer=[[0.0, 0.0], [0.0, 0.0]],   # only 2 axes — len < 3
+        accel_buffer=[[0.0, 0.0], [0.0, 0.0]],  # only 2 axes — len < 3
         gyro_buffer=None,
     )
     payload = await pump._build_payload(sample)
@@ -213,6 +214,7 @@ async def test_build_payload_partial_accel_skips_imu():
 # ===========================================================================
 # hub._schedule_redis_push — loop.is_running() True branch
 # ===========================================================================
+
 
 async def test_schedule_redis_push_loop_running():
     """_schedule_redis_push schedules a task when the event loop is running."""
@@ -243,6 +245,7 @@ def test_schedule_redis_push_runtime_error_is_suppressed():
 # hub._push_state_to_redis — coroutine body
 # ===========================================================================
 
+
 async def test_push_state_to_redis_calls_push_state():
     """_push_state_to_redis lazy-imports and calls cache.redis_client.push_state."""
     from neurolink.hub import _push_state_to_redis
@@ -255,6 +258,7 @@ async def test_push_state_to_redis_calls_push_state():
 # ===========================================================================
 # service — is_connected and adapter_type properties
 # ===========================================================================
+
 
 def test_service_is_connected_false_when_no_adapter():
     """is_connected returns False before any connect() call."""
@@ -278,6 +282,7 @@ def test_service_adapter_type_default():
 # service._create_db_session — try body with factory set
 # ===========================================================================
 
+
 async def test_create_db_session_with_factory_success():
     """_create_db_session executes the try body when factory is configured."""
     from neurolink.hub import EEGHub
@@ -298,9 +303,7 @@ async def test_create_db_session_with_factory_success():
     svc.set_db_session_factory(MagicMock(return_value=mock_db))
 
     with patch("neurolink.db.repository.SessionLogRepository", return_value=mock_repo):
-        await svc._create_db_session(
-            adapter_type="mock", device_model="mock", address=None
-        )
+        await svc._create_db_session(adapter_type="mock", device_model="mock", address=None)
 
     assert svc._db_session_id == 42
 
@@ -324,6 +327,7 @@ async def test_create_db_session_exception_is_logged():
 # ===========================================================================
 # service._close_db_session — try body with factory + session_id set
 # ===========================================================================
+
 
 async def test_close_db_session_with_factory_and_id():
     """_close_db_session executes the try body when factory + session_id are set."""
@@ -370,6 +374,7 @@ async def test_close_db_session_exception_is_logged():
 # calibration — properties
 # ===========================================================================
 
+
 def test_calibration_is_running_property():
     from neurolink.calibration import CalibrationSession
 
@@ -391,6 +396,7 @@ def test_calibration_baseline_alpha_property():
 # ===========================================================================
 # adapter_factory — lsl else branch, lsl athena, ble gen1
 # ===========================================================================
+
 
 def test_create_adapter_lsl_default_model():
     """lsl + non-athena model hits the MuseSLslAdapter branch."""
@@ -443,6 +449,7 @@ def test_create_adapter_ble_athena_branch():
 # ===========================================================================
 # hardware/mock.py — read_sample not-connected returns None
 # ===========================================================================
+
 
 async def test_mock_adapter_read_sample_not_connected_returns_none():
     """MockAdapter.read_sample() returns None when not connected."""

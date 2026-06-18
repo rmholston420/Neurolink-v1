@@ -1,12 +1,11 @@
 """Branch-coverage tests for hub.py."""
+
 from __future__ import annotations
 
 import asyncio
 from unittest.mock import MagicMock
 
-import pytest
-
-from neurolink.hub import EEGHub, get_hub, get_state, get_ea1, snapshot, reset, update
+from neurolink.hub import EEGHub, get_ea1, get_hub, get_state, reset, snapshot, update
 from neurolink.models.eeg import BandPowers, IngestPayload
 
 
@@ -41,6 +40,7 @@ def _payload(
 # update() — basic path, frame_count increments
 # ---------------------------------------------------------------------------
 
+
 def test_update_increments_frame_count():
     hub = EEGHub()
     p = _payload()
@@ -54,6 +54,7 @@ def test_update_increments_frame_count():
 # update() — muse_ble branch fires v0.1 classifier
 # ---------------------------------------------------------------------------
 
+
 def test_update_muse_ble_uses_v01_classifier():
     hub = EEGHub()
     p = _payload(source="muse_ble", alpha=0.3, theta=0.2, beta=0.15, delta=0.1, gamma=0.05)
@@ -66,6 +67,7 @@ def test_update_muse_ble_uses_v01_classifier():
 # ---------------------------------------------------------------------------
 # update() — None ppg / breathing / imu branches (no AttributeError)
 # ---------------------------------------------------------------------------
+
 
 def test_update_none_ppg_imu_breathing():
     hub = EEGHub()
@@ -82,6 +84,7 @@ def test_update_none_ppg_imu_breathing():
 # get_latest / set_latest_sample
 # ---------------------------------------------------------------------------
 
+
 def test_get_latest_initially_none():
     hub = EEGHub()
     assert hub.get_latest() is None
@@ -97,6 +100,7 @@ def test_set_and_get_latest_sample():
 # ---------------------------------------------------------------------------
 # SSE register / unregister / fanout
 # ---------------------------------------------------------------------------
+
 
 def test_register_and_unregister_sse_queue():
     hub = EEGHub()
@@ -137,6 +141,7 @@ def test_fanout_queue_full_does_not_raise():
 # reset()
 # ---------------------------------------------------------------------------
 
+
 def test_reset_clears_state():
     hub = EEGHub()
     hub.update(_payload())
@@ -150,6 +155,7 @@ def test_reset_clears_state():
 # snapshot()
 # ---------------------------------------------------------------------------
 
+
 def test_snapshot_returns_dict():
     hub = EEGHub()
     d = hub.snapshot()
@@ -161,8 +167,10 @@ def test_snapshot_returns_dict():
 # get_ea1()
 # ---------------------------------------------------------------------------
 
+
 def test_get_ea1_returns_ea1_result():
     from neurolink.models.eeg import EA1Result
+
     hub = EEGHub()
     result = hub.get_ea1()
     assert isinstance(result, EA1Result)
@@ -172,6 +180,7 @@ def test_get_ea1_returns_ea1_result():
 # Module-level delegates
 # ---------------------------------------------------------------------------
 
+
 def test_module_level_get_state():
     state = get_state()
     assert hasattr(state, "frame_count")
@@ -179,6 +188,7 @@ def test_module_level_get_state():
 
 def test_module_level_get_ea1():
     from neurolink.models.eeg import EA1Result
+
     assert isinstance(get_ea1(), EA1Result)
 
 

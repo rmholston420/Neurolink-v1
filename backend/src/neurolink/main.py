@@ -40,11 +40,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         os.makedirs(os.path.dirname(os.path.abspath(settings.db_path)), exist_ok=True)
 
     from neurolink.db.engine import create_tables, dispose_engine, get_session_factory
+
     await create_tables()
     log.info("neurolink_db_initialized", db_path=settings.db_path)
 
     # ── Stage 0 Guard ────────────────────────────────────────────────────
     from neurolink.stage0 import Stage0Guard
+
     electrode_type = getattr(settings, "electrode_type", "dry")
     stage0_guard = Stage0Guard(electrode_type=electrode_type)
     app.state.stage0_guard = stage0_guard
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # ── Stage 1 — Online FIR filter chain ──────────────────────────────
     from neurolink.dsp.online_filter import get_registry as get_filter_registry
+
     region = getattr(settings, "region", "EU").upper()
     line_freq = 60.0 if region in {"US", "CA", "MX", "JP"} else 50.0
     filter_registry = get_filter_registry()
@@ -61,24 +64,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     # ── Stage 2 — Bad channel detector ─────────────────────────────────
     from neurolink.dsp.bad_channels import BadChannelDetector
+
     bad_channel_detector = BadChannelDetector()
     app.state.bad_channel_detector = bad_channel_detector
     log.info("stage2_bad_channel_detector_initialised")
 
     # ── Stage 3 — Artifact gate ─────────────────────────────────────────
     from neurolink.dsp.artifact_gate import ArtifactGate
+
     artifact_gate = ArtifactGate()
     app.state.artifact_gate = artifact_gate
     log.info("stage3_artifact_gate_initialised")
 
     # ── Stage 3b — Multi-type artifact detector ─────────────────────────
     from neurolink.dsp.artifact_detector import ArtifactDetector
+
     artifact_detector = ArtifactDetector(line_freq_hz=line_freq)
     app.state.artifact_detector = artifact_detector
     log.info("stage3b_artifact_detector_initialised", line_freq_hz=line_freq)
 
     # Inject DB session factory into service
     from neurolink.dependencies import get_neurolink_service
+
     service = get_neurolink_service()
     service.set_db_session_factory(get_session_factory())
 
@@ -97,6 +104,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     log.info("neurolink_shutting_down")
     try:
         from neurolink.routers.ble import bridge_state
+
         if bridge_state.bridge is not None:
             await bridge_state.bridge.stop()
     except Exception:

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -13,10 +12,10 @@ from neurolink.eeg_pump import EEGPump
 from neurolink.hardware.mock import MockAdapter
 from neurolink.hub import EEGHub
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_pump(publish_hz: int = 4) -> tuple[EEGPump, EEGHub, MockAdapter]:
     hub = EEGHub()
@@ -36,6 +35,7 @@ async def _run_pump(pump: EEGPump, adapter: MockAdapter, duration: float = 0.35)
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestEEGPumpLifecycle:
     @pytest.mark.asyncio
@@ -91,6 +91,7 @@ class TestEEGPumpLifecycle:
 # Stage 1 — bad channel detection
 # ---------------------------------------------------------------------------
 
+
 class TestStage1BadChannels:
     @pytest.mark.asyncio
     async def test_bad_channels_called_when_toggle_on(self):
@@ -103,8 +104,10 @@ class TestStage1BadChannels:
     @pytest.mark.asyncio
     async def test_bad_channels_skipped_when_toggle_off(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
-             patch("neurolink.eeg_pump.bad_channels") as mock_bc:
+        with (
+            patch("neurolink.eeg_pump.filter_toggles") as mock_ft,
+            patch("neurolink.eeg_pump.bad_channels") as mock_bc,
+        ):
             cfg = MagicMock()
             cfg.stage2_bad_channels = False  # real field name
             cfg.stage1_fir = True
@@ -126,12 +129,15 @@ class TestStage1BadChannels:
 # Stage 2 — spherical spline interpolation
 # ---------------------------------------------------------------------------
 
+
 class TestStage2SphericalSpline:
     @pytest.mark.asyncio
     async def test_interpolation_skipped_when_no_bad_channels(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.bad_channels") as mock_bc, \
-             patch("neurolink.eeg_pump.spherical_spline") as mock_ss:
+        with (
+            patch("neurolink.eeg_pump.bad_channels") as mock_bc,
+            patch("neurolink.eeg_pump.spherical_spline") as mock_ss,
+        ):
             mock_bc.detect.return_value = []  # no bad channels
             await _run_pump(pump, adapter, duration=0.35)
         mock_ss.interpolate.assert_not_called()
@@ -139,8 +145,10 @@ class TestStage2SphericalSpline:
     @pytest.mark.asyncio
     async def test_interpolation_called_when_bad_channels_present(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.bad_channels") as mock_bc, \
-             patch("neurolink.eeg_pump.spherical_spline") as mock_ss:
+        with (
+            patch("neurolink.eeg_pump.bad_channels") as mock_bc,
+            patch("neurolink.eeg_pump.spherical_spline") as mock_ss,
+        ):
             mock_bc.detect.return_value = [1]  # one bad channel
             mock_ss.interpolate.side_effect = lambda eeg, bad, **kw: eeg
             await _run_pump(pump, adapter, duration=0.35)
@@ -150,6 +158,7 @@ class TestStage2SphericalSpline:
 # ---------------------------------------------------------------------------
 # Stage 3 — ASR (artifact subspace reconstruction)
 # ---------------------------------------------------------------------------
+
 
 class TestStage3ASR:
     @pytest.mark.asyncio
@@ -163,8 +172,10 @@ class TestStage3ASR:
     @pytest.mark.asyncio
     async def test_asr_skipped_when_toggle_off(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
-             patch("neurolink.eeg_pump.asr") as mock_asr:
+        with (
+            patch("neurolink.eeg_pump.filter_toggles") as mock_ft,
+            patch("neurolink.eeg_pump.asr") as mock_asr,
+        ):
             cfg = MagicMock()
             cfg.stage1_fir = True
             cfg.stage2_bad_channels = True
@@ -185,6 +196,7 @@ class TestStage3ASR:
 # Stage 4 — ocular regression
 # ---------------------------------------------------------------------------
 
+
 class TestStage4OcularRegression:
     @pytest.mark.asyncio
     async def test_ocular_regression_called_when_toggle_on(self):
@@ -204,20 +216,25 @@ class TestStage4OcularRegression:
         pump, hub, adapter = _make_pump(publish_hz=4)
         sentinel = np.zeros((4, 64), dtype=np.float32)
         sentinel[0, 0] = 999.0
-        with patch("neurolink.eeg_pump.ocular_regression") as mock_or, \
-             patch("neurolink.eeg_pump.cardiac_regression") as mock_cr:
+        with (
+            patch("neurolink.eeg_pump.ocular_regression") as mock_or,
+            patch("neurolink.eeg_pump.cardiac_regression") as mock_cr,
+        ):
             mock_or.apply.return_value = sentinel
             mock_cr.apply.side_effect = lambda eeg, **kw: eeg
             await _run_pump(pump, adapter, duration=0.35)
         calls = mock_cr.apply.call_args_list
-        assert any(np.array_equal(c.args[0], sentinel) or
-                   (len(c.args) == 0 and np.array_equal(list(c.kwargs.values())[0], sentinel))
-                   for c in calls), "Ocular output not forwarded to cardiac_regression"
+        assert any(
+            np.array_equal(c.args[0], sentinel)
+            or (len(c.args) == 0 and np.array_equal(list(c.kwargs.values())[0], sentinel))
+            for c in calls
+        ), "Ocular output not forwarded to cardiac_regression"
 
 
 # ---------------------------------------------------------------------------
 # Stage 5 — baseline correction
 # ---------------------------------------------------------------------------
+
 
 class TestStage5Baseline:
     @pytest.mark.asyncio
@@ -231,8 +248,10 @@ class TestStage5Baseline:
     @pytest.mark.asyncio
     async def test_baseline_skipped_when_toggle_off(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
-             patch("neurolink.eeg_pump.baseline") as mock_bl:
+        with (
+            patch("neurolink.eeg_pump.filter_toggles") as mock_ft,
+            patch("neurolink.eeg_pump.baseline") as mock_bl,
+        ):
             cfg = MagicMock()
             cfg.stage1_fir = True
             cfg.stage2_bad_channels = True
@@ -253,6 +272,7 @@ class TestStage5Baseline:
 # Stage 6 — cardiac regression
 # ---------------------------------------------------------------------------
 
+
 class TestStage6CardiacRegression:
     @pytest.mark.asyncio
     async def test_cardiac_regression_called_when_toggle_on(self):
@@ -265,8 +285,10 @@ class TestStage6CardiacRegression:
     @pytest.mark.asyncio
     async def test_cardiac_regression_skipped_when_toggle_off(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
-             patch("neurolink.eeg_pump.cardiac_regression") as mock_cr:
+        with (
+            patch("neurolink.eeg_pump.filter_toggles") as mock_ft,
+            patch("neurolink.eeg_pump.cardiac_regression") as mock_cr,
+        ):
             cfg = MagicMock()
             cfg.stage1_fir = True
             cfg.stage2_bad_channels = True
@@ -286,9 +308,11 @@ class TestStage6CardiacRegression:
     async def test_cardiac_regression_toggle_off_passes_eeg_unchanged(self):
         """When stage6_cardiac is off, raw EEG (not modified by regressor) flows to stage 7."""
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.filter_toggles") as mock_ft, \
-             patch("neurolink.eeg_pump.cardiac_regression") as mock_cr, \
-             patch("neurolink.eeg_pump.bandpower") as mock_bp:
+        with (
+            patch("neurolink.eeg_pump.filter_toggles") as mock_ft,
+            patch("neurolink.eeg_pump.cardiac_regression") as mock_cr,
+            patch("neurolink.eeg_pump.bandpower") as mock_bp,
+        ):
             cfg = MagicMock()
             cfg.stage1_fir = True
             cfg.stage2_bad_channels = True
@@ -311,14 +335,19 @@ class TestStage6CardiacRegression:
 # Stage 7 — bandpower
 # ---------------------------------------------------------------------------
 
+
 class TestStage7Bandpower:
     @pytest.mark.asyncio
     async def test_bandpower_computed_each_frame(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
         with patch("neurolink.eeg_pump.bandpower") as mock_bp:
-            mock_bp.compute.return_value = {"delta": 0.1, "theta": 0.2,
-                                             "alpha": 0.3, "beta": 0.25,
-                                             "gamma": 0.15}
+            mock_bp.compute.return_value = {
+                "delta": 0.1,
+                "theta": 0.2,
+                "alpha": 0.3,
+                "beta": 0.25,
+                "gamma": 0.15,
+            }
             await _run_pump(pump, adapter, duration=0.5)
         assert mock_bp.compute.call_count >= 1
 
@@ -334,6 +363,7 @@ class TestStage7Bandpower:
 # Stage 8 — classifiers (focus / fatigue)
 # ---------------------------------------------------------------------------
 
+
 class TestStage8Classifiers:
     @pytest.mark.asyncio
     async def test_classifiers_called_when_toggle_on(self):
@@ -348,9 +378,12 @@ class TestStage8Classifiers:
         """classifiers.run is always called when eeg is valid and not rejected;
         to skip it, we force artifact_rejected by making the gate always reject."""
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch("neurolink.eeg_pump.classifiers") as mock_cl, \
-             patch.object(pump._stage3, "evaluate") as mock_gate:
+        with (
+            patch("neurolink.eeg_pump.classifiers") as mock_cl,
+            patch.object(pump._stage3, "evaluate") as mock_gate,
+        ):
             from neurolink.dsp.artifact_gate import ArtifactDecision
+
             mock_gate.return_value = ArtifactDecision(reject=True, reasons=["test"])
             mock_cl.run.return_value = {}
             await _run_pump(pump, adapter, duration=0.35)
@@ -375,34 +408,42 @@ class TestStage8Classifiers:
 # Settling / hub.emit_settling() integration
 # ---------------------------------------------------------------------------
 
+
 class TestSettlingEmission:
     @pytest.mark.asyncio
     async def test_emit_settling_called_on_impedance_unstable(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch.object(hub, "emit_settling") as mock_emit, \
-             patch("neurolink.eeg_pump.impedance") as mock_imp:
+        with (
+            patch.object(hub, "emit_settling") as mock_emit,
+            patch("neurolink.eeg_pump.impedance") as mock_imp,
+        ):
             mock_imp.check.return_value = False  # unstable
             await _run_pump(pump, adapter, duration=0.35)
         assert mock_emit.called
-        reasons = [c.kwargs.get("reason", c.args[0] if c.args else None)
-                   for c in mock_emit.call_args_list]
+        reasons = [
+            c.kwargs.get("reason", c.args[0] if c.args else None) for c in mock_emit.call_args_list
+        ]
         assert any(r == "impedance_unstable" for r in reasons)
 
     @pytest.mark.asyncio
     async def test_no_settling_when_impedance_stable(self):
         pump, hub, adapter = _make_pump(publish_hz=4)
-        with patch.object(hub, "emit_settling") as mock_emit, \
-             patch("neurolink.eeg_pump.impedance") as mock_imp:
+        with (
+            patch.object(hub, "emit_settling") as mock_emit,
+            patch("neurolink.eeg_pump.impedance") as mock_imp,
+        ):
             mock_imp.check.return_value = True  # stable
             await _run_pump(pump, adapter, duration=0.35)
-        reasons = [c.kwargs.get("reason", c.args[0] if c.args else None)
-                   for c in mock_emit.call_args_list]
+        reasons = [
+            c.kwargs.get("reason", c.args[0] if c.args else None) for c in mock_emit.call_args_list
+        ]
         assert "impedance_unstable" not in reasons
 
 
 # ---------------------------------------------------------------------------
 # Artifact gate integration
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactGateIntegration:
     @pytest.mark.asyncio
@@ -423,6 +464,7 @@ class TestArtifactGateIntegration:
 # ---------------------------------------------------------------------------
 # SSE fan-out
 # ---------------------------------------------------------------------------
+
 
 class TestSSEFanOut:
     @pytest.mark.asyncio

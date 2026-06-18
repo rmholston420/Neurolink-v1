@@ -1,4 +1,5 @@
 """Branch-coverage tests for service.py (NeuroLinkService)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -19,6 +20,7 @@ def _service() -> NeuroLinkService:
 # Initial state
 # ---------------------------------------------------------------------------
 
+
 def test_service_initial_state():
     svc = _service()
     assert svc.is_connected is False
@@ -28,6 +30,7 @@ def test_service_initial_state():
 # ---------------------------------------------------------------------------
 # connect() + disconnect() round-trip
 # ---------------------------------------------------------------------------
+
 
 async def test_connect_mock_and_disconnect():
     svc = _service()
@@ -44,6 +47,7 @@ async def test_connect_mock_and_disconnect():
 # connect() twice raises AdapterAlreadyConnectedError
 # ---------------------------------------------------------------------------
 
+
 async def test_connect_twice_raises():
     svc = _service()
     await svc.connect(adapter_type="mock", device_model="mock")
@@ -56,6 +60,7 @@ async def test_connect_twice_raises():
 # disconnect() with no adapter (never connected)
 # ---------------------------------------------------------------------------
 
+
 async def test_disconnect_when_not_connected_is_safe():
     svc = _service()
     resp = await svc.disconnect()
@@ -65,6 +70,7 @@ async def test_disconnect_when_not_connected_is_safe():
 # ---------------------------------------------------------------------------
 # disconnect() — adapter.disconnect() raises, still cleans up
 # ---------------------------------------------------------------------------
+
 
 async def test_disconnect_adapter_error_still_cleans_up():
     svc = _service()
@@ -79,6 +85,7 @@ async def test_disconnect_adapter_error_still_cleans_up():
 # get_current_state
 # ---------------------------------------------------------------------------
 
+
 async def test_get_current_state():
     svc = _service()
     state = await svc.get_current_state()
@@ -88,6 +95,7 @@ async def test_get_current_state():
 # ---------------------------------------------------------------------------
 # get_band_powers
 # ---------------------------------------------------------------------------
+
 
 async def test_get_band_powers_returns_response():
     svc = _service()
@@ -100,8 +108,10 @@ async def test_get_band_powers_returns_response():
 # get_ea1
 # ---------------------------------------------------------------------------
 
+
 async def test_get_ea1():
     from neurolink.models.eeg import EA1Result
+
     svc = _service()
     result = await svc.get_ea1()
     assert isinstance(result, EA1Result)
@@ -110,6 +120,7 @@ async def test_get_ea1():
 # ---------------------------------------------------------------------------
 # start_calibration — no adapter raises
 # ---------------------------------------------------------------------------
+
 
 async def test_start_calibration_no_adapter_raises():
     svc = _service()
@@ -120,6 +131,7 @@ async def test_start_calibration_no_adapter_raises():
 # ---------------------------------------------------------------------------
 # start_calibration — starts task
 # ---------------------------------------------------------------------------
+
 
 async def test_start_calibration_starts_task():
     svc = _service()
@@ -140,6 +152,7 @@ async def test_start_calibration_starts_task():
 # start_calibration — idempotent while already running
 # ---------------------------------------------------------------------------
 
+
 async def test_start_calibration_idempotent():
     svc = _service()
     await svc.connect(adapter_type="mock", device_model="mock")
@@ -159,6 +172,7 @@ async def test_start_calibration_idempotent():
 # get_sessions — no factory returns empty list
 # ---------------------------------------------------------------------------
 
+
 async def test_get_sessions_no_factory():
     svc = _service()
     sessions = await svc.get_sessions()
@@ -168,6 +182,7 @@ async def test_get_sessions_no_factory():
 # ---------------------------------------------------------------------------
 # set_db_session_factory
 # ---------------------------------------------------------------------------
+
 
 def test_set_db_session_factory():
     svc = _service()
@@ -179,6 +194,7 @@ def test_set_db_session_factory():
 # ---------------------------------------------------------------------------
 # _close_db_session — no factory, no session_id (both early-exit branches)
 # ---------------------------------------------------------------------------
+
 
 async def test_close_db_session_no_factory():
     svc = _service()
@@ -194,6 +210,7 @@ async def test_close_db_session_no_session_id():
 # ---------------------------------------------------------------------------
 # stream_state — timeout branch yields current state
 # ---------------------------------------------------------------------------
+
 
 async def test_stream_state_timeout_yields_current_state():
     svc = _service()
@@ -211,6 +228,7 @@ async def test_stream_state_timeout_yields_current_state():
 # stream_state — CancelledError exits cleanly
 # ---------------------------------------------------------------------------
 
+
 async def test_stream_state_cancelled_unregisters_queue():
     svc = _service()
 
@@ -220,8 +238,11 @@ async def test_stream_state_cancelled_unregisters_queue():
 
     # Push a real state so the queue yields once
     from neurolink.models.eeg import BandPowers, IngestPayload
+
     p = IngestPayload(
-        source="mock", address="mock", timestamp=0.0,
+        source="mock",
+        address="mock",
+        timestamp=0.0,
         bands=BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.1, gamma=0.05),
         poor_contact=False,
     )

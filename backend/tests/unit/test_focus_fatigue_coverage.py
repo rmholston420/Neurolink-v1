@@ -1,4 +1,5 @@
 """Coverage tests for focus_state.py and fatigue.py."""
+
 from __future__ import annotations
 
 from neurolink.fatigue import FatigueDetector
@@ -10,10 +11,10 @@ from neurolink.focus_state import (
     set_current_focus_score,
 )
 
-
 # ===========================================================================
 # focus_state.py
 # ===========================================================================
+
 
 class TestComputeFocusScore:
     def test_high_alpha_suppresses_focus(self):
@@ -75,6 +76,7 @@ class TestFocusGlobal:
 # ===========================================================================
 # fatigue.py
 # ===========================================================================
+
 
 class TestFatigueDetector:
     def test_initial_update_returns_float(self):

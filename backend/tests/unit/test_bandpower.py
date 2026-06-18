@@ -7,10 +7,10 @@ import pytest
 
 from neurolink.dsp.bandpower import compute_band_powers
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _sine(freq_hz: float, duration_s: float = 1.0, fs: int = 256) -> list[float]:
     t = np.linspace(0, duration_s, int(fs * duration_s), endpoint=False)
@@ -20,6 +20,7 @@ def _sine(freq_hz: float, duration_s: float = 1.0, fs: int = 256) -> list[float]
 # ---------------------------------------------------------------------------
 # Happy-path tests
 # ---------------------------------------------------------------------------
+
 
 class TestComputeBandPowers:
     def test_returns_five_bands(self, eeg_buffer_256hz):
@@ -73,6 +74,7 @@ class TestComputeBandPowers:
 # ---------------------------------------------------------------------------
 # Edge-case tests
 # ---------------------------------------------------------------------------
+
 
 class TestBandPowerEdgeCases:
     def test_single_channel(self):

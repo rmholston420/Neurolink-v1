@@ -100,7 +100,7 @@ class NeuroLinkService:
         from the previous session.
         """
         if self._pump:
-            self._pump.reset()        # resets BaselineRecorder + hub
+            self._pump.reset()  # resets BaselineRecorder + hub
             await self._pump.stop()
             self._pump = None
 

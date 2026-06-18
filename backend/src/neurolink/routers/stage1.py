@@ -20,7 +20,7 @@ import structlog
 from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel, Field
 
-from neurolink.dsp.online_filter import FilterConfig, FilterChainRegistry, get_registry
+from neurolink.dsp.online_filter import FilterChainRegistry, FilterConfig, get_registry
 
 log = structlog.get_logger(__name__)
 
@@ -31,11 +31,10 @@ router = APIRouter(prefix="/stage1", tags=["Stage1"])
 # Pydantic schemas
 # ---------------------------------------------------------------------------
 
+
 class FilterConfigSchema(BaseModel):
     hz_highpass: float | None = Field(0.5, description="High-pass cut-off Hz; null to skip")
-    hz_notch_freqs: list[float] = Field(
-        [50.0, 100.0], description="Notch centre frequencies Hz"
-    )
+    hz_notch_freqs: list[float] = Field([50.0, 100.0], description="Notch centre frequencies Hz")
     hz_lowpass: float | None = Field(45.0, description="Low-pass cut-off Hz; null to skip")
     notch_bw_hz: float = Field(2.0, description="Full bandwidth of each notch Hz")
     fs: float = Field(256.0, description="Sampling rate Hz")
@@ -54,6 +53,7 @@ class FilterDiagnosticsSchema(BaseModel):
 # Dependency: registry
 # ---------------------------------------------------------------------------
 
+
 def _get_registry() -> FilterChainRegistry:
     return get_registry()
 
@@ -64,6 +64,7 @@ RegistryDep = Annotated[FilterChainRegistry, Depends(_get_registry)]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _config_to_schema(cfg: FilterConfig) -> FilterConfigSchema:
     return FilterConfigSchema(
@@ -90,6 +91,7 @@ def _schema_to_config(schema: FilterConfigSchema) -> FilterConfig:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("/config", response_model=FilterConfigSchema)
 async def get_filter_config(registry: RegistryDep) -> FilterConfigSchema:
@@ -162,9 +164,7 @@ async def get_filter_diagnostics(
         if sample and sample.eeg_buffer:
             _min_len = min(len(b) for b in sample.eeg_buffer)
             if _min_len >= nperseg:
-                eeg_arr = np.array(
-                    [b[:_min_len] for b in sample.eeg_buffer], dtype=np.float64
-                )
+                eeg_arr = np.array([b[:_min_len] for b in sample.eeg_buffer], dtype=np.float64)
                 # Apply current filter chain before computing PSD
                 eeg_filt = registry.apply(eeg_arr.astype(np.float32)).astype(np.float64)
                 ch_names = ["TP9", "AF7", "AF8", "TP10", "AUX"]

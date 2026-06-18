@@ -19,7 +19,6 @@ The pipeline downstream can then discard or downweight flagged segments.
 
 from __future__ import annotations
 
-import math
 import time
 from collections import deque
 

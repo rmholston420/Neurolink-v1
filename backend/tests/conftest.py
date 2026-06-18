@@ -10,10 +10,10 @@ from httpx import ASGITransport, AsyncClient
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload
 
-
 # ---------------------------------------------------------------------------
 # Domain fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def hub() -> EEGHub:
@@ -59,6 +59,7 @@ def eeg_buffer_256hz() -> list[list[float]]:
 # FastAPI / httpx fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def app():
     """Create a fresh FastAPI application instance with reset singletons."""
@@ -69,6 +70,7 @@ def app():
     hub_mod._hub = hub_mod.EEGHub()
 
     from neurolink.main import create_app
+
     return create_app()
 
 

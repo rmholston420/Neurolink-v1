@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from neurolink.dsp.classifiers import classify_v01, classify_v2, compute_s_space
 from neurolink.models.eeg import BandPowers
-
 
 # ---------------------------------------------------------------------------
 # classify_v2
 # ---------------------------------------------------------------------------
+
 
 class TestClassifyV2:
     def test_returns_two_strings(self, flat_bands):
@@ -40,6 +38,7 @@ class TestClassifyV2:
 # classify_v01
 # ---------------------------------------------------------------------------
 
+
 class TestClassifyV01:
     def test_returns_two_strings(self):
         region, stage = classify_v01(
@@ -60,6 +59,7 @@ class TestClassifyV01:
 # compute_s_space
 # ---------------------------------------------------------------------------
 
+
 class TestComputeSSpace:
     def test_returns_sspace_with_x_y(self, flat_bands):
         s = compute_s_space(flat_bands)
@@ -69,6 +69,7 @@ class TestComputeSSpace:
     def test_x_y_are_finite_floats(self, flat_bands):
         s = compute_s_space(flat_bands)
         import math
+
         assert math.isfinite(s.x)
         assert math.isfinite(s.y)
 

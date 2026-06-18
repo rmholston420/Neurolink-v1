@@ -13,18 +13,16 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock
 
-import pytest
-
 from neurolink.dsp.asr import ArtifactSubspaceReconstructor
 from neurolink.dsp.baseline import BaselinePhase, BaselineRecorder
 from neurolink.eeg_pump import EEGPump
 from neurolink.hardware.base import HardwareAdapter
 from neurolink.hub import EEGHub
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_hub() -> EEGHub:
     return EEGHub()
@@ -45,8 +43,8 @@ def _make_pump(hub: EEGHub) -> EEGPump:
 # BaselineRecorder.reset() unit tests
 # ---------------------------------------------------------------------------
 
-class TestBaselineRecorderReset:
 
+class TestBaselineRecorderReset:
     def test_reset_restores_warmup_phase(self):
         """reset() moves a COMPLETE recorder back to WARMUP."""
         hub = _make_hub()
@@ -85,8 +83,8 @@ class TestBaselineRecorderReset:
 # EEGPump.reset() integration tests
 # ---------------------------------------------------------------------------
 
-class TestEEGPumpReset:
 
+class TestEEGPumpReset:
     def test_pump_reset_calls_baseline_reset(self):
         """EEGPump.reset() drives BaselineRecorder back to WARMUP."""
         hub = _make_hub()

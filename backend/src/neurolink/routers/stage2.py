@@ -30,6 +30,7 @@ router = APIRouter(prefix="/stage2", tags=["Stage2"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class ChannelStatusSchema(BaseModel):
     name: str
     ema_variance: float
@@ -53,9 +54,7 @@ class MarkChannelRequest(BaseModel):
 
 class DetectorConfigSchema(BaseModel):
     var_threshold: float = Field(0.01, description="Flat-line threshold µV²")
-    psd_ratio_threshold: float = Field(
-        5.0, description="Noisy channel: PSD > N × median"
-    )
+    psd_ratio_threshold: float = Field(5.0, description="Noisy channel: PSD > N × median")
     ema_alpha: float = Field(0.1, description="EMA smoothing factor")
     fs: float = Field(256.0, description="Sampling rate Hz")
     nperseg: int = Field(128, description="Welch PSD nperseg")
@@ -64,6 +63,7 @@ class DetectorConfigSchema(BaseModel):
 # ---------------------------------------------------------------------------
 # Dependency
 # ---------------------------------------------------------------------------
+
 
 def _get_detector(request: Request) -> BadChannelDetector:
     detector = getattr(request.app.state, "bad_channel_detector", None)
@@ -78,6 +78,7 @@ DetectorDep = Annotated[BadChannelDetector, Depends(_get_detector)]
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("/status", response_model=Stage2StatusResponse)
 async def get_status(detector: DetectorDep) -> Stage2StatusResponse:

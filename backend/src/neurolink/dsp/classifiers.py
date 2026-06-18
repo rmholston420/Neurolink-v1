@@ -14,11 +14,9 @@ from __future__ import annotations
 
 from neurolink.dsp.artifact_config import (
     V01_ALPHA_C,
-    V01_ALPHA_D,
     V01_ALPHA_E,
     V01_BETA_B,
     V01_DELTA_F,
-    V01_GAMMA_G,
     V01_MULTIPLICATIO_ALPHA,
     V01_MULTIPLICATIO_FAA,
     V01_MULTIPLICATIO_THETA,

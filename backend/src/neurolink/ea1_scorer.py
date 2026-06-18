@@ -18,7 +18,7 @@ from neurolink.models.eeg import EA1Criterion, EA1Result, IngestPayload
 # ── Thresholds (sourced from artifact_config for pipeline-wide consistency) ───
 ALPHA_THRESHOLD: float = EA1_ALPHA_THRESHOLD
 THETA_THRESHOLD: float = EA1_THETA_THRESHOLD
-MOTION_RMS_GATE: float = ARTIFACT_ACCEL_RMS_G   # unified with ArtifactGate
+MOTION_RMS_GATE: float = ARTIFACT_ACCEL_RMS_G  # unified with ArtifactGate
 CONTACT_QUALITY_MIN: float = EA1_CONTACT_QUALITY_MIN
 
 # S-space gating — must be in region D or E for eligibility

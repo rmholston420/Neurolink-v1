@@ -10,18 +10,16 @@ Covers:
   - set_config() resets calibration
   - Edge cases: 1-D input, too few samples, degenerate covariance fallback
 """
+
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
-from neurolink.dsp.asr import (
-    ASRConfig,
-    ASRState,
-    ArtifactSubspaceReconstructor,
-)
 from neurolink.dsp.artifact_config import ASR_BURST_SD, ASR_CALIB_SEC
-
+from neurolink.dsp.asr import (
+    ArtifactSubspaceReconstructor,
+    ASRConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

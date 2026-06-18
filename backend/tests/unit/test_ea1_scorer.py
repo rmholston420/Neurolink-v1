@@ -8,10 +8,16 @@ from neurolink.ea1_scorer import score as ea1_score
 from neurolink.models.eeg import BandPowers, IngestPayload
 
 
-def _payload(alpha: float, theta: float, beta: float = 0.1,
-             delta: float = 0.05, gamma: float = 0.05,
-             faa: float = 0.0, fmt: float = 0.0,
-             source: str = "mock") -> IngestPayload:
+def _payload(
+    alpha: float,
+    theta: float,
+    beta: float = 0.1,
+    delta: float = 0.05,
+    gamma: float = 0.05,
+    faa: float = 0.0,
+    fmt: float = 0.0,
+    source: str = "mock",
+) -> IngestPayload:
     bands = BandPowers(alpha=alpha, theta=theta, beta=beta, delta=delta, gamma=gamma)
     return IngestPayload(source=source, bands=bands, faa=faa, fmt=fmt)
 

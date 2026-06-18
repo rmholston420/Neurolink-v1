@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
 from neurolink.dsp.imu import compute_motion_rms, head_orientation
 from neurolink.models.eeg import IMUPayload
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -26,14 +23,13 @@ def _accel(
     n: int = N,
 ) -> np.ndarray:
     """Constant 3-axis accelerometer array (3, N)."""
-    return np.array(
-        [[ax] * n, [ay] * n, [az] * n], dtype=np.float32
-    )
+    return np.array([[ax] * n, [ay] * n, [az] * n], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
 # head_orientation()
 # ---------------------------------------------------------------------------
+
 
 class TestHeadOrientation:
     # --- Guard conditions ---
@@ -122,6 +118,7 @@ class TestHeadOrientation:
 # ---------------------------------------------------------------------------
 # compute_motion_rms()
 # ---------------------------------------------------------------------------
+
 
 class TestComputeMotionRms:
     def test_returns_float(self):

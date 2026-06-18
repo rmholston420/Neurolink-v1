@@ -46,15 +46,15 @@ log = structlog.get_logger(__name__)
 # TP10 ≈ T10 (right posterior temporal)
 # ──────────────────────────────────────────────────────────────────────────────
 _MUSE_POSITIONS: dict[str, np.ndarray] = {
-    "TP9":  np.array([-0.5878, -0.3090,  0.7431], dtype=np.float64),
-    "AF7":  np.array([-0.5440,  0.6550,  0.5240], dtype=np.float64),
-    "AF8":  np.array([ 0.5440,  0.6550,  0.5240], dtype=np.float64),
-    "TP10": np.array([ 0.5878, -0.3090,  0.7431], dtype=np.float64),
+    "TP9": np.array([-0.5878, -0.3090, 0.7431], dtype=np.float64),
+    "AF7": np.array([-0.5440, 0.6550, 0.5240], dtype=np.float64),
+    "AF8": np.array([0.5440, 0.6550, 0.5240], dtype=np.float64),
+    "TP10": np.array([0.5878, -0.3090, 0.7431], dtype=np.float64),
 }
 
 # Spline parameters
-_N_LEGENDRE: int = 7         # Legendre series truncation degree
-_LAMBDA: float = 1e-5        # Tikhonov regularisation (MNE default)
+_N_LEGENDRE: int = 7  # Legendre series truncation degree
+_LAMBDA: float = 1e-5  # Tikhonov regularisation (MNE default)
 _EEG_CHANNELS: list[str] = ["TP9", "AF7", "AF8", "TP10"]
 _CHANNEL_IDX: dict[str, int] = {"TP9": 0, "AF7": 1, "AF8": 2, "TP10": 3, "AUX": 4}
 
@@ -62,6 +62,7 @@ _CHANNEL_IDX: dict[str, int] = {"TP9": 0, "AF7": 1, "AF8": 2, "TP10": 3, "AUX": 
 # ──────────────────────────────────────────────────────────────────────────────
 # Legendre polynomial helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _g_function(cos_dist: np.ndarray, n_legendre: int = _N_LEGENDRE) -> np.ndarray:
     """Compute the G (smoothing) matrix entries.
@@ -78,11 +79,11 @@ def _g_function(cos_dist: np.ndarray, n_legendre: int = _N_LEGENDRE) -> np.ndarr
     """
     result = np.zeros_like(cos_dist, dtype=np.float64)
     # Recurrence relation for Legendre polynomials
-    p_prev = np.ones_like(cos_dist, dtype=np.float64)   # P_0
-    p_curr = cos_dist.copy().astype(np.float64)           # P_1
+    p_prev = np.ones_like(cos_dist, dtype=np.float64)  # P_0
+    p_curr = cos_dist.copy().astype(np.float64)  # P_1
     m_order = 4  # Perrin 1989 uses m=4
     for n in range(1, n_legendre + 1):
-        coef = (2 * n + 1) / (n ** m_order * (n + 1) ** m_order)
+        coef = (2 * n + 1) / (n**m_order * (n + 1) ** m_order)
         result += coef * (p_curr if n > 0 else p_prev)
         # Advance recurrence: P_{n+1}(x) = ((2n+1)x P_n - n P_{n-1}) / (n+1)
         p_next = ((2 * n + 1) * cos_dist * p_curr - n * p_prev) / (n + 1)
@@ -107,6 +108,7 @@ def _cosine_matrix(positions: np.ndarray) -> np.ndarray:
 # ──────────────────────────────────────────────────────────────────────────────
 # Public interpolation function
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def interpolate_bad_channels(
     eeg: np.ndarray,
@@ -134,14 +136,14 @@ def interpolate_bad_channels(
     """
     # Filter to EEG-only bad channels that are actually present
     bad_eeg = [
-        ch for ch in bad_channels
-        if ch in _EEG_CHANNELS and _CHANNEL_IDX.get(ch, 99) < eeg.shape[0]
+        ch for ch in bad_channels if ch in _EEG_CHANNELS and _CHANNEL_IDX.get(ch, 99) < eeg.shape[0]
     ]
     if not bad_eeg:
         return eeg
 
-    good_eeg = [ch for ch in _EEG_CHANNELS if ch not in bad_eeg
-                and _CHANNEL_IDX.get(ch, 99) < eeg.shape[0]]
+    good_eeg = [
+        ch for ch in _EEG_CHANNELS if ch not in bad_eeg and _CHANNEL_IDX.get(ch, 99) < eeg.shape[0]
+    ]
 
     out = eeg.copy()
 
@@ -166,13 +168,11 @@ def interpolate_bad_channels(
     # Use only good-channel positions to solve for spline coefficients,
     # then evaluate at bad-channel positions.
     n_good = len(good_eeg)
-    good_pos = np.array(
-        [_MUSE_POSITIONS[ch] for ch in good_eeg], dtype=np.float64
-    )  # (n_good, 3)
+    good_pos = np.array([_MUSE_POSITIONS[ch] for ch in good_eeg], dtype=np.float64)  # (n_good, 3)
 
     # G matrix among good channels
-    cos_good = _cosine_matrix(good_pos)          # (n_good, n_good)
-    G_good = _g_function(cos_good)               # (n_good, n_good)
+    cos_good = _cosine_matrix(good_pos)  # (n_good, n_good)
+    G_good = _g_function(cos_good)  # (n_good, n_good)
 
     # Perrin 1989 augmented system:
     # [ G+λI   1 ] [ c ] = [ v ]
@@ -186,7 +186,7 @@ def interpolate_bad_channels(
 
     # Right-hand side: good-channel signal (n_good, n_samples)
     good_idx = [_CHANNEL_IDX[ch] for ch in good_eeg]
-    V_good = out[good_idx].astype(np.float64)   # (n_good, n_samples)
+    V_good = out[good_idx].astype(np.float64)  # (n_good, n_samples)
     rhs = np.zeros((size, V_good.shape[1]), dtype=np.float64)
     rhs[:n_good] = V_good
 
@@ -200,16 +200,14 @@ def interpolate_bad_channels(
             out[_CHANNEL_IDX[ch]] = mean_sig
         return out
 
-    c = coefs[:n_good]   # spline weights  (n_good, n_samples)
-    d = coefs[n_good]    # constant term   (n_samples,)
+    c = coefs[:n_good]  # spline weights  (n_good, n_samples)
+    d = coefs[n_good]  # constant term   (n_samples,)
 
     # ── Evaluate spline at bad-channel positions ──────────────────────────
     for bad_ch in bad_eeg:
         bad_pos = _MUSE_POSITIONS[bad_ch]  # (3,)
         # Cosine distances from bad electrode to all good electrodes
-        cos_bad_good = np.clip(
-            good_pos @ bad_pos, -1.0, 1.0
-        )  # (n_good,)
+        cos_bad_good = np.clip(good_pos @ bad_pos, -1.0, 1.0)  # (n_good,)
         g_vec = _g_function(cos_bad_good[np.newaxis, :]).squeeze(0)  # (n_good,)
         # interpolated = G(bad, good) @ c + d
         interpolated = (g_vec @ c + d).astype(np.float32)  # (n_samples,)

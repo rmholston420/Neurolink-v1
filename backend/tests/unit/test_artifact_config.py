@@ -8,29 +8,27 @@ would silently shift the pipeline's sensitivity.  Every constant must:
 If a threshold needs to change intentionally, update both the constant
 and the corresponding assertion here with a brief comment explaining why.
 """
+
 from __future__ import annotations
 
 import math
 
-import pytest
-
 from neurolink.dsp.artifact_config import (
-    # Stage 3 — amplitude / motion / kurtosis
-    ARTIFACT_PK2PK_UV,
     ARTIFACT_ACCEL_RMS_G,
     ARTIFACT_KURTOSIS_THRESHOLD,
+    # Stage 3 — amplitude / motion / kurtosis
+    ARTIFACT_PK2PK_UV,
     # Stage 4 — ASR
     ASR_BURST_SD,
     ASR_CALIB_SEC,
+    BASELINE_DISCARD_SEC,
     # Baseline recording
     BASELINE_TOTAL_SEC,
-    BASELINE_DISCARD_SEC,
     # EA-1 scorer
     EA1_ALPHA_THRESHOLD,
-    EA1_THETA_THRESHOLD,
     EA1_CONTACT_QUALITY_MIN,
+    EA1_THETA_THRESHOLD,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -147,6 +145,5 @@ def test_asr_calib_fits_in_baseline_recording_window():
     """ASR_CALIB_SEC must be <= BASELINE_TOTAL_SEC - BASELINE_DISCARD_SEC."""
     recording_window = BASELINE_TOTAL_SEC - BASELINE_DISCARD_SEC
     assert ASR_CALIB_SEC <= recording_window, (
-        f"ASR_CALIB_SEC ({ASR_CALIB_SEC}s) exceeds available "
-        f"recording window ({recording_window}s)"
+        f"ASR_CALIB_SEC ({ASR_CALIB_SEC}s) exceeds available recording window ({recording_window}s)"
     )

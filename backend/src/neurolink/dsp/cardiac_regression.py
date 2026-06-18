@@ -96,7 +96,7 @@ class CardiacRegressor:
     def __init__(self, config: CardiacRegressionConfig | None = None) -> None:
         self._lock = threading.Lock()
         self._cfg: CardiacRegressionConfig = config or CardiacRegressionConfig()
-        self._template: np.ndarray | None = None      # (n_ch, win_samples)
+        self._template: np.ndarray | None = None  # (n_ch, win_samples)
         self._epoch_buffer: list[np.ndarray] = []
         self._beats_since_recalib: int = 0
         # Rolling ring of EEG sample columns (~2 s at 256 Hz)
@@ -131,10 +131,7 @@ class CardiacRegressor:
         if not ibi_ms:
             return eeg
 
-        valid_ibis = [
-            ibi for ibi in ibi_ms
-            if cfg.min_ibi_ms <= ibi <= cfg.max_ibi_ms
-        ]
+        valid_ibis = [ibi for ibi in ibi_ms if cfg.min_ibi_ms <= ibi <= cfg.max_ibi_ms]
         if not valid_ibis:
             return eeg
 
@@ -162,8 +159,8 @@ class CardiacRegressor:
         with self._lock:
             ring_snap = list(self._eeg_ring)
 
-        ring_arr = np.array(ring_snap, dtype=np.float32).T   # (n_ch, ring_len)
-        epoch = ring_arr[:, start:end]                        # (n_ch, win_len)
+        ring_arr = np.array(ring_snap, dtype=np.float32).T  # (n_ch, ring_len)
+        epoch = ring_arr[:, start:end]  # (n_ch, win_len)
 
         with self._lock:
             self._epoch_buffer.append(epoch)
@@ -174,7 +171,7 @@ class CardiacRegressor:
                 and self._beats_since_recalib >= cfg.recalib_beats
             ):
                 self._template = self._build_template(
-                    self._epoch_buffer[-cfg.template_beats:],
+                    self._epoch_buffer[-cfg.template_beats :],
                     cfg.trim_fraction,
                 )
                 self._beats_since_recalib = 0
@@ -195,17 +192,17 @@ class CardiacRegressor:
 
         frame_start_in_ring = ring_len - n_samples
         f_start = max(start, frame_start_in_ring) - frame_start_in_ring
-        f_end   = min(end,   ring_len)             - frame_start_in_ring
+        f_end = min(end, ring_len) - frame_start_in_ring
         f_start = max(0, f_start)
-        f_end   = min(n_samples, f_end)
+        f_end = min(n_samples, f_end)
 
         if f_start >= f_end:
             return eeg_out
 
         t_start = f_start + (frame_start_in_ring - start)
         t_start = max(0, t_start)
-        t_len   = f_end - f_start
-        t_end   = t_start + t_len
+        t_len = f_end - f_start
+        t_end = t_start + t_len
 
         if t_end > template.shape[1]:
             return eeg_out
@@ -227,6 +224,7 @@ class CardiacRegressor:
     def get_config(self) -> CardiacRegressionConfig:
         with self._lock:
             import copy
+
             return copy.copy(self._cfg)
 
     def set_config(self, config: CardiacRegressionConfig) -> None:

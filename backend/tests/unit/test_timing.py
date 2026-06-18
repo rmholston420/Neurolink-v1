@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from neurolink.utils.timing import elapsed_ms, mono_ns, mono_sec, rate_limiter
 
 

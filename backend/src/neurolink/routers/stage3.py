@@ -43,6 +43,7 @@ router = APIRouter(prefix="/stage3", tags=["Stage3"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class GateConfigSchema(BaseModel):
     """All fields optional on POST — send only what you want to change."""
 
@@ -104,6 +105,7 @@ class GateStatsResponse(BaseModel):
 # Dependency — fetch gate from app.state
 # ---------------------------------------------------------------------------
 
+
 def _get_gate(request: Request) -> ArtifactGate:
     gate = getattr(request.app.state, "artifact_gate", None)
     if gate is None:
@@ -121,6 +123,7 @@ GateDep = Annotated[ArtifactGate, Depends(_get_gate)]
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _cfg_to_response(cfg: GateConfig) -> GateConfigResponse:
     return GateConfigResponse(
         pk2pk_uv=cfg.pk2pk_uv,
@@ -135,6 +138,7 @@ def _cfg_to_response(cfg: GateConfig) -> GateConfigResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get("/config", response_model=GateConfigResponse)
 async def get_config(gate: GateDep) -> GateConfigResponse:

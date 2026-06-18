@@ -21,6 +21,7 @@ N = 512
 # bandpower()
 # ---------------------------------------------------------------------------
 
+
 class TestBandpower:
     def test_none_returns_zero(self):
         assert bandpower(None, 8.0, 13.0) == 0.0
@@ -69,6 +70,7 @@ class TestBandpower:
 # ---------------------------------------------------------------------------
 # compute_band_powers()
 # ---------------------------------------------------------------------------
+
 
 class TestComputeBandPowers:
     def test_none_returns_zero_bandpowers(self):
@@ -119,6 +121,7 @@ class TestComputeBandPowers:
 # compute_band_powers_from_buffer()
 # ---------------------------------------------------------------------------
 
+
 class TestComputeBandPowersFromBuffer:
     def test_none_returns_zero_dict(self):
         result = compute_band_powers_from_buffer(None)
@@ -156,6 +159,7 @@ class TestComputeBandPowersFromBuffer:
 # ---------------------------------------------------------------------------
 # make_buffers()
 # ---------------------------------------------------------------------------
+
 
 class TestMakeBuffers:
     def test_returns_dict(self):

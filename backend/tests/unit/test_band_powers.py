@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.bandpower import compute_band_powers_from_buffer
 
@@ -22,23 +21,17 @@ class TestComputeBandPowers:
     def test_alpha_dominant_for_10hz(self):
         buf = np.stack([_sine(10)] * 4)
         result = compute_band_powers_from_buffer(buf, fs=256.0)
-        assert result["alpha"] == max(result.values()), (
-            f"Expected alpha dominant, got {result}"
-        )
+        assert result["alpha"] == max(result.values()), f"Expected alpha dominant, got {result}"
 
     def test_theta_dominant_for_6hz(self):
         buf = np.stack([_sine(6)] * 4)
         result = compute_band_powers_from_buffer(buf, fs=256.0)
-        assert result["theta"] == max(result.values()), (
-            f"Expected theta dominant, got {result}"
-        )
+        assert result["theta"] == max(result.values()), f"Expected theta dominant, got {result}"
 
     def test_beta_dominant_for_20hz(self):
         buf = np.stack([_sine(20)] * 4)
         result = compute_band_powers_from_buffer(buf, fs=256.0)
-        assert result["beta"] == max(result.values()), (
-            f"Expected beta dominant, got {result}"
-        )
+        assert result["beta"] == max(result.values()), f"Expected beta dominant, got {result}"
 
     def test_values_sum_to_one_approx(self):
         buf = np.stack([_sine(10) + _sine(20)] * 4)
@@ -61,6 +54,4 @@ class TestComputeBandPowers:
     def test_delta_dominant_for_2hz(self):
         buf = np.stack([_sine(2)] * 4)
         result = compute_band_powers_from_buffer(buf, fs=256.0)
-        assert result["delta"] == max(result.values()), (
-            f"Expected delta dominant, got {result}"
-        )
+        assert result["delta"] == max(result.values()), f"Expected delta dominant, got {result}"

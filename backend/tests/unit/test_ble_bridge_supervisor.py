@@ -4,12 +4,10 @@ test_ble_bridge.py covers start/stop/wait_for_link_drop but leaves the
 entire _supervisor while-loop body uncovered (~15 statements).
 This file targets those specific branches.
 """
+
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from neurolink.ble_bridge import BLEBridge
 
@@ -26,6 +24,7 @@ def _make_adapter(connected: bool = True):
 # ---------------------------------------------------------------------------
 # Supervisor: adapter already connected → skips connect(), waits, then stops
 # ---------------------------------------------------------------------------
+
 
 async def test_supervisor_already_connected_stop_breaks_loop():
     """_supervisor sees is_connected=True, calls _wait_for_link_drop,
@@ -49,6 +48,7 @@ async def test_supervisor_already_connected_stop_breaks_loop():
 # ---------------------------------------------------------------------------
 # Supervisor: adapter NOT connected → connect() + link_dropped.clear() called
 # ---------------------------------------------------------------------------
+
 
 async def test_supervisor_not_connected_calls_connect():
     """When not connected, _supervisor calls connect() and clears link_dropped."""
@@ -76,6 +76,7 @@ async def test_supervisor_not_connected_calls_connect():
 # ---------------------------------------------------------------------------
 # Supervisor: link dropped while running → log warning, disconnect, sleep
 # ---------------------------------------------------------------------------
+
 
 async def test_supervisor_reconnect_on_link_drop():
     """After _wait_for_link_drop returns with _running still True,
@@ -108,6 +109,7 @@ async def test_supervisor_reconnect_on_link_drop():
 # ---------------------------------------------------------------------------
 # Supervisor: exception in loop body → error logged, sleep, continue
 # ---------------------------------------------------------------------------
+
 
 async def test_supervisor_exception_logs_error_and_continues():
     """An exception inside the try block is caught, logged, and the loop
@@ -146,6 +148,7 @@ async def test_supervisor_exception_logs_error_and_continues():
 # ---------------------------------------------------------------------------
 # Supervisor: link dropped but adapter no longer connected → skips disconnect
 # ---------------------------------------------------------------------------
+
 
 async def test_supervisor_link_drop_adapter_not_connected_skips_disconnect():
     """If link is dropped but adapter.is_connected is already False,

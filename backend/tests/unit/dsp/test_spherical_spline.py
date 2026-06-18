@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.spherical_spline import (
     _EEG_CHANNELS,
@@ -22,6 +21,7 @@ def _make_eeg(seed: int = 0) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+
 
 class TestGoodPath:
     def test_no_bad_channels_returns_unchanged(self):
@@ -63,6 +63,7 @@ class TestGoodPath:
 # Fallback paths
 # ---------------------------------------------------------------------------
 
+
 class TestFallbacks:
     def test_three_bad_channels_fallback_mean(self):
         """Only 1 good EEG channel → spline impossible → fill with mean."""
@@ -87,6 +88,7 @@ class TestFallbacks:
 # AUX passthrough
 # ---------------------------------------------------------------------------
 
+
 class TestAUXPassthrough:
     def test_aux_never_interpolated(self):
         """AUX (index 4) should always pass through unchanged."""
@@ -108,6 +110,7 @@ class TestAUXPassthrough:
 # ---------------------------------------------------------------------------
 # Shape preservation
 # ---------------------------------------------------------------------------
+
 
 class TestShapePreservation:
     def test_output_shape_matches_input(self):

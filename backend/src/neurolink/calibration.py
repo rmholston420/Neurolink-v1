@@ -26,10 +26,10 @@ from neurolink.hardware.base import HardwareAdapter
 
 log = structlog.get_logger(__name__)
 
-WARMUP_SEC: float           = 30.0   # discard window - artefact purge + DC settle
-BASELINE_SEC: float         = 60.0   # clean capture window
-TOTAL_DURATION_SEC: float   = WARMUP_SEC + BASELINE_SEC  # 90 s total
-_MIN_FRAMES: int             = 30     # minimum accepted baseline samples
+WARMUP_SEC: float = 30.0  # discard window - artefact purge + DC settle
+BASELINE_SEC: float = 60.0  # clean capture window
+TOTAL_DURATION_SEC: float = WARMUP_SEC + BASELINE_SEC  # 90 s total
+_MIN_FRAMES: int = 30  # minimum accepted baseline samples
 
 
 class CalibrationSession:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import numpy as np
 
@@ -101,7 +101,7 @@ class MockAdapter(HardwareAdapter):
             gyro_buffer=gyro_buf,
         )
 
-    async def stream(self) -> AsyncGenerator[EEGSample, None]:
+    async def stream(self) -> AsyncGenerator[EEGSample]:
         """Async generator yielding EEGSamples while connected."""
         while self._connected:
             sample = await self.read_sample()

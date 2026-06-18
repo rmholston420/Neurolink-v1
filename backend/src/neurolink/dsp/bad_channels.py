@@ -29,7 +29,7 @@ Channel order follows EEGSample.channels:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import structlog
@@ -47,9 +47,9 @@ _EEG_IDX: list[int] = [0, 1, 2, 3]
 class DetectorConfig:
     """Tunable thresholds for BadChannelDetector."""
 
-    var_threshold: float = 0.01   # µV²  — below this → flat-line bad
+    var_threshold: float = 0.01  # µV²  — below this → flat-line bad
     psd_ratio_threshold: float = 5.0  # ×median PSD → noisy bad
-    ema_alpha: float = 0.1        # EMA smoothing (0.1 →20-frame half-life)
+    ema_alpha: float = 0.1  # EMA smoothing (0.1 →20-frame half-life)
     fs: float = 256.0
     nperseg: int = 128
 
@@ -93,9 +93,7 @@ class BadChannelDetector:
     def __init__(self, config: DetectorConfig | None = None) -> None:
         self._cfg = config or DetectorConfig()
         self._lock = threading.Lock()
-        self._stats: list[ChannelStats] = [
-            ChannelStats(name=n) for n in CHANNEL_NAMES
-        ]
+        self._stats: list[ChannelStats] = [ChannelStats(name=n) for n in CHANNEL_NAMES]
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -140,12 +138,8 @@ class BadChannelDetector:
             for ch in range(n_ch):
                 s = self._stats[ch]
                 # EMA update
-                s.ema_variance = (
-                    alpha * variances[ch] + (1 - alpha) * s.ema_variance
-                )
-                s.ema_mean_psd = (
-                    alpha * mean_psds[ch] + (1 - alpha) * s.ema_mean_psd
-                )
+                s.ema_variance = alpha * variances[ch] + (1 - alpha) * s.ema_variance
+                s.ema_mean_psd = alpha * mean_psds[ch] + (1 - alpha) * s.ema_mean_psd
                 # Threshold decisions (AUX skipped for PSD ratio check)
                 s.flat_line = s.ema_variance < cfg.var_threshold
                 if ch in _EEG_IDX:
@@ -162,6 +156,7 @@ class BadChannelDetector:
         """Return a snapshot of all per-channel stats (copy)."""
         with self._lock:
             import copy
+
             return copy.deepcopy(self._stats)
 
     def set_manual_bad(self, channel: str, bad: bool) -> None:
@@ -181,6 +176,7 @@ class BadChannelDetector:
     def get_config(self) -> DetectorConfig:
         with self._lock:
             import copy
+
             return copy.copy(self._cfg)
 
     def set_config(self, config: DetectorConfig) -> None:

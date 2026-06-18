@@ -3,25 +3,24 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.artifact_config import BASELINE_DISCARD_SEC, BASELINE_TOTAL_SEC
 from neurolink.dsp.baseline import (
+    _COV_CACHE_TTL_SEC,
     BaselinePhase,
     BaselineRecorder,
-    _COV_CACHE_TTL_SEC,
     _cov_cache,
     load_asr_covariance,
     save_asr_covariance,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_recorder(
     discard_elapsed: float = 0.0,
@@ -46,6 +45,7 @@ def _eeg(n_ch: int = 5, n_samples: int = 64) -> np.ndarray:
 # BaselinePhase enum
 # ---------------------------------------------------------------------------
 
+
 class TestBaselinePhase:
     def test_warmup_value(self):
         assert BaselinePhase.WARMUP.value == "warmup"
@@ -60,6 +60,7 @@ class TestBaselinePhase:
 # ---------------------------------------------------------------------------
 # BaselineRecorder — initial state
 # ---------------------------------------------------------------------------
+
 
 class TestBaselineRecorderInit:
     def test_initial_phase_is_warmup(self):
@@ -78,6 +79,7 @@ class TestBaselineRecorderInit:
 # ---------------------------------------------------------------------------
 # BaselineRecorder.process() — state transitions
 # ---------------------------------------------------------------------------
+
 
 class TestBaselineRecorderProcess:
     def test_process_returns_eeg_unchanged_warmup(self):
@@ -113,7 +115,7 @@ class TestBaselineRecorderProcess:
         recorder, _, _ = _make_recorder(total_elapsed=BASELINE_TOTAL_SEC + 1)
         recorder.process(_eeg())
         recorder.process(_eeg())
-        recorder.process(_eeg())   # extra ticks
+        recorder.process(_eeg())  # extra ticks
         assert recorder.phase == "complete"
 
     def test_is_complete_true_after_transition(self):
@@ -155,6 +157,7 @@ class TestBaselineRecorderProcess:
 # BaselineRecorder.reset()
 # ---------------------------------------------------------------------------
 
+
 class TestBaselineRecorderReset:
     def test_reset_returns_to_warmup(self):
         recorder, _, _ = _make_recorder(discard_elapsed=BASELINE_DISCARD_SEC + 1)
@@ -188,10 +191,10 @@ class TestBaselineRecorderReset:
 # ASR Covariance Cache
 # ---------------------------------------------------------------------------
 
+
 class TestAsrCovarianceCache:
     def setup_method(self):
         # Clear module-level cache before each test
-        from neurolink.dsp.baseline import _cov_cache
         _cov_cache.clear()
 
     def test_save_and_load_returns_same_object(self):
@@ -225,18 +228,16 @@ class TestAsrCovarianceCache:
         cov = np.eye(4)
         save_asr_covariance("AA:BB", "user1", cov)
         # Back-date the entry's timestamp beyond TTL
-        from neurolink.dsp.baseline import _cov_cache
         key = "AA:BB::user1"
-        _cov_cache[key]["ts"] -= (_COV_CACHE_TTL_SEC + 1)
+        _cov_cache[key]["ts"] -= _COV_CACHE_TTL_SEC + 1
         result = load_asr_covariance("AA:BB", "user1")
         assert result is None
 
     def test_expired_entry_evicted_from_cache(self):
         cov = np.eye(4)
         save_asr_covariance("AA:BB", "user1", cov)
-        from neurolink.dsp.baseline import _cov_cache
         key = "AA:BB::user1"
-        _cov_cache[key]["ts"] -= (_COV_CACHE_TTL_SEC + 1)
+        _cov_cache[key]["ts"] -= _COV_CACHE_TTL_SEC + 1
         load_asr_covariance("AA:BB", "user1")  # triggers eviction
         assert key not in _cov_cache
 

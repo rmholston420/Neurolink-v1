@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
 from neurolink.models.eeg import (
     BandPowers,
     IngestPayload,
     NeurolinkState,
-    PPGPayload,
-    SSpaceCoords,
 )
 
 

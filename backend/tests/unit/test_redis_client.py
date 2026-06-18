@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 
 async def test_push_state_noop_when_disabled():
     """push_state is a no-op when NEUROLINK_REDIS_ENABLED=false."""
     os.environ["NEUROLINK_REDIS_ENABLED"] = "false"
     import neurolink.config as config_module
+
     config_module._settings = None
 
     from neurolink.cache.redis_client import push_state
@@ -24,6 +23,7 @@ async def test_get_state_returns_none_when_disabled():
     """get_state returns None when NEUROLINK_REDIS_ENABLED=false."""
     os.environ["NEUROLINK_REDIS_ENABLED"] = "false"
     import neurolink.config as config_module
+
     config_module._settings = None
 
     from neurolink.cache.redis_client import get_state
@@ -37,6 +37,7 @@ async def test_push_state_handles_bad_url_gracefully():
     os.environ["NEUROLINK_REDIS_ENABLED"] = "true"
     os.environ["NEUROLINK_REDIS_URL"] = "redis://localhost:1"  # nothing listening
     import neurolink.config as config_module
+
     config_module._settings = None
 
     from neurolink.cache.redis_client import push_state
@@ -50,6 +51,7 @@ async def test_get_state_handles_bad_url_gracefully():
     os.environ["NEUROLINK_REDIS_ENABLED"] = "true"
     os.environ["NEUROLINK_REDIS_URL"] = "redis://localhost:1"  # nothing listening
     import neurolink.config as config_module
+
     config_module._settings = None
 
     from neurolink.cache.redis_client import get_state

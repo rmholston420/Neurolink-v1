@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import copy
 import threading
 
 import numpy as np
 import pytest
 
 from neurolink.dsp.cardiac_regression import (
-    CardiacRegressor,
     CardiacRegressionConfig,
+    CardiacRegressor,
 )
 
 FS: float = 256.0
@@ -20,6 +19,7 @@ N: int = 256  # one second of EEG
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _eeg(n_ch: int = 4, n_samples: int = N, amplitude: float = 10.0, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
@@ -49,6 +49,7 @@ def _regressor_with_warmed_ring(
 # ---------------------------------------------------------------------------
 # CardiacRegressionConfig
 # ---------------------------------------------------------------------------
+
 
 class TestCardiacRegressionConfig:
     def test_default_enable_true(self):
@@ -86,6 +87,7 @@ class TestCardiacRegressionConfig:
 # ---------------------------------------------------------------------------
 # apply() — guard conditions (no scipy needed)
 # ---------------------------------------------------------------------------
+
 
 class TestApplyGuards:
     def test_disabled_returns_same_array(self):
@@ -145,6 +147,7 @@ class TestApplyGuards:
 # IBI validation window
 # ---------------------------------------------------------------------------
 
+
 class TestIBIValidation:
     def test_min_boundary_included(self):
         """IBI exactly at min_ibi_ms is valid and should not be rejected."""
@@ -173,6 +176,7 @@ class TestIBIValidation:
 # ---------------------------------------------------------------------------
 # Template accumulation (warm ring path, scipy required)
 # ---------------------------------------------------------------------------
+
 
 class TestTemplateAccumulation:
     def test_apply_does_not_raise_on_warm_ring(self):
@@ -226,6 +230,7 @@ class TestTemplateAccumulation:
 # reset()
 # ---------------------------------------------------------------------------
 
+
 class TestReset:
     def test_reset_clears_template(self):
         pytest.importorskip("scipy")
@@ -246,6 +251,7 @@ class TestReset:
 # ---------------------------------------------------------------------------
 # get_config / set_config
 # ---------------------------------------------------------------------------
+
 
 class TestConfigAccessors:
     def test_get_config_returns_copy(self):
@@ -275,6 +281,7 @@ class TestConfigAccessors:
 # Thread safety
 # ---------------------------------------------------------------------------
 
+
 class TestThreadSafety:
     def test_concurrent_apply_no_exception(self):
         reg = CardiacRegressor()
@@ -285,7 +292,7 @@ class TestThreadSafety:
             try:
                 for _ in range(20):
                     reg.apply(_eeg(seed=seed), ibis, fs=FS)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
@@ -304,19 +311,19 @@ class TestThreadSafety:
             try:
                 for _ in range(20):
                     reg.apply(_eeg(), ibis, fs=FS)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         def resetter():
             try:
                 for _ in range(5):
                     reg.reset()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=applier) for _ in range(3)
-        ] + [threading.Thread(target=resetter)]
+        threads = [threading.Thread(target=applier) for _ in range(3)] + [
+            threading.Thread(target=resetter)
+        ]
         for t in threads:
             t.start()
         for t in threads:

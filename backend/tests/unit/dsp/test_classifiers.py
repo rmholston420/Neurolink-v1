@@ -27,10 +27,10 @@ from neurolink.dsp.artifact_config import (
 from neurolink.dsp.classifiers import classify_v01, classify_v2, compute_s_space
 from neurolink.models.eeg import BandPowers, SSpaceCoords
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _bp(
     alpha: float = 0.15,
@@ -46,28 +46,38 @@ def _bp(
 # classify_v01() — 6-region rule-based classifier
 # ---------------------------------------------------------------------------
 
+
 class TestClassifyV01:
     # --- Region F: delta dominance ---
     def test_high_delta_returns_f_coagulatio(self):
         region, stage = classify_v01(
-            alpha=0.05, theta=0.05, beta=0.05,
-            delta=V01_DELTA_F, gamma=0.05,
+            alpha=0.05,
+            theta=0.05,
+            beta=0.05,
+            delta=V01_DELTA_F,
+            gamma=0.05,
         )
         assert region == "F"
         assert stage == "Coagulatio"
 
     def test_delta_just_below_threshold_not_f(self):
         region, _ = classify_v01(
-            alpha=0.05, theta=0.05, beta=0.05,
-            delta=V01_DELTA_F - 0.001, gamma=0.05,
+            alpha=0.05,
+            theta=0.05,
+            beta=0.05,
+            delta=V01_DELTA_F - 0.001,
+            gamma=0.05,
         )
         assert region != "F"
 
     # --- Region E: Rubedo ---
     def test_high_alpha_theta_returns_e_rubedo(self):
         region, stage = classify_v01(
-            alpha=V01_ALPHA_E, theta=V01_THETA_E,
-            beta=0.01, delta=0.01, gamma=0.01,
+            alpha=V01_ALPHA_E,
+            theta=V01_THETA_E,
+            beta=0.01,
+            delta=0.01,
+            gamma=0.01,
         )
         assert region == "E"
         assert stage == "Rubedo"
@@ -90,7 +100,9 @@ class TestClassifyV01:
         region, stage = classify_v01(
             alpha=V01_MULTIPLICATIO_ALPHA,
             theta=V01_MULTIPLICATIO_THETA,
-            beta=0.01, delta=0.01, gamma=0.01,
+            beta=0.01,
+            delta=0.01,
+            gamma=0.01,
             faa=None,
         )
         assert region == "E"
@@ -101,7 +113,9 @@ class TestClassifyV01:
         region, stage = classify_v01(
             alpha=V01_MULTIPLICATIO_ALPHA,
             theta=V01_MULTIPLICATIO_THETA,
-            beta=0.01, delta=0.01, gamma=0.01,
+            beta=0.01,
+            delta=0.01,
+            gamma=0.01,
             faa=V01_MULTIPLICATIO_FAA - 0.1,
         )
         assert region == "E"
@@ -112,7 +126,9 @@ class TestClassifyV01:
         region, stage = classify_v01(
             alpha=0.01,
             theta=V01_THETA_D,
-            beta=0.01, delta=0.01, gamma=0.01,
+            beta=0.01,
+            delta=0.01,
+            gamma=0.01,
         )
         assert region == "D"
         assert stage == "Citrinitas"
@@ -132,9 +148,11 @@ class TestClassifyV01:
     # --- Region B: arousal ---
     def test_high_beta_returns_b_albedo(self):
         region, stage = classify_v01(
-            alpha=0.01, theta=0.01,
+            alpha=0.01,
+            theta=0.01,
             beta=V01_BETA_B,
-            delta=0.01, gamma=0.01,
+            delta=0.01,
+            gamma=0.01,
         )
         assert region == "B"
         assert stage == "Albedo"
@@ -142,9 +160,11 @@ class TestClassifyV01:
     # --- Region A: default ---
     def test_low_all_returns_a_nigredo(self):
         region, stage = classify_v01(
-            alpha=0.01, theta=0.01,
+            alpha=0.01,
+            theta=0.01,
             beta=0.0,
-            delta=0.0, gamma=0.01,
+            delta=0.0,
+            gamma=0.01,
         )
         assert region == "A"
         assert stage == "Nigredo"
@@ -160,6 +180,7 @@ class TestClassifyV01:
 # ---------------------------------------------------------------------------
 # classify_v2() — 8-region extended classifier
 # ---------------------------------------------------------------------------
+
 
 class TestClassifyV2:
     # --- Coagulatio: delta dominance ---
@@ -260,6 +281,7 @@ class TestClassifyV2:
 # ---------------------------------------------------------------------------
 # compute_s_space()
 # ---------------------------------------------------------------------------
+
 
 class TestComputeSSpace:
     def test_returns_s_space_coords_instance(self):

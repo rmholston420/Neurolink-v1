@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import threading
-from unittest.mock import patch
 
 import numpy as np
-import pytest
 
-from neurolink.dsp.ocular_regression import OcularRegressor, OcularRegressionConfig
-
+from neurolink.dsp.ocular_regression import OcularRegressionConfig, OcularRegressor
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 FS = 256.0
-N_CH = 5       # 4 EEG + 1 EOG/AUX at index 4
+N_CH = 5  # 4 EEG + 1 EOG/AUX at index 4
 FRAME = 32
-CALIB = 1024   # default calib_window_samples
+CALIB = 1024  # default calib_window_samples
 
 
 def _eeg(
@@ -33,7 +30,7 @@ def _eeg(
 
 def _warm_up(
     reg: OcularRegressor,
-    n_frames: int = 40,   # 40 × 32 = 1280 samples > calib_window=1024
+    n_frames: int = 40,  # 40 × 32 = 1280 samples > calib_window=1024
     n_ch: int = N_CH,
 ) -> None:
     """Push enough frames to fill the calibration buffer."""
@@ -44,6 +41,7 @@ def _warm_up(
 # ---------------------------------------------------------------------------
 # Config defaults and __post_init__
 # ---------------------------------------------------------------------------
+
 
 class TestOcularRegressionConfigDefaults:
     def test_enable_true(self):
@@ -75,6 +73,7 @@ class TestOcularRegressionConfigDefaults:
 # apply() — bypass / graceful degradation
 # ---------------------------------------------------------------------------
 
+
 class TestApplyBypass:
     def test_disabled_returns_original(self):
         reg = OcularRegressor(OcularRegressionConfig(enable=False))
@@ -91,7 +90,7 @@ class TestApplyBypass:
     def test_eog_idx_out_of_range_returns_original(self):
         """When eog_channel_idx >= n_channels, corrector is a no-op."""
         reg = OcularRegressor(OcularRegressionConfig(eog_channel_idx=99))
-        eeg = _eeg(n_ch=4)   # 4 channels, eog_idx=99 → out of range
+        eeg = _eeg(n_ch=4)  # 4 channels, eog_idx=99 → out of range
         out = reg.apply(eeg)
         np.testing.assert_array_equal(out, eeg)
 
@@ -121,6 +120,7 @@ class TestApplyBypass:
 # ---------------------------------------------------------------------------
 # apply() — active correction
 # ---------------------------------------------------------------------------
+
 
 class TestApplyActive:
     def test_output_shape_preserved(self):
@@ -156,7 +156,7 @@ class TestApplyActive:
     def test_correction_modifies_eeg_channels(self):
         """After calibration, at least one EEG sample should differ from input."""
         cfg = OcularRegressionConfig(
-            min_eog_variance=0.0,   # ensure low-var EOG doesn't block correction
+            min_eog_variance=0.0,  # ensure low-var EOG doesn't block correction
         )
         reg = OcularRegressor(cfg)
         _warm_up(reg)
@@ -169,6 +169,7 @@ class TestApplyActive:
 # ---------------------------------------------------------------------------
 # get_stats()
 # ---------------------------------------------------------------------------
+
 
 class TestGetStats:
     def test_all_keys_present(self):
@@ -211,6 +212,7 @@ class TestGetStats:
 # reset()
 # ---------------------------------------------------------------------------
 
+
 class TestReset:
     def test_reset_clears_slopes(self):
         reg = OcularRegressor()
@@ -250,6 +252,7 @@ class TestReset:
 # get_config / set_config
 # ---------------------------------------------------------------------------
 
+
 class TestConfigAccessors:
     def test_get_config_returns_copy(self):
         reg = OcularRegressor()
@@ -272,13 +275,14 @@ class TestConfigAccessors:
 # Low EOG variance guard
 # ---------------------------------------------------------------------------
 
+
 class TestLowEOGVarianceGuard:
     def test_flat_eog_does_not_produce_slopes(self):
         """When EOG variance < min_eog_variance, _fit_slopes is a no-op."""
         cfg = OcularRegressionConfig(
             calib_window_samples=64,
             recalib_frames=1,
-            min_eog_variance=1e6,   # impossibly high threshold
+            min_eog_variance=1e6,  # impossibly high threshold
         )
         reg = OcularRegressor(cfg)
         for i in range(5):
@@ -291,6 +295,7 @@ class TestLowEOGVarianceGuard:
 # Thread-safety
 # ---------------------------------------------------------------------------
 
+
 class TestOcularThreadSafety:
     def test_concurrent_apply_no_exception(self):
         reg = OcularRegressor()
@@ -301,7 +306,7 @@ class TestOcularThreadSafety:
             try:
                 for i in range(20):
                     reg.apply(_eeg(seed=i))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=_worker) for _ in range(4)]
@@ -320,14 +325,14 @@ class TestOcularThreadSafety:
             try:
                 for i in range(30):
                     reg.apply(_eeg(seed=i))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         def _resetter():
             try:
                 for _ in range(5):
                     reg.reset()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [

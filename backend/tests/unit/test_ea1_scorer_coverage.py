@@ -8,18 +8,17 @@ Specifically covers:
 - imu present with motion_rms >= MOTION_RMS_GATE -> motion_met=False
 - ineligible with criteria_met==5 -> idx clamped to len(_OVERLAY_MODES)-1
 """
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from neurolink.ea1_scorer import score
 from neurolink.models.eeg import BandPowers, IMUPayload, IngestPayload
-
 
 # ---------------------------------------------------------------------------
 # Helper: build a fully-eligible payload (all 5 criteria met)
 # alpha>=0.30, theta>=0.15, region in {D,E}, motion_rms<0.5, good contact
 # ---------------------------------------------------------------------------
+
 
 def _eligible_payload(stage: str = "Nigredo", region: str = "D") -> IngestPayload:
     """Returns a payload that meets all 5 EA-1 criteria."""
@@ -37,6 +36,7 @@ def _eligible_payload(stage: str = "Nigredo", region: str = "D") -> IngestPayloa
 # ---------------------------------------------------------------------------
 # eligible=True path — overlay from _STAGE_OVERLAY for each named stage
 # ---------------------------------------------------------------------------
+
 
 def test_eligible_rubedo_overlay():
     result = score(_eligible_payload(stage="Rubedo"))
@@ -73,13 +73,14 @@ def test_eligible_unknown_stage_fallback_overlay():
 # contact_quality is not None + poor_contact=True -> contact_met=False
 # ---------------------------------------------------------------------------
 
+
 def test_contact_quality_not_none_poor_contact_fails_criterion():
     payload = IngestPayload(
         source="mock",
         bands=BandPowers(alpha=0.50, theta=0.20, beta=0.10, delta=0.10, gamma=0.05),
         region="D",
         contact_quality=0.90,  # high quality value, but...
-        poor_contact=True,      # ...overrides to False
+        poor_contact=True,  # ...overrides to False
     )
     result = score(payload)
     # contact criterion must be False despite high contact_quality value
@@ -104,6 +105,7 @@ def test_contact_quality_not_none_below_minimum_fails_criterion():
 # IMU present with motion_rms >= MOTION_RMS_GATE -> motion_met=False
 # ---------------------------------------------------------------------------
 
+
 def test_high_motion_rms_fails_motion_criterion():
     payload = IngestPayload(
         source="mock",
@@ -120,6 +122,7 @@ def test_high_motion_rms_fails_motion_criterion():
 # Ineligible + criteria_met near max -> idx clamped to len(_OVERLAY_MODES)-1
 # ---------------------------------------------------------------------------
 
+
 def test_ineligible_idx_clamped_to_max_overlay():
     """criteria_met cannot exceed total(5). _OVERLAY_MODES has 6 entries (X0-X5)
     so idx=min(5,5)=5 is valid, but if criteria_met were somehow >5 it would
@@ -132,7 +135,7 @@ def test_ineligible_idx_clamped_to_max_overlay():
         region="D",
         imu=IMUPayload(pitch_deg=0.0, roll_deg=0.0, motion_rms=0.01),
         contact_quality=0.95,
-        poor_contact=True,   # fails contact criterion -> eligible=False, criteria_met=4
+        poor_contact=True,  # fails contact criterion -> eligible=False, criteria_met=4
     )
     result = score(payload)
     assert result.eligible is False

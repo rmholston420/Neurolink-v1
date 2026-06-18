@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import threading
-from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -14,16 +13,16 @@ from neurolink.dsp.artifact_config import (
     ARTIFACT_PK2PK_UV,
 )
 from neurolink.dsp.artifact_gate import (
+    _ELECTRODE_PK2PK_DEFAULTS,
     ArtifactDecision,
     ArtifactGate,
     GateConfig,
-    _ELECTRODE_PK2PK_DEFAULTS,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _clean_eeg(
     n_ch: int = 4,
@@ -68,6 +67,7 @@ def _dynamic_accel(n_samples: int = 64, amplitude: float = 5.0) -> np.ndarray:
 # GateConfig
 # ---------------------------------------------------------------------------
 
+
 class TestGateConfig:
     def test_explicit_electrode_type_preserved(self):
         cfg = GateConfig(electrode_type="wet", pk2pk_uv=100.0)
@@ -78,7 +78,11 @@ class TestGateConfig:
         assert _ELECTRODE_PK2PK_DEFAULTS["dry"] < _ELECTRODE_PK2PK_DEFAULTS["wet"]
 
     def test_semi_pk2pk_between_dry_and_wet(self):
-        assert _ELECTRODE_PK2PK_DEFAULTS["dry"] < _ELECTRODE_PK2PK_DEFAULTS["semi"] < _ELECTRODE_PK2PK_DEFAULTS["wet"]
+        assert (
+            _ELECTRODE_PK2PK_DEFAULTS["dry"]
+            < _ELECTRODE_PK2PK_DEFAULTS["semi"]
+            < _ELECTRODE_PK2PK_DEFAULTS["wet"]
+        )
 
     def test_defaults_from_artifact_config(self):
         cfg = GateConfig(electrode_type="wet", pk2pk_uv=None)
@@ -88,6 +92,7 @@ class TestGateConfig:
 # ---------------------------------------------------------------------------
 # ArtifactDecision
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactDecision:
     def test_default_is_clean(self):
@@ -113,6 +118,7 @@ class TestArtifactDecision:
 # ---------------------------------------------------------------------------
 # ArtifactGate.evaluate() — guards
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactGateGuards:
     def test_none_eeg_returns_clean(self):
@@ -142,6 +148,7 @@ class TestArtifactGateGuards:
 # ---------------------------------------------------------------------------
 # Amplitude gate
 # ---------------------------------------------------------------------------
+
 
 class TestAmplitudeGate:
     def test_clean_signal_passes(self):
@@ -178,7 +185,7 @@ class TestAmplitudeGate:
         )
         gate = ArtifactGate(config=cfg)
         eeg = np.zeros((4, 256), dtype=np.float32)
-        eeg[0, 0] = 100.0   # pk2pk = 100.0 == threshold → passes (not >)
+        eeg[0, 0] = 100.0  # pk2pk = 100.0 == threshold → passes (not >)
         result = gate.evaluate(eeg)
         assert result.clean is True
 
@@ -204,6 +211,7 @@ class TestAmplitudeGate:
 # ---------------------------------------------------------------------------
 # IMU gate
 # ---------------------------------------------------------------------------
+
 
 class TestIMUGate:
     def test_low_accel_passes(self):
@@ -248,6 +256,7 @@ class TestIMUGate:
 # Kurtosis gate
 # ---------------------------------------------------------------------------
 
+
 class TestKurtosisGate:
     def test_gaussian_signal_passes(self):
         gate = _gate_with_explicit_config(kurtosis_threshold=5.0)
@@ -264,7 +273,9 @@ class TestKurtosisGate:
         assert any("kurtosis" in r for r in result.reasons)
 
     def test_disabled_kurtosis_gate(self):
-        cfg = GateConfig(electrode_type="wet", pk2pk_uv=500.0, kurtosis_threshold=0.0001, enable_kurtosis=False)
+        cfg = GateConfig(
+            electrode_type="wet", pk2pk_uv=500.0, kurtosis_threshold=0.0001, enable_kurtosis=False
+        )
         gate = ArtifactGate(config=cfg)
         eeg = np.zeros((4, 256), dtype=np.float32)
         eeg[0, 128] = 9999.0
@@ -275,6 +286,7 @@ class TestKurtosisGate:
 # ---------------------------------------------------------------------------
 # Multiple simultaneous flags
 # ---------------------------------------------------------------------------
+
 
 class TestMultipleReasons:
     def test_amplitude_and_imu_both_flagged(self):
@@ -297,6 +309,7 @@ class TestMultipleReasons:
 # ---------------------------------------------------------------------------
 # get_stats / reset_stats
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactGateStats:
     def test_initial_stats_zero(self):
@@ -350,6 +363,7 @@ class TestArtifactGateStats:
 # get_config / set_config
 # ---------------------------------------------------------------------------
 
+
 class TestArtifactGateConfig:
     def test_get_config_returns_copy(self):
         gate = _gate_with_explicit_config()
@@ -380,6 +394,7 @@ class TestArtifactGateConfig:
 # ---------------------------------------------------------------------------
 # Thread safety
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactGateThreadSafety:
     def test_concurrent_evaluate_does_not_raise(self):
@@ -418,10 +433,9 @@ class TestArtifactGateThreadSafety:
             except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=evaluator) for _ in range(3)]
-            + [threading.Thread(target=configurator)]
-        )
+        threads = [threading.Thread(target=evaluator) for _ in range(3)] + [
+            threading.Thread(target=configurator)
+        ]
         for t in threads:
             t.start()
         for t in threads:

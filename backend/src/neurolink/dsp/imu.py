@@ -73,4 +73,4 @@ def compute_motion_rms(ax: float, ay: float, az: float) -> float:
     Returns:
         sqrt(ax² + ay² + az²) as a float.
     """
-    return math.sqrt(ax ** 2 + ay ** 2 + az ** 2)
+    return math.sqrt(ax**2 + ay**2 + az**2)

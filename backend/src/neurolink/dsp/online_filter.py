@@ -40,7 +40,6 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Sequence
 
 import numpy as np
 import structlog
@@ -79,6 +78,7 @@ def get_default_line_freq() -> float:
             )
     try:
         from neurolink.dsp.artifact_config import ARTIFACT_LINE_FREQ_HZ
+
         return float(ARTIFACT_LINE_FREQ_HZ)
     except ImportError:
         return 60.0
@@ -87,6 +87,7 @@ def get_default_line_freq() -> float:
 # ---------------------------------------------------------------------------
 # FilterConfig
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class FilterConfig:
@@ -116,7 +117,7 @@ class FilterConfig:
     filter_order: int = 128
 
     # ------------------------------------------------------------------ #
-    def with_line_freq(self, line_freq: float) -> "FilterConfig":
+    def with_line_freq(self, line_freq: float) -> FilterConfig:
         """Return a copy with notch freqs set to line_freq and 2nd harmonic."""
         return FilterConfig(
             hz_highpass=self.hz_highpass,
@@ -135,6 +136,7 @@ class FilterConfig:
 # ---------------------------------------------------------------------------
 # OnlineFilterChain
 # ---------------------------------------------------------------------------
+
 
 class OnlineFilterChain:
     """Stateless zero-phase FIR filter chain.
@@ -163,9 +165,7 @@ class OnlineFilterChain:
         if cfg.hz_highpass and cfg.hz_highpass > 0:
             hp_norm = cfg.hz_highpass / nyq
             if 0 < hp_norm < 1.0:
-                kern = sp_signal.firwin(
-                    order + 1, hp_norm, pass_zero=False, window="hamming"
-                )
+                kern = sp_signal.firwin(order + 1, hp_norm, pass_zero=False, window="hamming")
                 self._kernels.append(kern)
                 self._labels.append(f"HP@{cfg.hz_highpass}Hz")
 
@@ -174,9 +174,7 @@ class OnlineFilterChain:
             lo = (fc - cfg.notch_bw_hz / 2.0) / nyq
             hi = (fc + cfg.notch_bw_hz / 2.0) / nyq
             if 0 < lo < hi < 1.0:
-                kern = sp_signal.firwin(
-                    order + 1, [lo, hi], pass_zero=True, window="hamming"
-                )
+                kern = sp_signal.firwin(order + 1, [lo, hi], pass_zero=True, window="hamming")
                 self._kernels.append(kern)
                 self._labels.append(f"notch@{fc}Hz")
 
@@ -184,9 +182,7 @@ class OnlineFilterChain:
         if cfg.hz_lowpass and cfg.hz_lowpass > 0:
             lp_norm = cfg.hz_lowpass / nyq
             if 0 < lp_norm < 1.0:
-                kern = sp_signal.firwin(
-                    order + 1, lp_norm, pass_zero=True, window="hamming"
-                )
+                kern = sp_signal.firwin(order + 1, lp_norm, pass_zero=True, window="hamming")
                 self._kernels.append(kern)
                 self._labels.append(f"LP@{cfg.hz_lowpass}Hz")
 
@@ -241,6 +237,7 @@ class OnlineFilterChain:
 # ---------------------------------------------------------------------------
 # FilterChainRegistry  (module-level singleton)
 # ---------------------------------------------------------------------------
+
 
 class FilterChainRegistry:
     """Thread-safe registry that caches one OnlineFilterChain per config key.

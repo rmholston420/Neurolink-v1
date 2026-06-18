@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
-from queue import Queue, Full
-from unittest.mock import patch
+from queue import Queue
 
 import pytest
 
-from neurolink.hub import EEGHub
 import neurolink.hub as hub_module
-
+from neurolink.hub import EEGHub
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def reset_hub():
@@ -27,6 +25,7 @@ def reset_hub():
 # ---------------------------------------------------------------------------
 # emit_settling() — core behaviour
 # ---------------------------------------------------------------------------
+
 
 class TestEmitSettlingSignature:
     """emit_settling(reason=...) must accept all documented reason codes."""
@@ -85,6 +84,7 @@ class TestEmitSettlingSignature:
 # Counter
 # ---------------------------------------------------------------------------
 
+
 class TestSettlingCounter:
     def test_counter_increments_per_call(self):
         hub = EEGHub()
@@ -109,6 +109,7 @@ class TestSettlingCounter:
 # ---------------------------------------------------------------------------
 # Fan-out
 # ---------------------------------------------------------------------------
+
 
 class TestSettlingFanOut:
     def test_single_client_receives_sentinel(self):
@@ -162,6 +163,7 @@ class TestSettlingFanOut:
 # Distinguish from baseline_complete
 # ---------------------------------------------------------------------------
 
+
 class TestSettlingVsBaseline:
     def test_settling_event_not_confused_with_baseline_complete(self):
         hub = EEGHub()
@@ -183,14 +185,15 @@ class TestSettlingVsBaseline:
 # Thread safety
 # ---------------------------------------------------------------------------
 
+
 class TestSettlingThreadSafety:
     def test_concurrent_emit_settling_exact_count(self):
         hub = EEGHub()
         n_threads, n_calls = 5, 20
         threads = [
-            threading.Thread(target=lambda: [
-                hub.emit_settling(reason="settling") for _ in range(n_calls)
-            ])
+            threading.Thread(
+                target=lambda: [hub.emit_settling(reason="settling") for _ in range(n_calls)]
+            )
             for _ in range(n_threads)
         ]
         for t in threads:
@@ -215,10 +218,9 @@ class TestSettlingThreadSafety:
                 except Exception as e:
                     errors.append(e)
 
-        threads = (
-            [threading.Thread(target=register_loop) for _ in range(3)] +
-            [threading.Thread(target=emit_loop) for _ in range(3)]
-        )
+        threads = [threading.Thread(target=register_loop) for _ in range(3)] + [
+            threading.Thread(target=emit_loop) for _ in range(3)
+        ]
         for t in threads:
             t.start()
         for t in threads:

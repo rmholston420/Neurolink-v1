@@ -50,13 +50,9 @@ class ArtifactSubspaceReconstructor:
     def __init__(self, config: ASRConfig | None = None) -> None:
         self._lock = threading.Lock()
         self._cfg: ASRConfig = config or ASRConfig()
-        self._state: ASRState = (
-            ASRState.DISABLED if not self._cfg.enable else ASRState.CALIBRATING
-        )
+        self._state: ASRState = ASRState.DISABLED if not self._cfg.enable else ASRState.CALIBRATING
         self._calib_frames: list[np.ndarray] = []
-        self._calib_samples_needed: int = int(
-            self._cfg.calib_sec * self._cfg.fs
-        )
+        self._calib_samples_needed: int = int(self._cfg.calib_sec * self._cfg.fs)
         self._calib_samples_collected: int = 0
         self._M: np.ndarray | None = None
         self._M_inv: np.ndarray | None = None
@@ -87,9 +83,7 @@ class ArtifactSubspaceReconstructor:
 
     def reset(self) -> None:
         with self._lock:
-            self._state = (
-                ASRState.DISABLED if not self._cfg.enable else ASRState.CALIBRATING
-            )
+            self._state = ASRState.DISABLED if not self._cfg.enable else ASRState.CALIBRATING
             self._calib_frames = []
             self._calib_samples_collected = 0
             self._M = None
@@ -119,6 +113,7 @@ class ArtifactSubspaceReconstructor:
     def get_config(self) -> ASRConfig:
         with self._lock:
             import copy
+
             return copy.copy(self._cfg)
 
     def set_config(self, config: ASRConfig) -> None:
@@ -162,7 +157,7 @@ class ArtifactSubspaceReconstructor:
                 M = eigvecs @ np.diag(np.sqrt(eigvals))
             M_inv = np.linalg.pinv(M)
             whitened = M_inv @ data
-            sample_rms = np.sqrt(np.mean(whitened ** 2, axis=0))
+            sample_rms = np.sqrt(np.mean(whitened**2, axis=0))
             calib_rms = float(np.median(sample_rms))
             self._M = M
             self._M_inv = M_inv
@@ -203,7 +198,7 @@ class ArtifactSubspaceReconstructor:
         sub -= sub.mean(axis=1, keepdims=True)
 
         whitened = M_inv @ sub
-        sample_rms = np.sqrt(np.mean(whitened ** 2, axis=0))
+        sample_rms = np.sqrt(np.mean(whitened**2, axis=0))
         burst_mask = sample_rms > (cfg.burst_sd * calib_rms)
         n_burst = int(burst_mask.sum())
 

@@ -43,11 +43,7 @@ class FilterToggleConfig:
 
     def to_dict(self) -> dict[str, bool]:
         """Return the 8 public toggle fields (excludes stage6_cardiac)."""
-        return {
-            k: v
-            for k, v in asdict(self).items()
-            if k not in _INTERNAL_TOGGLE_KEYS
-        }
+        return {k: v for k, v in asdict(self).items() if k not in _INTERNAL_TOGGLE_KEYS}
 
 
 # ---------------------------------------------------------------------------

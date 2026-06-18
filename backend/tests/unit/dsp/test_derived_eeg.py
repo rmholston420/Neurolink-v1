@@ -15,13 +15,12 @@ from neurolink.dsp.derived_eeg import (
     derived_eeg,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 FS = 256.0
-N = 512   # > _MIN_SAMPLES=256
+N = 512  # > _MIN_SAMPLES=256
 N_CH = 5  # Muse 5-channel layout
 
 
@@ -43,6 +42,7 @@ def _alpha_sine_ch(n_samples: int = N, ch: int = 0, n_ch: int = N_CH) -> np.ndar
 # derived_eeg()
 # ---------------------------------------------------------------------------
 
+
 class TestDerivedEeg:
     def test_none_returns_none_dict(self):
         result = derived_eeg(None)
@@ -58,7 +58,7 @@ class TestDerivedEeg:
         assert result == {"faa": None, "fmt": None}
 
     def test_too_few_channels_returns_none_dict(self):
-        arr = np.zeros((4, N))   # only 4 channels, need 5
+        arr = np.zeros((4, N))  # only 4 channels, need 5
         result = derived_eeg(arr)
         assert result == {"faa": None, "fmt": None}
 
@@ -92,7 +92,7 @@ class TestDerivedEeg:
 
     def test_faa_positive_when_af8_alpha_dominant(self):
         """AF8 (ch2) strong alpha, AF7 (ch1) noise → FAA should be positive."""
-        arr = _alpha_sine_ch(ch=2)   # AF8 loud
+        arr = _alpha_sine_ch(ch=2)  # AF8 loud
         result = derived_eeg(arr)
         # faa = log(alpha_af8) - log(alpha_af7); af8 > af7 → positive
         assert result["faa"] is not None
@@ -100,7 +100,7 @@ class TestDerivedEeg:
 
     def test_faa_negative_when_af7_alpha_dominant(self):
         """AF7 (ch1) strong alpha, AF8 (ch2) noise → FAA should be negative."""
-        arr = _alpha_sine_ch(ch=1)   # AF7 loud
+        arr = _alpha_sine_ch(ch=1)  # AF7 loud
         result = derived_eeg(arr)
         assert result["faa"] is not None
         assert result["faa"] < 0.0
@@ -114,6 +114,7 @@ class TestDerivedEeg:
 # ---------------------------------------------------------------------------
 # compute_faa() — functional helper
 # ---------------------------------------------------------------------------
+
 
 class TestComputeFaa:
     def test_equal_powers_returns_zero(self):
@@ -158,6 +159,7 @@ class TestComputeFaa:
 # compute_fmt() — functional helper
 # ---------------------------------------------------------------------------
 
+
 class TestComputeFmt:
     def test_returns_float(self):
         assert isinstance(compute_fmt(1.5), float)
@@ -175,6 +177,7 @@ class TestComputeFmt:
 # ---------------------------------------------------------------------------
 # compute_contact_quality()
 # ---------------------------------------------------------------------------
+
 
 class TestComputeContactQuality:
     def test_zero_rms_is_good(self):

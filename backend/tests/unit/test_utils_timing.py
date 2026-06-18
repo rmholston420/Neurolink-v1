@@ -4,18 +4,17 @@ utils/timing.py has 0 covered lines in the current coverage report.
 All four functions are pure / deterministic wrappers around time.monotonic*
 and are straightforward to cover exhaustively.
 """
+
 from __future__ import annotations
 
 import time
 
-import pytest
-
 from neurolink.utils.timing import elapsed_ms, mono_ns, mono_sec, rate_limiter
-
 
 # ---------------------------------------------------------------------------
 # mono_ns
 # ---------------------------------------------------------------------------
+
 
 def test_mono_ns_returns_int():
     result = mono_ns()
@@ -36,6 +35,7 @@ def test_mono_ns_is_positive():
 # mono_sec
 # ---------------------------------------------------------------------------
 
+
 def test_mono_sec_returns_float():
     result = mono_sec()
     assert isinstance(result, float)
@@ -54,6 +54,7 @@ def test_mono_sec_is_positive():
 # ---------------------------------------------------------------------------
 # elapsed_ms
 # ---------------------------------------------------------------------------
+
 
 def test_elapsed_ms_returns_float():
     start = mono_ns()
@@ -87,6 +88,7 @@ def test_elapsed_ms_scale_is_milliseconds():
 # rate_limiter
 # ---------------------------------------------------------------------------
 
+
 def test_rate_limiter_returns_callable():
     limiter = rate_limiter(1.0)
     assert callable(limiter)
@@ -101,7 +103,7 @@ def test_rate_limiter_first_call_returns_true():
 def test_rate_limiter_immediate_second_call_returns_false():
     """Immediate second call within the interval must return False."""
     limiter = rate_limiter(10.0)  # 10 second interval
-    assert limiter() is True   # first call
+    assert limiter() is True  # first call
     assert limiter() is False  # second call, well within interval
 
 

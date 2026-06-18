@@ -46,6 +46,7 @@ import asyncio
 
 try:
     from bleak import BleakScanner
+
     BLEAK_AVAILABLE = True
 except ImportError:
     BLEAK_AVAILABLE = False
@@ -60,8 +61,8 @@ router = APIRouter(tags=["ble"])
 
 # -- Muse device filter ----------------------------------------------------------
 MUSE_SERVICE_UUID = "0000fe8d-0000-1000-8000-00805f9b34fb"
-MUSE_NAME_PREFIX  = "Muse"
-DEFAULT_SCAN_SEC  = 5.0
+MUSE_NAME_PREFIX = "Muse"
+DEFAULT_SCAN_SEC = 5.0
 
 
 def _is_muse(device) -> bool:
@@ -70,10 +71,7 @@ def _is_muse(device) -> bool:
     uuids: list[str] = []
     if hasattr(device, "metadata"):
         uuids = device.metadata.get("uuids", [])
-    return (
-        name.startswith(MUSE_NAME_PREFIX)
-        or MUSE_SERVICE_UUID in [u.lower() for u in uuids]
-    )
+    return name.startswith(MUSE_NAME_PREFIX) or MUSE_SERVICE_UUID in [u.lower() for u in uuids]
 
 
 # -- Bridge state (module-level singleton) ---------------------------------------
@@ -83,7 +81,7 @@ class _BridgeState:
     from neurolink.ble_bridge import BLEBridge as _BLEBridge
     from neurolink.hardware.base import HardwareAdapter as _HardwareAdapter
 
-    bridge:  _BLEBridge | None = None
+    bridge: _BLEBridge | None = None
     adapter: _HardwareAdapter | None = None
     address: str | None = None
     device_model: str = "muse_s_gen1"
@@ -98,41 +96,42 @@ async def _stop_existing_bridge() -> None:
             await bridge_state.bridge.stop()
         except Exception as exc:
             log.warning("ble_router_stop_bridge_error", error=str(exc))
-        bridge_state.bridge  = None
+        bridge_state.bridge = None
         bridge_state.adapter = None
 
 
 # -- Pydantic schemas ------------------------------------------------------------
 class BLEDeviceOut(BaseModel):
     address: str
-    name:    str | None = None
-    rssi:    int | None = None
+    name: str | None = None
+    rssi: int | None = None
 
 
 class BLEScanResponse(BaseModel):
-    devices:           list[BLEDeviceOut]
+    devices: list[BLEDeviceOut]
     scan_duration_sec: float
 
 
 class BLEConnectRequest(BaseModel):
-    address:      str
+    address: str
     device_model: str = "muse_s_gen1"
 
 
 class BLEConnectResponse(BaseModel):
-    ok:      bool
-    source:  str = ""
+    ok: bool
+    source: str = ""
     message: str
 
 
 class BLEStatusResponse(BaseModel):
-    running:      bool
-    connected:    bool
-    address:      str | None = None
+    running: bool
+    connected: bool
+    address: str | None = None
     device_model: str = ""
 
 
 # -- Endpoints -------------------------------------------------------------------
+
 
 @router.get("/ble/scan", response_model=BLEScanResponse)
 async def ble_scan(duration: float = DEFAULT_SCAN_SEC) -> BLEScanResponse:
@@ -218,9 +217,9 @@ async def ble_connect(req: BLEConnectRequest) -> BLEConnectResponse:
         bridge = BLEBridge(adapter)
         await bridge.start()
 
-        bridge_state.bridge       = bridge
-        bridge_state.adapter      = adapter
-        bridge_state.address      = req.address
+        bridge_state.bridge = bridge
+        bridge_state.adapter = adapter
+        bridge_state.address = req.address
         bridge_state.device_model = req.device_model
 
         # Give the supervisor loop a moment to initiate the GATT connection
@@ -260,7 +259,7 @@ async def ble_disconnect() -> BLEConnectResponse:
 @router.get("/ble/status", response_model=BLEStatusResponse)
 async def ble_status() -> BLEStatusResponse:
     """Return current BLEBridge and adapter connection state."""
-    running   = bridge_state.bridge is not None
+    running = bridge_state.bridge is not None
     connected = (
         getattr(bridge_state.adapter, "is_connected", False)
         if bridge_state.adapter is not None

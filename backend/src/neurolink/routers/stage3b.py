@@ -45,6 +45,7 @@ router = APIRouter(prefix="/stage3b", tags=["Stage3b"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class DetectorConfigSchema(BaseModel):
     """All fields optional on PUT — send only what you want to change."""
 
@@ -62,10 +63,7 @@ class DetectorConfigSchema(BaseModel):
     )
     blink_frontal_ratio: float | None = Field(
         None,
-        description=(
-            "Frontal pk2pk must be >= this multiple of temporal pk2pk. "
-            "Default=2.0."
-        ),
+        description=("Frontal pk2pk must be >= this multiple of temporal pk2pk. Default=2.0."),
     )
 
     # Horizontal EOG
@@ -144,7 +142,9 @@ class DetectorConfigSchema(BaseModel):
     enable_heog: bool | None = Field(None, description="Enable/disable horizontal EOG detector.")
     enable_emg: bool | None = Field(None, description="Enable/disable EMG detector.")
     enable_cardiac: bool | None = Field(None, description="Enable/disable cardiac detector.")
-    enable_electrode_pop: bool | None = Field(None, description="Enable/disable electrode-pop detector.")
+    enable_electrode_pop: bool | None = Field(
+        None, description="Enable/disable electrode-pop detector."
+    )
     enable_line_noise: bool | None = Field(None, description="Enable/disable line-noise detector.")
     enable_motion: bool | None = Field(None, description="Enable/disable IMU motion detector.")
 
@@ -180,7 +180,9 @@ class DetectorConfigResponse(BaseModel):
 
 class ArtifactTypeStats(BaseModel):
     count: int
-    rate: float = Field(..., description="Fraction of frames where this artifact type was detected (0–1).")
+    rate: float = Field(
+        ..., description="Fraction of frames where this artifact type was detected (0–1)."
+    )
 
 
 class DetectorStatsResponse(BaseModel):
@@ -199,15 +201,13 @@ class DetectorStatsResponse(BaseModel):
 # Dependency — fetch detector from app.state
 # ---------------------------------------------------------------------------
 
+
 def _get_detector(request: Request) -> ArtifactDetector:
     detector = getattr(request.app.state, "artifact_detector", None)
     if detector is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Stage3b artifact detector not initialised — "
-                "is the EEGPump running?"
-            ),
+            detail=("Stage3b artifact detector not initialised — is the EEGPump running?"),
         )
     return detector
 
@@ -218,6 +218,7 @@ DetectorDep = Annotated[ArtifactDetector, Depends(_get_detector)]
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _cfg_to_response(cfg: DetectorConfig) -> DetectorConfigResponse:
     return DetectorConfigResponse(
@@ -261,6 +262,7 @@ def _stats_to_response(raw: dict) -> DetectorStatsResponse:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.get(
     "/config",

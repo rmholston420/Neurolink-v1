@@ -23,6 +23,7 @@ IBI_FS = 4.0  # virtual IBI series rate
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _ibis(n: int = 20, mean_ms: float = 900.0, jitter: float = 20.0) -> list[float]:
     rng = np.random.default_rng(0)
     return list((rng.standard_normal(n) * jitter + mean_ms).astype(float))
@@ -41,6 +42,7 @@ def _accel_z(
 # ---------------------------------------------------------------------------
 # estimate_rr()
 # ---------------------------------------------------------------------------
+
 
 class TestEstimateRr:
     def test_none_returns_none(self):
@@ -86,6 +88,7 @@ class TestEstimateRr:
 # ---------------------------------------------------------------------------
 # compute_breathing() — returns BreathingPayload
 # ---------------------------------------------------------------------------
+
 
 class TestComputeBreathing:
     def test_returns_breathing_payload(self):

@@ -11,10 +11,10 @@ from neurolink.stage0.impedance import ImpedanceGuard
 from neurolink.stage0.imu_gate import IMUGate
 
 __all__ = [
-    "Stage0Guard",
-    "ImpedanceGuard",
-    "IMUGate",
     "EnvironmentChecklist",
+    "IMUGate",
+    "ImpedanceGuard",
+    "Stage0Guard",
 ]
 
 
@@ -64,10 +64,7 @@ class Stage0Guard:
         Note: the pump bypasses this gate in mock mode so that tests and demos
         continue to produce state updates regardless of Stage-0 status.
         """
-        return (
-            self.impedance.all_channels_ok
-            and self.environment.is_ready
-        )
+        return self.impedance.all_channels_ok and self.environment.is_ready
 
     # ------------------------------------------------------------------
     # Snapshot for SSE / REST

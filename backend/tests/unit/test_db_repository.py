@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 import tempfile
 
-import pytest
-
 
 async def _make_factory(path: str = ":memory:"):
     """Create a fresh db engine at *path* and return the session factory.

@@ -69,6 +69,7 @@ def derived_eeg(eeg: np.ndarray, fs: float = _EEG_FS) -> dict[str, float | None]
 # have pre-computed band-power scalars rather than raw EEG buffers.
 # ---------------------------------------------------------------------------
 
+
 def compute_faa(alpha_left: float, alpha_right: float) -> float:
     """Frontal Alpha Asymmetry: log(alpha_left) - log(alpha_right).
 

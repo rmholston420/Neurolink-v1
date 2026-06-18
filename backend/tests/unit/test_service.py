@@ -30,10 +30,12 @@ async def test_get_ea1_returns_result():
 async def test_get_band_powers_returns_response():
     svc = _svc()
     # Prime hub with a frame so bands are non-zero
-    svc._hub.update(IngestPayload(
-        source="mock",
-        bands=BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.2, gamma=0.1),
-    ))
+    svc._hub.update(
+        IngestPayload(
+            source="mock",
+            bands=BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.2, gamma=0.1),
+        )
+    )
     resp = await svc.get_band_powers()
     assert resp.alpha == 0.3
     assert resp.theta == 0.2
@@ -49,6 +51,7 @@ async def test_connect_mock_sets_is_connected():
 
 async def test_connect_twice_raises():
     from neurolink.exceptions import AdapterAlreadyConnectedError
+
     svc = _svc()
     await svc.connect(adapter_type="mock", device_model="mock")
     try:
@@ -110,6 +113,7 @@ async def test_stream_state_yields_keepalive():
 
 async def test_calibrate_raises_when_not_connected():
     from neurolink.exceptions import AdapterNotConnectedError
+
     svc = _svc()
     raised = False
     try:

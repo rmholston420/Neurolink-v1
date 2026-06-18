@@ -38,6 +38,6 @@ class TestCalibrationSession:
         session = CalibrationSession(adapter, hub)
         try:
             await asyncio.wait_for(session.run(), timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # timeout is acceptable — run() loops on the stream
         await adapter.disconnect()

@@ -9,6 +9,7 @@ Covers:
 - Edge cases: empty array, < min_samples_for_fft, AUX channel excluded
 - clean flag truth when no artifact is present
 """
+
 from __future__ import annotations
 
 import threading
@@ -19,7 +20,6 @@ import pytest
 from neurolink.dsp.artifact_detector import (
     ArtifactDetector,
     ArtifactType,
-    DetectorConfig,
 )
 
 # ---------------------------------------------------------------------------
@@ -110,6 +110,7 @@ def _heog_frame() -> np.ndarray:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def detector() -> ArtifactDetector:
     return ArtifactDetector(line_freq_hz=60.0)
@@ -118,6 +119,7 @@ def detector() -> ArtifactDetector:
 # ---------------------------------------------------------------------------
 # Basic API
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactDetectorAPI:
     def test_returns_detection_report(self, detector):
@@ -168,6 +170,7 @@ class TestArtifactDetectorAPI:
 # Per-type detectors
 # ---------------------------------------------------------------------------
 
+
 class TestBlinkDetector:
     def test_blink_detected(self, detector):
         report = detector.classify(_blink_frame(), fs=FS)
@@ -179,9 +182,7 @@ class TestBlinkDetector:
 
     def test_blink_confidence_nonzero(self, detector):
         report = detector.classify(_blink_frame(), fs=FS)
-        blink_anns = [
-            a for a in report.annotations if a.artifact_type == ArtifactType.BLINK
-        ]
+        blink_anns = [a for a in report.annotations if a.artifact_type == ArtifactType.BLINK]
         assert blink_anns
         assert blink_anns[0].confidence > 0.0
 
@@ -239,6 +240,7 @@ class TestElectrodePopDetector:
 # Config / stats
 # ---------------------------------------------------------------------------
 
+
 class TestDetectorConfig:
     def test_get_config_returns_copy(self, detector):
         cfg1 = detector.get_config()
@@ -287,6 +289,7 @@ class TestStats:
 # ---------------------------------------------------------------------------
 # Thread safety
 # ---------------------------------------------------------------------------
+
 
 class TestThreadSafety:
     def test_concurrent_classify_no_exception(self, detector):

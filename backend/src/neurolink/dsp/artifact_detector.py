@@ -92,23 +92,19 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Sequence
 
 import numpy as np
 import structlog
 from scipy import signal as sp_signal
-from scipy import stats as sp_stats
 
 from neurolink.dsp.artifact_config import (
     ARTIFACT_ACCEL_RMS_G,
     ARTIFACT_BLINK_FRONTAL_UV,
     ARTIFACT_EMG_HF_RATIO,
     ARTIFACT_HEOG_ASYMMETRY_UV,
-    ARTIFACT_KURTOSIS_THRESHOLD,
     ARTIFACT_LINE_BAND_HZ,
     ARTIFACT_LINE_FREQ_HZ,
     ARTIFACT_LINE_POWER_RATIO,
-    ARTIFACT_PK2PK_UV,
     BLINK_FREQ_HZ_MAX,
     BLINK_FRONTAL_RATIO,
     BLINK_LOW_FREQ_RATIO_MIN,
@@ -127,11 +123,11 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Channel layout (Muse S / Muse 2 / compatible 4-channel dry-electrode EEG)
 # ---------------------------------------------------------------------------
-_CH_TP9 = 0   # left-temporal
-_CH_AF7 = 1   # left-frontal
-_CH_AF8 = 2   # right-frontal
+_CH_TP9 = 0  # left-temporal
+_CH_AF7 = 1  # left-frontal
+_CH_AF8 = 2  # right-frontal
 _CH_TP10 = 3  # right-temporal
-_CH_AUX = 4   # auxiliary — excluded from all EEG analysis
+_CH_AUX = 4  # auxiliary — excluded from all EEG analysis
 
 _FRONTAL = [_CH_AF7, _CH_AF8]
 _TEMPORAL = [_CH_TP9, _CH_TP10]
@@ -143,20 +139,23 @@ _CH_NAMES = {_CH_TP9: "TP9", _CH_AF7: "AF7", _CH_AF8: "AF8", _CH_TP10: "TP10"}
 # Artifact type taxonomy
 # ---------------------------------------------------------------------------
 
+
 class ArtifactType(Enum):
     """Enumeration of detectable artifact categories."""
-    BLINK           = auto()   # eye-blink — frontal slow transient
-    HORIZONTAL_EOG  = auto()   # lateral saccade — AF7 vs AF8 asymmetry
-    EMG             = auto()   # muscle burst — broadband high-frequency
-    CARDIAC         = auto()   # cardiac pulse — ~1.2 Hz temporal
-    ELECTRODE_POP   = auto()   # electrode pop / impedance transient
-    LINE_NOISE      = auto()   # 50 / 60 Hz power-line interference
-    MOTION          = auto()   # IMU-corroborated movement artifact
+
+    BLINK = auto()  # eye-blink — frontal slow transient
+    HORIZONTAL_EOG = auto()  # lateral saccade — AF7 vs AF8 asymmetry
+    EMG = auto()  # muscle burst — broadband high-frequency
+    CARDIAC = auto()  # cardiac pulse — ~1.2 Hz temporal
+    ELECTRODE_POP = auto()  # electrode pop / impedance transient
+    LINE_NOISE = auto()  # 50 / 60 Hz power-line interference
+    MOTION = auto()  # IMU-corroborated movement artifact
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class DetectorConfig:
@@ -169,36 +168,36 @@ class DetectorConfig:
     """
 
     # ── Blink detection ────────────────────────────────────────────────
-    blink_frontal_uv: float = ARTIFACT_BLINK_FRONTAL_UV   # 80 µV at AF7/AF8
-    blink_freq_hz_max: float = BLINK_FREQ_HZ_MAX           # 10.0 Hz
+    blink_frontal_uv: float = ARTIFACT_BLINK_FRONTAL_UV  # 80 µV at AF7/AF8
+    blink_freq_hz_max: float = BLINK_FREQ_HZ_MAX  # 10.0 Hz
     blink_low_freq_ratio_min: float = BLINK_LOW_FREQ_RATIO_MIN  # 0.50
-    blink_frontal_ratio: float = BLINK_FRONTAL_RATIO       # 2.0×
+    blink_frontal_ratio: float = BLINK_FRONTAL_RATIO  # 2.0×
 
     # ── Horizontal EOG ─────────────────────────────────────────────────
     heog_asymmetry_uv: float = ARTIFACT_HEOG_ASYMMETRY_UV  # 30.0 µV
-    heog_freq_hz_max: float = HEOG_FREQ_HZ_MAX             # 4.0 Hz
+    heog_freq_hz_max: float = HEOG_FREQ_HZ_MAX  # 4.0 Hz
 
     # ── EMG / muscle ───────────────────────────────────────────────────
-    emg_hf_ratio: float = ARTIFACT_EMG_HF_RATIO            # 0.30
-    emg_freq_low_hz: float = EMG_FREQ_LOW_HZ               # 30.0 Hz
-    emg_freq_high_hz: float = EMG_FREQ_HIGH_HZ             # 100.0 Hz
+    emg_hf_ratio: float = ARTIFACT_EMG_HF_RATIO  # 0.30
+    emg_freq_low_hz: float = EMG_FREQ_LOW_HZ  # 30.0 Hz
+    emg_freq_high_hz: float = EMG_FREQ_HIGH_HZ  # 100.0 Hz
 
     # ── Cardiac pulse ──────────────────────────────────────────────────
-    cardiac_freq_low_hz: float = CARDIAC_FREQ_LOW_HZ       # 0.8 Hz
-    cardiac_freq_high_hz: float = CARDIAC_FREQ_HIGH_HZ     # 1.8 Hz
-    cardiac_temporal_uv: float = CARDIAC_TEMPORAL_UV       # 15.0 µV
+    cardiac_freq_low_hz: float = CARDIAC_FREQ_LOW_HZ  # 0.8 Hz
+    cardiac_freq_high_hz: float = CARDIAC_FREQ_HIGH_HZ  # 1.8 Hz
+    cardiac_temporal_uv: float = CARDIAC_TEMPORAL_UV  # 15.0 µV
 
     # ── Electrode pop ──────────────────────────────────────────────────
-    pop_step_uv: float = ELECTRODE_POP_STEP_UV             # 60.0 µV
+    pop_step_uv: float = ELECTRODE_POP_STEP_UV  # 60.0 µV
     pop_isolation_ratio: float = ELECTRODE_POP_ISOLATION_RATIO  # 3.0
 
     # ── Line noise ─────────────────────────────────────────────────────
-    line_freq_hz: float = ARTIFACT_LINE_FREQ_HZ            # 60.0 Hz
-    line_band_hz: float = ARTIFACT_LINE_BAND_HZ            # 2.0 Hz
-    line_power_ratio: float = ARTIFACT_LINE_POWER_RATIO    # 0.15
+    line_freq_hz: float = ARTIFACT_LINE_FREQ_HZ  # 60.0 Hz
+    line_band_hz: float = ARTIFACT_LINE_BAND_HZ  # 2.0 Hz
+    line_power_ratio: float = ARTIFACT_LINE_POWER_RATIO  # 0.15
 
     # ── Motion (IMU) ───────────────────────────────────────────────────
-    motion_accel_rms_g: float = ARTIFACT_ACCEL_RMS_G       # 0.15 g
+    motion_accel_rms_g: float = ARTIFACT_ACCEL_RMS_G  # 0.15 g
 
     # ── Global feature switches ────────────────────────────────────────
     enable_blink: bool = True
@@ -217,15 +216,17 @@ class DetectorConfig:
 # Result types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ArtifactAnnotation:
     """One detected artifact instance."""
+
     artifact_type: ArtifactType
-    confidence: float          # 0.0–1.0
-    channels: list[str]        # channel names where artifact was detected
-    feature_value: float       # the raw feature that triggered detection
-    feature_name: str          # human-readable feature label
-    threshold: float           # the threshold that was exceeded
+    confidence: float  # 0.0–1.0
+    channels: list[str]  # channel names where artifact was detected
+    feature_value: float  # the raw feature that triggered detection
+    feature_name: str  # human-readable feature label
+    threshold: float  # the threshold that was exceeded
 
 
 @dataclass
@@ -236,10 +237,11 @@ class CorrectionPlan:
     flags can be True simultaneously (e.g. a frame can need both
     ocular regression AND notch filtering).
     """
-    hard_reject: bool = False           # skip frame entirely (motion / pop)
+
+    hard_reject: bool = False  # skip frame entirely (motion / pop)
     apply_ocular_regression: bool = False  # route to ocular_regression.py
-    apply_asr: bool = False             # route to asr.py
-    apply_notch: bool = False           # re-apply notch filter
+    apply_asr: bool = False  # route to asr.py
+    apply_notch: bool = False  # re-apply notch filter
     apply_cardiac_regression: bool = False  # (future) cardiac regression
 
     def any_correction(self) -> bool:
@@ -255,6 +257,7 @@ class CorrectionPlan:
 @dataclass
 class DetectionReport:
     """Full result of one ArtifactDetector.classify() call."""
+
     annotations: list[ArtifactAnnotation] = field(default_factory=list)
     correction_plan: CorrectionPlan = field(default_factory=CorrectionPlan)
     artifact_types: list[ArtifactType] = field(default_factory=list)
@@ -273,6 +276,7 @@ class DetectionReport:
 # ---------------------------------------------------------------------------
 # Main detector class
 # ---------------------------------------------------------------------------
+
 
 class ArtifactDetector:
     """Multi-type EEG artifact classifier and correction router.
@@ -307,7 +311,7 @@ class ArtifactDetector:
 
         # Per-type counters for get_stats()
         self._total_frames: int = 0
-        self._type_counts: dict[ArtifactType, int] = {t: 0 for t in ArtifactType}
+        self._type_counts: dict[ArtifactType, int] = dict.fromkeys(ArtifactType, 0)
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -361,8 +365,8 @@ class ArtifactDetector:
         has_fft = n_samples >= cfg.min_samples_for_fft
 
         # ── Pre-compute shared features ──────────────────────────────
-        pk2pk = np.ptp(eeg_f64, axis=1)          # (n_valid_ch,)
-        ch_means = np.mean(eeg_f64, axis=1)       # (n_valid_ch,)
+        pk2pk = np.ptp(eeg_f64, axis=1)  # (n_valid_ch,)
+        ch_means = np.mean(eeg_f64, axis=1)  # (n_valid_ch,)
 
         freqs: np.ndarray | None = None
         psd: np.ndarray | None = None
@@ -375,46 +379,31 @@ class ArtifactDetector:
 
         # If hard-rejected by motion, no further spectral work needed
         if not report.correction_plan.hard_reject:
-
             if cfg.enable_electrode_pop:
-                self._detect_electrode_pop(
-                    eeg_f64, pk2pk, valid_eeg_idx, cfg, report
-                )
+                self._detect_electrode_pop(eeg_f64, pk2pk, valid_eeg_idx, cfg, report)
 
             if has_fft and freqs is not None and psd is not None:
-                frontal_idx = [
-                    valid_eeg_idx.index(i) for i in _FRONTAL if i in valid_eeg_idx
-                ]
-                temporal_idx = [
-                    valid_eeg_idx.index(i) for i in _TEMPORAL if i in valid_eeg_idx
-                ]
+                frontal_idx = [valid_eeg_idx.index(i) for i in _FRONTAL if i in valid_eeg_idx]
+                temporal_idx = [valid_eeg_idx.index(i) for i in _TEMPORAL if i in valid_eeg_idx]
 
                 if cfg.enable_blink and frontal_idx:
                     self._detect_blink(
-                        pk2pk, ch_means, freqs, psd,
-                        frontal_idx, temporal_idx, cfg, report
+                        pk2pk, ch_means, freqs, psd, frontal_idx, temporal_idx, cfg, report
                     )
 
                 if cfg.enable_heog and frontal_idx:
-                    self._detect_horizontal_eog(
-                        eeg_f64, ch_means, valid_eeg_idx, cfg, report
-                    )
+                    self._detect_horizontal_eog(eeg_f64, ch_means, valid_eeg_idx, cfg, report)
 
                 if cfg.enable_emg:
-                    self._detect_emg(
-                        freqs, psd, valid_eeg_idx, cfg, report
-                    )
+                    self._detect_emg(freqs, psd, valid_eeg_idx, cfg, report)
 
                 if cfg.enable_cardiac and temporal_idx:
                     self._detect_cardiac(
-                        freqs, psd, pk2pk, temporal_idx, valid_eeg_idx,
-                        cfg, report
+                        freqs, psd, pk2pk, temporal_idx, valid_eeg_idx, cfg, report
                     )
 
                 if cfg.enable_line_noise:
-                    self._detect_line_noise(
-                        freqs, psd, valid_eeg_idx, cfg, report
-                    )
+                    self._detect_line_noise(freqs, psd, valid_eeg_idx, cfg, report)
 
         # ── Build correction plan ─────────────────────────────────────
         self._build_correction_plan(report)
@@ -462,6 +451,7 @@ class ArtifactDetector:
 
     def get_config(self) -> DetectorConfig:
         import copy
+
         with self._cfg_lock:
             return copy.copy(self._cfg)
 
@@ -580,15 +570,19 @@ class ArtifactDetector:
         else:
             frontal_ch_names = [_CH_NAMES.get(_ALL_EEG[i], f"ch{i}") for i in frontal_idx]
 
-        confidence = min(1.0, (max_frontal_pk2pk / cfg.blink_frontal_uv) * 0.5 + low_freq_ratio * 0.5)
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.BLINK,
-            confidence=round(confidence, 3),
-            channels=frontal_ch_names,
-            feature_value=round(max_frontal_pk2pk, 2),
-            feature_name="frontal_pk2pk_uv",
-            threshold=cfg.blink_frontal_uv,
-        ))
+        confidence = min(
+            1.0, (max_frontal_pk2pk / cfg.blink_frontal_uv) * 0.5 + low_freq_ratio * 0.5
+        )
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.BLINK,
+                confidence=round(confidence, 3),
+                channels=frontal_ch_names,
+                feature_value=round(max_frontal_pk2pk, 2),
+                feature_name="frontal_pk2pk_uv",
+                threshold=cfg.blink_frontal_uv,
+            )
+        )
 
     def _detect_horizontal_eog(
         self,
@@ -628,14 +622,16 @@ class ArtifactDetector:
         if not opposite_polarity:
             confidence *= 0.70  # lower confidence without polarity confirmation
 
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.HORIZONTAL_EOG,
-            confidence=round(confidence, 3),
-            channels=["AF7", "AF8"],
-            feature_value=round(asymmetry, 2),
-            feature_name="af7_af8_mean_asymmetry_uv",
-            threshold=cfg.heog_asymmetry_uv,
-        ))
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.HORIZONTAL_EOG,
+                confidence=round(confidence, 3),
+                channels=["AF7", "AF8"],
+                feature_value=round(asymmetry, 2),
+                feature_name="af7_af8_mean_asymmetry_uv",
+                threshold=cfg.heog_asymmetry_uv,
+            )
+        )
 
     def _detect_emg(
         self,
@@ -670,14 +666,16 @@ class ArtifactDetector:
             return
 
         confidence = min(1.0, max_ratio / cfg.emg_hf_ratio)
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.EMG,
-            confidence=round(confidence, 3),
-            channels=contaminated_channels,
-            feature_value=round(max_ratio, 4),
-            feature_name="hf_power_ratio_30_100hz",
-            threshold=cfg.emg_hf_ratio,
-        ))
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.EMG,
+                confidence=round(confidence, 3),
+                channels=contaminated_channels,
+                feature_value=round(max_ratio, 4),
+                feature_name="hf_power_ratio_30_100hz",
+                threshold=cfg.emg_hf_ratio,
+            )
+        )
 
     def _detect_cardiac(
         self,
@@ -724,14 +722,16 @@ class ArtifactDetector:
             return
 
         confidence = min(1.0, max_ratio / 0.5)
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.CARDIAC,
-            confidence=round(confidence, 3),
-            channels=contaminated,
-            feature_value=round(max_ratio, 4),
-            feature_name="cardiac_band_power_ratio",
-            threshold=0.35,
-        ))
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.CARDIAC,
+                confidence=round(confidence, 3),
+                channels=contaminated,
+                feature_value=round(max_ratio, 4),
+                feature_name="cardiac_band_power_ratio",
+                threshold=0.35,
+            )
+        )
 
     def _detect_electrode_pop(
         self,
@@ -777,14 +777,16 @@ class ArtifactDetector:
             return
 
         confidence = min(1.0, max_feature / (cfg.pop_step_uv * 2))
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.ELECTRODE_POP,
-            confidence=round(confidence, 3),
-            channels=contaminated,
-            feature_value=round(max_feature, 2),
-            feature_name="max_single_sample_step_uv",
-            threshold=cfg.pop_step_uv,
-        ))
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.ELECTRODE_POP,
+                confidence=round(confidence, 3),
+                channels=contaminated,
+                feature_value=round(max_feature, 2),
+                feature_name="max_single_sample_step_uv",
+                threshold=cfg.pop_step_uv,
+            )
+        )
 
     def _detect_line_noise(
         self,
@@ -822,14 +824,16 @@ class ArtifactDetector:
             return
 
         confidence = min(1.0, max_ratio / (cfg.line_power_ratio * 2))
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.LINE_NOISE,
-            confidence=round(confidence, 3),
-            channels=contaminated,
-            feature_value=round(max_ratio, 4),
-            feature_name=f"line_{int(cfg.line_freq_hz)}hz_power_ratio",
-            threshold=cfg.line_power_ratio,
-        ))
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.LINE_NOISE,
+                confidence=round(confidence, 3),
+                channels=contaminated,
+                feature_value=round(max_ratio, 4),
+                feature_name=f"line_{int(cfg.line_freq_hz)}hz_power_ratio",
+                threshold=cfg.line_power_ratio,
+            )
+        )
 
     def _detect_motion(
         self,
@@ -858,20 +862,22 @@ class ArtifactDetector:
         # Subtract per-axis mean to remove gravity / DC offset.
         # This preserves genuine dynamic motion while ignoring orientation.
         accel_ac = accel_arr - accel_arr.mean(axis=1, keepdims=True)
-        rms = float(np.sqrt(np.mean(accel_ac ** 2)))
+        rms = float(np.sqrt(np.mean(accel_ac**2)))
 
         if rms <= cfg.motion_accel_rms_g:
             return
 
         confidence = min(1.0, rms / (cfg.motion_accel_rms_g * 2))
-        report.add(ArtifactAnnotation(
-            artifact_type=ArtifactType.MOTION,
-            confidence=round(confidence, 3),
-            channels=["TP9", "AF7", "AF8", "TP10"],  # motion affects all channels
-            feature_value=round(rms, 4),
-            feature_name="accel_rms_ac_g",
-            threshold=cfg.motion_accel_rms_g,
-        ))
+        report.add(
+            ArtifactAnnotation(
+                artifact_type=ArtifactType.MOTION,
+                confidence=round(confidence, 3),
+                channels=["TP9", "AF7", "AF8", "TP10"],  # motion affects all channels
+                feature_value=round(rms, 4),
+                feature_name="accel_rms_ac_g",
+                threshold=cfg.motion_accel_rms_g,
+            )
+        )
         report.correction_plan.hard_reject = True
 
     # ------------------------------------------------------------------ #

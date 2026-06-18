@@ -152,7 +152,7 @@ def compute_hrv(rr_intervals_ms: list[float]) -> HRVResult | None:
 
     if len(valid) >= 2:
         diffs = np.diff(valid)
-        hrv_rmssd = float(np.sqrt(np.mean(diffs ** 2)))
+        hrv_rmssd = float(np.sqrt(np.mean(diffs**2)))
     else:
         hrv_rmssd = 0.0
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from neurolink.dsp.breathing import estimate_rr
 
 
@@ -23,6 +21,7 @@ class TestEstimateRR:
     def test_synthetic_breathing_rate(self):
         """A ~0.25 Hz sine (15 bpm) should return a rate near 15 bpm."""
         import numpy as np
+
         fs = 25
         t = np.linspace(0, 20, fs * 20, endpoint=False)
         signal = np.sin(2 * np.pi * 0.25 * t).tolist()  # 0.25 Hz = 15 bpm
@@ -32,6 +31,7 @@ class TestEstimateRR:
 
     def test_noisy_signal_does_not_raise(self):
         import numpy as np
+
         rng = np.random.default_rng(0)
         signal = rng.standard_normal(500).tolist()
         result = estimate_rr(signal, fs=25)

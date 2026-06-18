@@ -8,10 +8,10 @@ import pytest
 
 from neurolink.dsp.filter_toggles import FilterToggleConfig, get_toggles, set_toggles
 
-
 # ---------------------------------------------------------------------------
 # Fixtures: restore the singleton between tests so tests do not bleed state
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def reset_toggles():
@@ -20,7 +20,7 @@ def reset_toggles():
     Resets both the 8 public fields (via to_dict()) AND stage6_cardiac
     so that no test can leave the singleton in a dirty state.
     """
-    _all_true = {k: True for k in FilterToggleConfig().to_dict()}
+    _all_true = dict.fromkeys(FilterToggleConfig().to_dict(), True)
     _all_true["stage6_cardiac"] = True
     set_toggles(_all_true)
     yield
@@ -30,6 +30,7 @@ def reset_toggles():
 # ---------------------------------------------------------------------------
 # FilterToggleConfig dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestFilterToggleConfig:
     def test_all_defaults_true(self):
@@ -90,6 +91,7 @@ class TestFilterToggleConfig:
 # get_toggles() — snapshot isolation
 # ---------------------------------------------------------------------------
 
+
 class TestGetToggles:
     def test_returns_filter_toggle_config(self):
         assert isinstance(get_toggles(), FilterToggleConfig)
@@ -113,6 +115,7 @@ class TestGetToggles:
 # ---------------------------------------------------------------------------
 # set_toggles() — merge semantics
 # ---------------------------------------------------------------------------
+
 
 class TestSetToggles:
     def test_returns_filter_toggle_config(self):
@@ -161,7 +164,7 @@ class TestSetToggles:
 
     def test_all_stages_can_be_disabled(self):
         # Include stage6_cardiac explicitly since it is not in to_dict()
-        all_false = {k: False for k in FilterToggleConfig().to_dict()}
+        all_false = dict.fromkeys(FilterToggleConfig().to_dict(), False)
         all_false["stage6_cardiac"] = False
         set_toggles(all_false)
         for name, val in get_toggles().to_dict().items():
@@ -172,6 +175,7 @@ class TestSetToggles:
 # ---------------------------------------------------------------------------
 # stage6_cardiac wiring — integration with cardiac_regression
 # ---------------------------------------------------------------------------
+
 
 class TestStage6CardiacWiring:
     """Verify the toggle bool is correctly forwarded to the stage."""
@@ -188,6 +192,7 @@ class TestStage6CardiacWiring:
     def test_toggle_bool_gates_cardiac_regressor(self):
         """Simulate the EEGPump Stage 6 guard: only call regressor when toggle is True."""
         import numpy as np
+
         from neurolink.dsp.cardiac_regression import CardiacRegressor
 
         reg = CardiacRegressor()
@@ -217,6 +222,7 @@ class TestStage6CardiacWiring:
 # Thread safety
 # ---------------------------------------------------------------------------
 
+
 class TestFilterTogglesThreadSafety:
     def test_concurrent_get_and_set_no_exception(self):
         errors: list[Exception] = []
@@ -225,7 +231,7 @@ class TestFilterTogglesThreadSafety:
             try:
                 for _ in range(50):
                     get_toggles()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         def setter():
@@ -233,13 +239,12 @@ class TestFilterTogglesThreadSafety:
                 for _ in range(20):
                     set_toggles({"stage6_cardiac": False})
                     set_toggles({"stage6_cardiac": True})
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=getter) for _ in range(3)]
-            + [threading.Thread(target=setter) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=getter) for _ in range(3)] + [
+            threading.Thread(target=setter) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:

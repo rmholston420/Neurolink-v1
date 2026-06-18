@@ -15,10 +15,8 @@ GET  /api/v1/stage0/environment/ready
 
 from __future__ import annotations
 
-from typing import Annotated
-
 import structlog
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 log = structlog.get_logger(__name__)
@@ -131,7 +129,7 @@ async def acknowledge_step(
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown step_id '{body.step_id}'. "
-                       f"Valid ids: {[p['id'] for p in guard.environment._all_prompt_ids]}",
+                f"Valid ids: {[p['id'] for p in guard.environment._all_prompt_ids]}",
             )
         log.info("stage0_environment_step_acked", step_id=body.step_id)
     return {"ok": True, "environment": guard.environment.status_dict()}
@@ -156,11 +154,7 @@ async def environment_ready(request: Request) -> ReadinessResponse:
         remaining = round(env.stabilise_remaining_s, 1)
         reasons.append(f"stabilisation countdown: {remaining}s remaining")
     if not env.all_steps_acked:
-        unacked = [
-            p["id"]
-            for p in guard.environment.status_dict()["prompts"]
-            if not p["acked"]
-        ]
+        unacked = [p["id"] for p in guard.environment.status_dict()["prompts"] if not p["acked"]]
         reasons.append(f"unacknowledged steps: {unacked}")
 
     body = ReadinessResponse(

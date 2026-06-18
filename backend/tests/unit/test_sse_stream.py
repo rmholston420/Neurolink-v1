@@ -11,11 +11,12 @@ Note: These tests drive the ASGI app through httpx.AsyncClient with
 ASGITransport.  The EEGPump does NOT run during tests so the queue
 drains immediately; the generator exits after the initial state frame.
 """
+
 from __future__ import annotations
 
 import json
+
 import pytest
-import pytest_asyncio
 
 httpx = pytest.importorskip("httpx")
 
@@ -44,7 +45,7 @@ async def test_sse_stream_data_is_valid_json(async_client):
             raw_chunks.append(chunk)
 
     raw = b"".join(raw_chunks).decode()
-    data_lines = [line[len("data: "):] for line in raw.splitlines() if line.startswith("data: ")]
+    data_lines = [line[len("data: ") :] for line in raw.splitlines() if line.startswith("data: ")]
     assert len(data_lines) >= 1, "Expected at least one data line in SSE response"
     for dl in data_lines:
         parsed = json.loads(dl)  # must not raise
@@ -60,7 +61,7 @@ async def test_sse_stream_state_fields_present(async_client):
             raw_chunks.append(chunk)
 
     raw = b"".join(raw_chunks).decode()
-    data_lines = [line[len("data: "):] for line in raw.splitlines() if line.startswith("data: ")]
+    data_lines = [line[len("data: ") :] for line in raw.splitlines() if line.startswith("data: ")]
     assert data_lines, "No data lines in SSE output"
     payload = json.loads(data_lines[0])
     # NeurolinkState required top-level keys

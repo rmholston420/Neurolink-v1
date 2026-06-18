@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -24,10 +24,10 @@ import neurolink.hub as hub_module
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload, NeurolinkState
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def hub() -> EEGHub:
@@ -54,6 +54,7 @@ def _minimal_payload(**kwargs) -> IngestPayload:
 # emit_settling() — sentinel structure
 # ---------------------------------------------------------------------------
 
+
 class TestEmitSettling:
     def test_default_reason_settling(self, hub, q):
         hub.register_sse_queue(q)
@@ -79,7 +80,7 @@ class TestEmitSettling:
         assert q.get_nowait()["reason"] == "env_not_ready"
 
     def test_unknown_reason_forwarded_as_is(self, hub, q):
-        hub.register_sse_queue(q)  
+        hub.register_sse_queue(q)
         hub.emit_settling(reason="future_code_xyz")
         assert q.get_nowait()["reason"] == "future_code_xyz"
 
@@ -133,6 +134,7 @@ class TestEmitSettling:
 # ---------------------------------------------------------------------------
 # get_stats()
 # ---------------------------------------------------------------------------
+
 
 class TestGetStats:
     def test_returns_dict(self, hub):
@@ -198,6 +200,7 @@ class TestGetStats:
 # notify_baseline_complete()
 # ---------------------------------------------------------------------------
 
+
 class TestNotifyBaselineComplete:
     def test_event_key_is_baseline_complete(self, hub, q):
         hub.register_sse_queue(q)
@@ -232,6 +235,7 @@ class TestNotifyBaselineComplete:
 # ---------------------------------------------------------------------------
 # update() — state propagation
 # ---------------------------------------------------------------------------
+
 
 class TestUpdate:
     def test_returns_neurolink_state(self, hub):
@@ -288,6 +292,7 @@ class TestUpdate:
 # SSE queue management
 # ---------------------------------------------------------------------------
 
+
 class TestSSEQueueManagement:
     def test_register_increases_client_count(self, hub):
         q1: asyncio.Queue = asyncio.Queue()
@@ -316,6 +321,7 @@ class TestSSEQueueManagement:
 # reset()
 # ---------------------------------------------------------------------------
 
+
 class TestReset:
     def test_reset_clears_frame_count(self, hub):
         with patch("neurolink.hub.EEGHub._schedule_redis_push"):
@@ -338,6 +344,7 @@ class TestReset:
 # ---------------------------------------------------------------------------
 # Module-level delegates
 # ---------------------------------------------------------------------------
+
 
 class TestModuleDelegates:
     """Smoke-test the module-level singleton delegates."""
@@ -365,6 +372,7 @@ class TestModuleDelegates:
 # Thread safety
 # ---------------------------------------------------------------------------
 
+
 class TestHubThreadSafety:
     def test_concurrent_emit_settling_increments_correctly(self, hub):
         n_threads = 5
@@ -375,7 +383,7 @@ class TestHubThreadSafety:
             try:
                 for _ in range(n_calls):
                     hub.emit_settling()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker) for _ in range(n_threads)]
@@ -393,7 +401,7 @@ class TestHubThreadSafety:
             try:
                 for _ in range(30):
                     hub.emit_settling()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         def registrar():
@@ -402,13 +410,12 @@ class TestHubThreadSafety:
                     q = asyncio.Queue(maxsize=256)
                     hub.register_sse_queue(q)
                     hub.unregister_sse_queue(q)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
-        threads = (
-            [threading.Thread(target=emitter) for _ in range(3)]
-            + [threading.Thread(target=registrar) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=emitter) for _ in range(3)] + [
+            threading.Thread(target=registrar) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:

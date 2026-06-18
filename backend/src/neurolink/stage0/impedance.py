@@ -27,8 +27,8 @@ _THRESHOLDS_KOHM: dict[str, float] = {
 
 
 class ImpedanceLevel(StrEnum):
-    OK = "ok"            # below threshold
-    HIGH = "high"        # above threshold — alert user
+    OK = "ok"  # below threshold
+    HIGH = "high"  # above threshold — alert user
     UNKNOWN = "unknown"  # no reading yet
 
 
@@ -37,8 +37,8 @@ class ImpedanceChannelStatus:
     """Status for a single EEG channel."""
 
     label: str
-    kohm: float | None = None           # measured impedance (kΩ); None if unknown
-    poor_contact: bool = False          # device boolean flag
+    kohm: float | None = None  # measured impedance (kΩ); None if unknown
+    poor_contact: bool = False  # device boolean flag
     level: ImpedanceLevel = ImpedanceLevel.UNKNOWN
     threshold_kohm: float = 200.0
     last_updated: float = field(default_factory=time.time)
@@ -114,11 +114,7 @@ class ImpedanceGuard:
                 kohm = readings[ch.label]
                 ch.kohm = kohm
                 ch.last_updated = ts
-                ch.level = (
-                    ImpedanceLevel.HIGH
-                    if kohm > self._threshold
-                    else ImpedanceLevel.OK
-                )
+                ch.level = ImpedanceLevel.HIGH if kohm > self._threshold else ImpedanceLevel.OK
 
     # ------------------------------------------------------------------
     # Accessors

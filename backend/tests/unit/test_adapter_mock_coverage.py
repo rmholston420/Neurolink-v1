@@ -1,4 +1,5 @@
 """Coverage tests for adapter_factory.py and hardware/mock.py."""
+
 from __future__ import annotations
 
 import pytest
@@ -6,10 +7,10 @@ import pytest
 from neurolink.adapter_factory import create_adapter
 from neurolink.hardware.mock import MockAdapter
 
-
 # ===========================================================================
 # MockAdapter
 # ===========================================================================
+
 
 async def test_mock_adapter_connect_disconnect():
     adapter = MockAdapter()
@@ -44,6 +45,7 @@ async def test_mock_adapter_read_sample_while_disconnected():
 # ===========================================================================
 # adapter_factory.create_adapter
 # ===========================================================================
+
 
 def test_create_adapter_mock():
     adapter = create_adapter(adapter_type="mock", device_model="mock", address=None)

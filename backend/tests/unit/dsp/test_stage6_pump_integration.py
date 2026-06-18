@@ -28,15 +28,15 @@ Coverage goals
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
 from dataclasses import dataclass, field
+from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
 
 # ---------------------------------------------------------------------------
 # Minimal fakes that replicate only the fields Stage 6 cares about
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _FakePPGPayload:
@@ -54,6 +54,7 @@ class _FakeCorrectionPlan:
 
 class _FakeToggleConfig:
     """Minimal toggle snapshot — only fields Stage 6 reads."""
+
     def __init__(
         self,
         stage6_cardiac: bool = True,
@@ -99,6 +100,7 @@ def _run_stage6(
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _eeg(seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).standard_normal((N_CH, N_SAMPLES)).astype(np.float32)
 
@@ -106,6 +108,7 @@ def _eeg(seed: int = 0) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Stage 6 runs
 # ---------------------------------------------------------------------------
+
 
 class TestStage6Runs:
     def test_corrector_called_when_all_guards_pass(self):
@@ -177,6 +180,7 @@ class TestStage6Runs:
 # Stage 6 skipped
 # ---------------------------------------------------------------------------
 
+
 class TestStage6Skipped:
     def _assert_not_called(self, **kwargs):
         corrector = MagicMock()
@@ -238,6 +242,7 @@ class TestStage6Skipped:
 # Original array preserved when skipped
 # ---------------------------------------------------------------------------
 
+
 class TestArrayPreservationWhenSkipped:
     def test_eeg_identical_when_stage6_disabled(self):
         corrector = MagicMock()
@@ -268,11 +273,13 @@ class TestArrayPreservationWhenSkipped:
 # CardiacRegressor integration (real object, fake warm-up)
 # ---------------------------------------------------------------------------
 
+
 class TestStage6WithRealRegressor:
     """Use the actual CardiacRegressor to verify end-to-end shape contract."""
 
     def test_output_shape_preserved_after_stage6(self):
         from neurolink.dsp.cardiac_regression import CardiacRegressor
+
         corrector = CardiacRegressor()
         # Warm up ring
         for _ in range(60):
@@ -290,6 +297,7 @@ class TestStage6WithRealRegressor:
 
     def test_stage6_disabled_returns_exact_input(self):
         from neurolink.dsp.cardiac_regression import CardiacRegressor
+
         corrector = CardiacRegressor()
         eeg = _eeg(seed=5)
         result = _run_stage6(
@@ -305,6 +313,7 @@ class TestStage6WithRealRegressor:
 # ---------------------------------------------------------------------------
 # IBI boundary / physiology guard propagation
 # ---------------------------------------------------------------------------
+
 
 class TestIBIBoundaryPropagation:
     """Verify that out-of-range IBIs propagate to the corrector (not filtered at pump level)."""

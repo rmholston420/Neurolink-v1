@@ -16,6 +16,7 @@ def app():
     hub_mod._hub = hub_mod.EEGHub()
 
     from neurolink.main import create_app
+
     return create_app()
 
 

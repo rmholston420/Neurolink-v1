@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import threading
-from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 
 from neurolink.dsp import fnirs
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_raw_fnirs(
     n_channels: int = 8,
@@ -29,6 +27,7 @@ def _make_raw_fnirs(
 # ---------------------------------------------------------------------------
 # Config / defaults
 # ---------------------------------------------------------------------------
+
 
 class TestFNIRSConfig:
     def test_default_config_accessible(self):
@@ -59,6 +58,7 @@ class TestFNIRSConfig:
 # ---------------------------------------------------------------------------
 # apply() — basic contracts
 # ---------------------------------------------------------------------------
+
 
 class TestFNIRSApply:
     def test_none_eeg_returns_none(self):
@@ -111,6 +111,7 @@ class TestFNIRSApply:
 # Beer–Lambert conversion
 # ---------------------------------------------------------------------------
 
+
 class TestBeerLambert:
     def test_hbo_hbr_shapes(self):
         """decode() must return (HbO, HbR) with same spatial dimensions."""
@@ -141,6 +142,7 @@ class TestBeerLambert:
 # Baseline detrending
 # ---------------------------------------------------------------------------
 
+
 class TestFNIRSBaseline:
     def test_baseline_reduces_dc_offset(self):
         """After baseline correction, channel means should be near zero."""
@@ -159,6 +161,7 @@ class TestFNIRSBaseline:
 # ---------------------------------------------------------------------------
 # Motion artefact handling
 # ---------------------------------------------------------------------------
+
 
 class TestFNIRSMotionArtifacts:
     def test_spike_clipped_or_smoothed(self):
@@ -180,6 +183,7 @@ class TestFNIRSMotionArtifacts:
 # ---------------------------------------------------------------------------
 # Reset
 # ---------------------------------------------------------------------------
+
 
 class TestFNIRSReset:
     def test_reset_clears_internal_state(self):
@@ -203,6 +207,7 @@ class TestFNIRSReset:
 # ---------------------------------------------------------------------------
 # Thread safety
 # ---------------------------------------------------------------------------
+
 
 class TestFNIRSThreadSafety:
     def test_concurrent_apply_no_exception(self):
@@ -241,10 +246,9 @@ class TestFNIRSThreadSafety:
                 except Exception as e:
                     errors.append(e)
 
-        threads = (
-            [threading.Thread(target=apply_worker) for _ in range(3)] +
-            [threading.Thread(target=reset_worker) for _ in range(2)]
-        )
+        threads = [threading.Thread(target=apply_worker) for _ in range(3)] + [
+            threading.Thread(target=reset_worker) for _ in range(2)
+        ]
         for t in threads:
             t.start()
         for t in threads:
@@ -255,6 +259,7 @@ class TestFNIRSThreadSafety:
 # ---------------------------------------------------------------------------
 # Integration: apply → decode pipeline
 # ---------------------------------------------------------------------------
+
 
 class TestFNIRSPipeline:
     def test_apply_then_decode_no_exception(self):

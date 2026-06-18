@@ -6,7 +6,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
-import pytest
 
 from neurolink.eeg_pump import EEGPump
 from neurolink.hub import EEGHub
@@ -17,7 +16,9 @@ def _make_mock_adapter(n_channels: int = 4, n_samples: int = 256):
     """Return a minimal mock hardware adapter producing one EEGSample."""
     t = np.linspace(0, 1, n_samples)
     eeg_buffer = [
-        (np.sin(2 * np.pi * 10 * t) + 0.1 * np.random.default_rng(i).standard_normal(n_samples)).tolist()
+        (
+            np.sin(2 * np.pi * 10 * t) + 0.1 * np.random.default_rng(i).standard_normal(n_samples)
+        ).tolist()
         for i in range(n_channels)
     ]
     sample = MagicMock()

@@ -149,9 +149,7 @@ async def sse_stream(service: ServiceDep) -> StreamingResponse:
                         yield _encode_sse_item(q.get_nowait())
                         continue
                     try:
-                        item = await asyncio.wait_for(
-                            q.get(), timeout=_SSE_TEST_EXIT_TIMEOUT_S
-                        )
+                        item = await asyncio.wait_for(q.get(), timeout=_SSE_TEST_EXIT_TIMEOUT_S)
                         yield _encode_sse_item(item)
                     except TimeoutError:
                         if not hub.get_state().connected:

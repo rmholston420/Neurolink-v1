@@ -88,7 +88,7 @@ class OcularRegressionConfig:
     """
 
     enable: bool = True
-    eog_channel_idx: int = 4        # Muse AUX jack / VEOG channel
+    eog_channel_idx: int = 4  # Muse AUX jack / VEOG channel
     eeg_channels: list[int] = None  # None → [0, 1, 2, 3]
     calib_window_samples: int = 1024
     recalib_frames: int = 512
@@ -172,7 +172,7 @@ class OcularRegressor:
             return eeg
 
         eog_signal = eeg[eog_idx].astype(np.float64)  # (n_samples,)
-        eeg_sub = eeg[eeg_idx].astype(np.float64)     # (n_eeg_ch, n_samples)
+        eeg_sub = eeg[eeg_idx].astype(np.float64)  # (n_eeg_ch, n_samples)
 
         # Accumulate per-sample pairs into the rolling buffer
         with self._lock:
@@ -184,10 +184,13 @@ class OcularRegressor:
             self._total_frames += 1
             # Adaptive variance check: snapshot last 30 EOG samples
             _eog_snap = list(self._eog_buf)[-30:] if len(self._eog_buf) >= 30 else None
-            should_recalib = self._variance_triggered(
-                np.array(_eog_snap, dtype=np.float64) if _eog_snap else None,
-                cfg,
-            ) and len(self._eog_buf) >= cfg.calib_window_samples
+            should_recalib = (
+                self._variance_triggered(
+                    np.array(_eog_snap, dtype=np.float64) if _eog_snap else None,
+                    cfg,
+                )
+                and len(self._eog_buf) >= cfg.calib_window_samples
+            )
 
         if should_recalib:
             self._fit_slopes(cfg)
@@ -242,6 +245,7 @@ class OcularRegressor:
     def get_config(self) -> OcularRegressionConfig:
         with self._lock:
             import copy
+
             return copy.copy(self._cfg)
 
     def set_config(self, config: OcularRegressionConfig) -> None:
@@ -257,7 +261,7 @@ class OcularRegressor:
 
     def _variance_triggered(
         self,
-        eog_recent: "np.ndarray | None",
+        eog_recent: np.ndarray | None,
         cfg: OcularRegressionConfig,
     ) -> bool:
         """Return True if recalibration should fire this frame.

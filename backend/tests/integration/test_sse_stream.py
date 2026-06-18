@@ -33,9 +33,7 @@ async def test_sse_stream_emits_at_least_one_frame(app):
 
     received_frames: list[dict] = []
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as c:
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         # 1. Connect — ASGITransport does not run the lifespan.
         connect_r = await c.post(
             "/api/v1/neurolink/connect",
@@ -74,7 +72,7 @@ async def test_sse_stream_emits_at_least_one_frame(app):
         try:
             # 5s + 50ms router timeouts + small buffer = 6s outer timeout
             await asyncio.wait_for(collect_sse(), timeout=6.5)
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             pass
 
     assert len(received_frames) >= 1, (
