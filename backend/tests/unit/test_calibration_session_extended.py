@@ -47,14 +47,13 @@ def _make_adapter(sample=None, return_none: bool = False):
     return adapter
 
 
-def _fast_monotonic(times: list[float]):
+def _fast_monotonic(times: list):
     """Return a callable that steps through *times*, clamping at the last value."""
-    idx = 0
+    state = {"idx": 0}
 
     def _fn():
-        nonlocal idx
-        val = times[min(idx, len(times) - 1)]
-        idx += 1
+        val = times[min(state["idx"], len(times) - 1)]
+        state["idx"] += 1
         return val
 
     return _fn
@@ -144,37 +143,27 @@ class TestCalibrationFastForward:
     @pytest.mark.asyncio
     async def test_cancellation_sets_phase_complete(self):
         """
-        Cancelling the run() task mid-flight must cause the finally block
-        to set phase='complete' and is_running=False.
+        Verify the finally-block invariants (phase='complete', is_running=False)
+        by injecting CancelledError directly into read_sample.
 
-        time.monotonic is patched so the loop never exits on its own
-        (always returns 0.0), keeping run() alive until we cancel it.
-        read_sample awaits a never-set asyncio.Event so CancelledError
-        propagates cleanly through a single await point with no leaks.
+        This avoids any real-time or scheduling dependency: read_sample raises
+        CancelledError on its first call, which propagates to the except clause
+        in run(), then the finally block fires synchronously.
         """
         hub = EEGHub()
         adapter = MagicMock()
-
-        # Stays in warmup phase forever (elapsed always 0.0 < TOTAL_DURATION_SEC)
-        _block = asyncio.Event()  # never set
-
-        async def _blocking_read(*_a, **_kw):
-            await _block.wait()
-            return None
-
-        adapter.read_sample = _blocking_read
+        adapter.read_sample = AsyncMock(side_effect=asyncio.CancelledError)
 
         cal = CalibrationSession(adapter, hub)
 
-        with patch("neurolink.calibration.time.monotonic", return_value=0.0):
-            task = asyncio.create_task(cal.run())
-            # Yield control so the task enters the event loop and reaches
-            # the await _block.wait() inside _blocking_read.
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            task.cancel()
+        # Patch monotonic so elapsed stays in warmup (never breaks the loop
+        # via the time-check), ensuring the CancelledError is what exits it.
+        with patch(
+            "neurolink.calibration.time.monotonic",
+            side_effect=_fast_monotonic([0.0, 1.0]),
+        ):
             try:
-                await task
+                await cal.run()
             except asyncio.CancelledError:
                 pass
 
