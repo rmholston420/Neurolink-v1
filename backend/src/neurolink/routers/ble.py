@@ -65,18 +65,21 @@ MUSE_NAME_PREFIX = "Muse"
 DEFAULT_SCAN_SEC = 5.0
 
 
-def _is_muse(device) -> bool:
-    """Return True if the BLE device looks like a Muse headband."""
-    name = getattr(device, "name", "") or ""
-    uuids: list[str] = []
-    if hasattr(device, "metadata"):
-        uuids = device.metadata.get("uuids", [])
-    return name.startswith(MUSE_NAME_PREFIX) or MUSE_SERVICE_UUID in [u.lower() for u in uuids]
+def _is_muse_adv(device, advertisement_data) -> bool:
+    """Return True if the BLE advertisement looks like a Muse headband.
+
+    Uses AdvertisementData (the current Bleak API) rather than the
+    deprecated BLEDevice.metadata attribute.
+    """
+    name = (getattr(device, "name", "") or "").strip()
+    service_uuids = getattr(advertisement_data, "service_uuids", []) or []
+    return (
+        name.startswith(MUSE_NAME_PREFIX)
+        or MUSE_SERVICE_UUID in [u.lower() for u in service_uuids]
+    )
 
 
 # -- Bridge state (module-level singleton) ---------------------------------------
-# We keep a single BLEBridge instance per process.  The frontend can only
-# have one Muse connected at a time anyway.
 class _BridgeState:
     from neurolink.ble_bridge import BLEBridge as _BLEBridge
     from neurolink.hardware.base import HardwareAdapter as _HardwareAdapter
@@ -138,8 +141,9 @@ async def ble_scan(duration: float = DEFAULT_SCAN_SEC) -> BLEScanResponse:
     """
     Discover nearby BLE devices and return those that look like Muse headbands.
 
-    Requires bleak to be installed.  The scan blocks for `duration` seconds
-    (default 5).  Safe to call multiple times; does not start a bridge.
+    Uses the detection_callback form of BleakScanner so AdvertisementData
+    (including rssi and service_uuids) is available without accessing the
+    deprecated BLEDevice.metadata / BLEDevice.rssi attributes.
     """
     if not BLEAK_AVAILABLE:
         raise HTTPException(
@@ -147,23 +151,35 @@ async def ble_scan(duration: float = DEFAULT_SCAN_SEC) -> BLEScanResponse:
             detail="bleak is not installed on this server. Install with: pip install bleak",
         )
 
-    duration = max(2.0, min(duration, 30.0))  # clamp to [2, 30] seconds
+    duration = max(2.0, min(duration, 30.0))
     log.info("ble_scan_start", duration=duration)
 
+    # Collect (device, advertisement_data) pairs via detection_callback so we
+    # have access to AdvertisementData.rssi and .service_uuids without touching
+    # the deprecated BLEDevice.metadata / BLEDevice.rssi properties.
+    seen: dict[str, tuple] = {}  # address -> (BLEDevice, AdvertisementData)
+
+    def _on_detection(device, advertisement_data) -> None:
+        seen[device.address.upper()] = (device, advertisement_data)
+
     try:
-        discovered = await BleakScanner.discover(timeout=duration)
+        scanner = BleakScanner(detection_callback=_on_detection)
+        async with scanner:
+            await asyncio.sleep(duration)
     except Exception as exc:
         log.error("ble_scan_failed", error=str(exc))
         raise HTTPException(status_code=500, detail=f"BLE scan failed: {exc}") from exc
 
+    all_devices = list(seen.values())
+
     muse_devices = [
         BLEDeviceOut(
-            address=d.address,
-            name=d.name or None,
-            rssi=getattr(d, "rssi", None),
+            address=dev.address,
+            name=dev.name or None,
+            rssi=adv.rssi,
         )
-        for d in discovered
-        if _is_muse(d)
+        for dev, adv in all_devices
+        if _is_muse_adv(dev, adv)
     ]
 
     # If no Muse-named device found, return ALL discovered devices so the
@@ -171,14 +187,14 @@ async def ble_scan(duration: float = DEFAULT_SCAN_SEC) -> BLEScanResponse:
     if not muse_devices:
         muse_devices = [
             BLEDeviceOut(
-                address=d.address,
-                name=d.name or None,
-                rssi=getattr(d, "rssi", None),
+                address=dev.address,
+                name=dev.name or None,
+                rssi=adv.rssi,
             )
-            for d in discovered
+            for dev, adv in all_devices
         ]
 
-    log.info("ble_scan_done", total=len(discovered), muse=len(muse_devices))
+    log.info("ble_scan_done", total=len(all_devices), muse=len(muse_devices))
     return BLEScanResponse(devices=muse_devices, scan_duration_sec=duration)
 
 
@@ -198,7 +214,6 @@ async def ble_connect(req: BLEConnectRequest) -> BLEConnectResponse:
 
     await _stop_existing_bridge()
 
-    # Import here to avoid circular imports at module load
     try:
         from neurolink.adapter_factory import create_adapter
         from neurolink.ble_bridge import BLEBridge
@@ -222,7 +237,6 @@ async def ble_connect(req: BLEConnectRequest) -> BLEConnectResponse:
         bridge_state.address = req.address
         bridge_state.device_model = req.device_model
 
-        # Give the supervisor loop a moment to initiate the GATT connection
         await asyncio.sleep(0.5)
 
         connected = getattr(adapter, "is_connected", False)

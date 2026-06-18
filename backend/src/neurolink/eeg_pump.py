@@ -265,6 +265,9 @@ class EEGPump:
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
+        # Tracks when the watchdog warning was last emitted so it fires at
+        # most once per _WATCHDOG_SEC window instead of every tick (250 ms).
+        self._last_watchdog_warn_ts: float = 0.0
         _wire_stubs(self)
 
     async def start(self) -> None:
@@ -299,8 +302,16 @@ class EEGPump:
                 await self._tick()
             except Exception as exc:
                 log.error("eeg_pump_tick_error", error=str(exc), exc_info=True)
-            if self._last_frame_ts > 0 and (time.time() - self._last_frame_ts) > _WATCHDOG_SEC:
+            # Watchdog: warn at most once per _WATCHDOG_SEC window so a
+            # post-disconnect silence produces one warning, not one per tick.
+            now = time.time()
+            if (
+                self._last_frame_ts > 0
+                and (now - self._last_frame_ts) > _WATCHDOG_SEC
+                and (now - self._last_watchdog_warn_ts) >= _WATCHDOG_SEC
+            ):
                 log.warning("eeg_pump_no_frames", since_sec=_WATCHDOG_SEC)
+                self._last_watchdog_warn_ts = now
             elapsed = time.monotonic() - tick_start
             await asyncio.sleep(max(0.0, interval - elapsed))
 
@@ -321,7 +332,6 @@ class EEGPump:
         if sample is None:
             return
 
-        # All toggle reads go through the stub so tests can intercept them.
         toggles = filter_toggles.get_toggles()
 
         # ── Stage 0: impedance check via stub (patchable by tests) ───────
@@ -357,7 +367,6 @@ class EEGPump:
         from neurolink.dsp.imu import head_orientation
         from neurolink.dsp.ppg import compute_ppg
 
-        # All toggle reads go through the stub so tests can intercept them.
         toggles = filter_toggles.get_toggles()
 
         disabled = [k for k, v in toggles.to_dict().items() if not v]
@@ -400,10 +409,6 @@ class EEGPump:
                 artifact_reasons = decision.reasons
 
         # ── Stage 3b — multi-type artifact classifier ──────────────────
-        # _plan_* flags default True: all correction stages run on clean frames.
-        # Stage 3b only sets them True when it detects a matching artifact
-        # (they are already True, so no effective change for clean data).
-        # Hard-reject (motion/pop) sets artifact_rejected=True and skips all.
         detection_report = None
         artifact_annotations: list[ArtifactAnnotationPayload] = []
         correction_plan_payload: ArtifactCorrectionPlanPayload | None = None
@@ -435,8 +440,6 @@ class EEGPump:
                 apply_notch=plan.apply_notch,
                 apply_cardiac_regression=plan.apply_cardiac_regression,
             )
-            # Only override _plan_* from stage3b when artifacts were detected.
-            # For clean frames (report.clean=True) all _plan_* stay True.
             if not detection_report.clean:
                 _plan_hard_reject = plan.hard_reject
                 if plan.apply_asr:
@@ -447,7 +450,6 @@ class EEGPump:
                     _plan_apply_notch = True
                 if plan.apply_cardiac_regression:
                     _plan_apply_cardiac = True
-                # Hard reject overrides everything
                 if plan.hard_reject:
                     _plan_hard_reject = True
 
@@ -456,17 +458,15 @@ class EEGPump:
             if not artifact_reasons and detection_report is not None:
                 artifact_reasons = [f"3b:{a.artifact_type}" for a in detection_report.annotations]
 
-        # ── Stage 4b — baseline (phase-gate shim) ─────────────────────
+        # ── Stage 4b — baseline (phase-gate shim) ──────────────────────
         if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
             eeg_arr = baseline.apply(eeg_arr)
 
         # ── Stage 4 — ASR burst reconstruction ─────────────────────────
-        # Note: warmup guard removed; ASR is gated by toggle + _plan_apply_asr only.
-        # BaselineRecorder.process() already handles its own warmup phase internally.
         if eeg_arr is not None and not artifact_rejected and toggles.stage4_asr and _plan_apply_asr:
             eeg_arr = asr.apply(eeg_arr)
 
-        # ── Stage 5 — ocular regression ───────────────────────────────
+        # ── Stage 5 — ocular regression ────────────────────────────────
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -475,7 +475,7 @@ class EEGPump:
         ):
             eeg_arr = ocular_regression.apply(eeg_arr)
 
-        # ── Stage 5b — notch re-apply ─────────────────────────────────
+        # ── Stage 5b — notch re-apply ───────────────────────────────────
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -496,7 +496,7 @@ class EEGPump:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
-        # ── Stage 6 — cardiac regression ──────────────────────────────
+        # ── Stage 6 — cardiac regression ───────────────────────────────
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -506,7 +506,7 @@ class EEGPump:
             ibis = ppg_payload.ibi_ms if ppg_payload else []
             eeg_arr = cardiac_regression.apply(eeg_arr, ibis=ibis)
 
-        # ── Band powers ───────────────────────────────────────────────
+        # ── Band powers ─────────────────────────────────────────────────
         bands_dict: dict[str, float] = {}
         if eeg_arr is not None and not artifact_rejected:
             bands_dict = bandpower.compute(eeg_arr, fs=_EEG_FS)
@@ -519,7 +519,7 @@ class EEGPump:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # ── Classifiers ──────────────────────────────────────────────
+        # ── Classifiers ─────────────────────────────────────────────────
         if eeg_arr is not None and not artifact_rejected:
             classifiers.run(bands)
 
@@ -530,7 +530,7 @@ class EEGPump:
             start = max(0, n_samples - _EEG_SAMPLES_WINDOW)
             eeg_samples = eeg_arr[:, start:].tolist()
 
-        # ── Derived EEG (FAA, FMt) ─────────────────────────────────────
+        # ── Derived EEG (FAA, FMt) ──────────────────────────────────────
         faa: float | None = None
         fmt: float | None = None
         if eeg_arr is not None and eeg_arr.shape[1] >= 2 and not artifact_rejected:
@@ -540,14 +540,14 @@ class EEGPump:
             faa = derived.get("faa")
             fmt = derived.get("fmt")
 
-        # ── Breathing ──────────────────────────────────────────────────
+        # ── Breathing ───────────────────────────────────────────────────
         accel_z: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
             accel_z = np.array(sample.accel_buffer[2], dtype=np.float32)
         ibis_for_breathing: list[float] = ppg_payload.ibi_ms if ppg_payload else []
         breathing_payload = compute_breathing(ibis_for_breathing, accel_z=accel_z)
 
-        # ── IMU head orientation ───────────────────────────────────────
+        # ── IMU head orientation ─────────────────────────────────────────
         imu_payload: IMUPayload | None = None
         if sample.accel_buffer and sample.gyro_buffer:
             accel_arr_imu = np.array(sample.accel_buffer, dtype=np.float32)
@@ -555,7 +555,7 @@ class EEGPump:
             if accel_arr_imu.shape[1] > 0:
                 imu_payload = head_orientation(accel_arr_imu, gyro_arr)
 
-        # ── fNIRS ──────────────────────────────────────────────────────
+        # ── fNIRS ────────────────────────────────────────────────────────
         fnirs_oxy: float | None = sample.extra.get("fnirs_oxy")
         fnirs_deoxy: float | None = sample.extra.get("fnirs_deoxy")
 

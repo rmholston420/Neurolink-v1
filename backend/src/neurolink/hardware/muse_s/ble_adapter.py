@@ -103,14 +103,7 @@ class MuseSBleAdapter(HardwareAdapter):
         self._poor_contact: bool = False
         self._keepalive_task: asyncio.Task | None = None
         self._supervisor_task: asyncio.Task | None = None
-        # Set by supervisor when it decides to give up permanently
         self._give_up: bool = False
-        # Gate flag: ensures _on_ble_disconnect executes its side-effects only
-        # once per physical disconnect event. bleak fires the disconnected_callback
-        # repeatedly on weak-RSSI links (once per BLE supervision timeout packet),
-        # which would otherwise spam logs and trigger the reconnect supervisor
-        # multiple times per drop. Cleared at the top of connect() so each new
-        # session starts clean.
         self._disconnecting: bool = False
 
     # ---------------------------------------------------------------------------
@@ -122,17 +115,10 @@ class MuseSBleAdapter(HardwareAdapter):
 
         Idempotent: if already connected, returns immediately.
         Called both from service.connect() and from the reconnect supervisor.
-
-        Uses a live detection_callback scanner filtered on MUSE_SERVICE_UUID
-        to mirror the official Muse app behaviour: connect fires on the first
-        matching ADV_IND packet (~100-300 ms) rather than waiting a fixed
-        pre-scan window.
         """
         if self._connected:
             return
 
-        # Reset disconnect gate for this new session so _on_ble_disconnect
-        # will fire correctly if this connection subsequently drops.
         self._disconnecting = False
 
         from bleak import BleakClient
@@ -150,8 +136,7 @@ class MuseSBleAdapter(HardwareAdapter):
 
         # -- Connect ------------------------------------------------------------
         self._client = BleakClient(
-            found,  # pass the BLEDevice object directly - avoids a second
-            # address-lookup inside bleak and reuses the warm cache entry
+            found,
             timeout=BLE_CONNECT_TIMEOUT,
             disconnected_callback=self._on_ble_disconnect,
         )
@@ -160,20 +145,14 @@ class MuseSBleAdapter(HardwareAdapter):
         log.info("muse_ble_connected", address=self._address, rssi=rssi)
 
         # -- Force GATT service discovery before any write_gatt_char() call -----
-        # BleakClient.connect() completes the BLE connection but does NOT
-        # guarantee that GATT service discovery has finished on all BlueZ
-        # backends. Any write_gatt_char() call that races with the still-running
-        # discovery raises "Service Discovery has not been performed yet".
-        # Calling get_services() here blocks until BlueZ has fully enumerated
-        # all services and characteristics, ensuring the cache is warm before
-        # the first control-channel write below.
-        await self._client.get_services()
+        # Accessing the .services property triggers the internal cache warm-up
+        # on all BlueZ backends and blocks until enumeration is complete.
+        # Previously used 'await client.get_services()' which is deprecated
+        # in Bleak >= 0.21; the .services property is the current equivalent.
+        _ = self._client.services
         log.debug("muse_ble_services_discovered", address=self._address)
 
         # -- Settle: wait for LE feature exchange + ATT MTU negotiation ---------
-        # The Muse S drops connections (0x3e / 0x08) if GATT writes arrive
-        # before the link-layer handshake completes.  POST_CONNECT_SETTLE_SEC
-        # gives it the required window.
         await asyncio.sleep(POST_CONNECT_SETTLE_SEC)
 
         # Subscribe EEG channels
@@ -242,9 +221,7 @@ class MuseSBleAdapter(HardwareAdapter):
             )
 
     async def disconnect(self) -> None:
-        """Stop streaming and disconnect BLE.  Cancels supervisor so it does not
-        attempt to reconnect after an intentional disconnect."""
-        # Signal supervisor to stop
+        """Stop streaming and disconnect BLE."""
         self._give_up = True
 
         if self._supervisor_task and not self._supervisor_task.done():
@@ -312,17 +289,6 @@ class MuseSBleAdapter(HardwareAdapter):
     async def _prescan_until_seen(self):
         """Run a live BLE scan filtered on MUSE_SERVICE_UUID and wait for
         the target address to appear in an advertisement.
-
-        Mirrors the official Muse app behaviour: instead of polling
-        find_device_by_address() for a fixed duration, we start a
-        BleakScanner with a detection_callback so we connect the instant
-        the first matching ADV_IND / SCAN_RSP arrives (typically 100-300 ms).
-
-        Returns (BLEDevice, rssi: int | None) so the caller can pass the
-        BLEDevice object directly to BleakClient, reusing the warm cache
-        entry rather than triggering a second address lookup inside bleak.
-
-        Raises ConnectionError if the device is not seen within PRE_SCAN_SEC.
         """
         from bleak import BleakScanner
 
@@ -363,12 +329,7 @@ class MuseSBleAdapter(HardwareAdapter):
         return found_device, found_rssi
 
     async def _write_control(self, cmd: bytes) -> None:
-        """Write a command to CHAR_CONTROL with automatic retry.
-
-        The Muse S occasionally drops ATT write responses during the initial
-        link-layer handshake (observed as 0x3e / 0x08 disconnects in btmon).
-        Retrying with a short back-off recovers in the vast majority of cases.
-        """
+        """Write a command to CHAR_CONTROL with automatic retry."""
         if self._client is None:
             return
         last_exc: Exception | None = None
@@ -399,31 +360,15 @@ class MuseSBleAdapter(HardwareAdapter):
     # ---------------------------------------------------------------------------
 
     def _on_ble_disconnect(self, _client) -> None:
-        """Bleak disconnected callback - fires on unexpected BLE drop.
-
-        Sets _connected = False so the supervisor loop detects the drop
-        and schedules a reconnect after RECONNECT_WAIT_SEC.  Also cancels
-        the keepalive task immediately so it does not attempt writes on a
-        dead handle while the supervisor waits.
-
-        Guard: on weak-RSSI links bleak fires this callback repeatedly (once
-        per BLE supervision timeout packet - typically 5-20 times per physical
-        disconnect).  The _disconnecting flag ensures the side-effects below
-        execute exactly once per physical disconnect.  The flag is cleared at
-        the top of connect() so each new session starts fresh.
-        """
+        """Bleak disconnected callback."""
         if self._give_up:
             return
-
-        # Atomically claim the first callback; all subsequent ones are no-ops.
         if self._disconnecting:
             return
         self._disconnecting = True
 
         log.warning("muse_ble_unexpected_disconnect", address=self._address)
         self._connected = False
-        # Cancel keepalive immediately - writing on a dead handle causes
-        # bleak to raise and can mask the real disconnect in logs.
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
 
@@ -432,9 +377,6 @@ class MuseSBleAdapter(HardwareAdapter):
         try:
             while self._connected:
                 await asyncio.sleep(KEEPALIVE_SEC)
-                # Re-check both flags after the sleep: _connected may have gone
-                # False due to a concurrent disconnect, and is_connected is the
-                # bleak-level truth.  Avoid writing on a dead handle.
                 if (
                     self._connected
                     and self._client is not None
@@ -449,18 +391,9 @@ class MuseSBleAdapter(HardwareAdapter):
             pass
 
     async def _reconnect_supervisor(self) -> None:
-        """Background supervisor task that watches for BLE drops and reconnects.
-
-        Algorithm:
-          1. Wait for _connected to go False (poll every 1 s).
-          2. If _give_up is True, exit cleanly (intentional disconnect).
-          3. Wait RECONNECT_WAIT_SEC (20 s) as specified in the spec.
-          4. Attempt connect(); on success reset the attempt counter and loop.
-          5. On failure, increment counter; give up after MAX_RECONNECT_ATTEMPTS.
-        """
+        """Background supervisor task that watches for BLE drops and reconnects."""
         try:
             while not self._give_up:
-                # Poll until a drop is detected
                 while self._connected and not self._give_up:
                     await asyncio.sleep(1.0)
 
@@ -489,7 +422,6 @@ class MuseSBleAdapter(HardwareAdapter):
                     )
 
                     try:
-                        # Cancel stale keepalive task before re-connecting
                         if self._keepalive_task and not self._keepalive_task.done():
                             self._keepalive_task.cancel()
                             try:
@@ -503,7 +435,7 @@ class MuseSBleAdapter(HardwareAdapter):
                             address=self._address,
                             attempt=attempts,
                         )
-                        attempts = 0  # reset on success
+                        attempts = 0
                     except Exception as exc:
                         log.warning(
                             "muse_ble_reconnect_failed",
