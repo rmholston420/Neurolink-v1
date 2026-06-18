@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from neurolink.dsp.breathing import (
-    ACCEL_FS,
     _MIN_ACCEL_SAMPLES,
+    ACCEL_FS,
     _rr_from_accel,
     _rr_from_ibis,
     compute_breathing,
     estimate_rr,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

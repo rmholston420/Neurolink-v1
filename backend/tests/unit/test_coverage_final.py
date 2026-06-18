@@ -14,7 +14,6 @@ hub.py                 -- notify_baseline_complete (happy + QueueFull),
 
 from __future__ import annotations
 
-import asyncio
 import time
 from unittest.mock import MagicMock
 
@@ -181,6 +180,6 @@ def test_baseline_is_complete_false_during_warmup():
 
 
 def test_filter_toggles_get_returns_copy():
-    from neurolink.dsp.filter_toggles import get_toggles, set_toggles
+    from neurolink.dsp.filter_toggles import set_toggles
 
     set_toggles({"stage1_fir": True})

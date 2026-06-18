@@ -132,9 +132,7 @@ class GateConfig:
         if self.electrode_type is None:
             self.electrode_type = _detect_electrode_type()
         if self.pk2pk_uv is None:
-            self.pk2pk_uv = _default_pk2pk_for_electrode_type(
-                self.electrode_type
-            )
+            self.pk2pk_uv = _default_pk2pk_for_electrode_type(self.electrode_type)
         log.debug(
             "gate_config_resolved",
             electrode_type=self.electrode_type,

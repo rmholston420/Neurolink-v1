@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
 from neurolink.dsp.ppg import (
     _MIN_SAMPLES,
     HRVResult,
-    PoincareMetrics,
-    _poincare,
     compute_hrv,
     compute_ppg,
 )
