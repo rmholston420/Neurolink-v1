@@ -1,4 +1,4 @@
-"""Unit tests for dsp/artifact_config.py — constant values and types."""
+"""Unit tests for dsp/artifact_config.py -- constant values and types."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class TestArtifactConfigValues:
         assert cfg.ARTIFACT_PK2PK_UV > 0
 
     def test_pk2pk_uv_clinical_range(self):
-        """Valid EEG pk2pk threshold should be between 50 and 300 µV."""
+        """Valid EEG pk2pk threshold should be between 50 and 300 uV."""
         assert 50.0 <= cfg.ARTIFACT_PK2PK_UV <= 300.0
 
     # IMU motion gate
@@ -156,7 +156,7 @@ class TestArtifactConfigInternalConsistency:
         assert cfg.EMG_FREQ_LOW_HZ >= 30.0
 
     def test_cardiac_and_blink_do_not_overlap(self):
-        """Cardiac band (0.8–1.8 Hz) and blink band (0–10 Hz) overlap is fine,
+        """Cardiac band (0.8-1.8 Hz) and blink band (0-10 Hz) overlap is fine,
         but cardiac high should be below blink freq max."""
         assert cfg.CARDIAC_FREQ_HIGH_HZ < cfg.BLINK_FREQ_HZ_MAX
 

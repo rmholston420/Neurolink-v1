@@ -112,9 +112,9 @@ class TestSSEStream:
             lines = []
             async for line in response.aiter_lines():
                 lines.append(line)
-                if any(l.startswith("data:") for l in lines):
+                if any(ln.startswith("data:") for ln in lines):
                     break
-        assert any(l.startswith("data:") for l in lines)
+        assert any(ln.startswith("data:") for ln in lines)
 
     async def test_stream_content_type_is_sse(self, client):
         async with client.stream("GET", "/api/v1/neurolink/stream") as response:

@@ -1,7 +1,7 @@
 """Calibration endpoints.
 
-POST /api/v1/calibration/start  — start 90-second baseline alpha capture.
-GET  /api/v1/calibration/progress — lightweight progress poll for non-SSE clients.
+POST /api/v1/calibration/start  -- start 90-second baseline alpha capture.
+GET  /api/v1/calibration/progress -- lightweight progress poll for non-SSE clients.
 
 Note: legacy routes at /api/v1/neurolink/calibrate and
 /api/v1/neurolink/baseline remain accessible via the neurolink router
@@ -50,11 +50,11 @@ async def get_calibration_progress(service: ServiceDep) -> BaselineProgressRespo
           "total_s":     90.0
         }
 
-    The endpoint is always available — callers do **not** need to call
+    The endpoint is always available -- callers do **not** need to call
     ``POST /calibration/start`` first.  When no session is running ``phase``
     is ``"idle"`` and both timing fields are ``0.0``.
 
-    Recommended poll interval: 1–2 s.  Clients that consume the SSE
+    Recommended poll interval: 1-2 s.  Clients that consume the SSE
     stream already receive ``baseline_phase`` on every ``NeurolinkState``
     event and should use that instead.
     """

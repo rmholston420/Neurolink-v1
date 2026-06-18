@@ -1,4 +1,4 @@
-"""Unit tests for dsp.classifiers — v2 and v0.1 region/stage classifiers."""
+"""Unit tests for dsp.classifiers -- v2 and v0.1 region/stage classifiers."""
 
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ class TestClassifyV2:
 
     def test_alpha_dominant_region(self):
         bands = BandPowers(alpha=0.7, theta=0.1, beta=0.1, delta=0.05, gamma=0.05)
-        region, stage = classify_v2(bands)
-        assert isinstance(region, str)
-        assert len(region) > 0
+        _region, stage = classify_v2(bands)
+        assert isinstance(_region, str)
+        assert len(_region) > 0
 
     def test_theta_dominant_returns_string(self):
         bands = BandPowers(alpha=0.1, theta=0.7, beta=0.1, delta=0.05, gamma=0.05)
-        region, stage = classify_v2(bands)
+        _region, stage = classify_v2(bands)
         assert isinstance(stage, str)
 
     def test_consistent_on_same_input(self, flat_bands):
@@ -50,7 +50,7 @@ class TestClassifyV01:
     def test_faa_positive_influence(self):
         r_pos, _ = classify_v01(0.5, 0.1, 0.1, 0.1, 0.2, faa=1.0, fmt=0.0)
         r_neg, _ = classify_v01(0.5, 0.1, 0.1, 0.1, 0.2, faa=-1.0, fmt=0.0)
-        # Results may differ — test simply that no exception is raised
+        # Results may differ -- test simply that no exception is raised
         assert isinstance(r_pos, str)
         assert isinstance(r_neg, str)
 

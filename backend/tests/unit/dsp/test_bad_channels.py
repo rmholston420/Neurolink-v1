@@ -1,4 +1,4 @@
-"""Unit tests for dsp/bad_channels.py — Stage 2 bad channel detector."""
+"""Unit tests for dsp/bad_channels.py -- Stage 2 bad channel detector."""
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ class TestChannelStats:
 
 
 # ---------------------------------------------------------------------------
-# BadChannelDetector.update() — guards
+# BadChannelDetector.update() -- guards
 # ---------------------------------------------------------------------------
 
 
@@ -112,13 +112,13 @@ class TestBadChannelDetectorGuards:
         det.update(np.zeros(256, dtype=np.float32))
 
     def test_single_sample_skipped(self):
-        """n_samples < 2 → skipped; no crash."""
+        """n_samples < 2 -> skipped; no crash."""
         det = BadChannelDetector()
         det.update(np.zeros((N_CH, 1), dtype=np.float32))
 
 
 # ---------------------------------------------------------------------------
-# BadChannelDetector.update() — flat-line detection
+# BadChannelDetector.update() -- flat-line detection
 # ---------------------------------------------------------------------------
 
 
@@ -144,13 +144,13 @@ class TestFlatLineDetection:
 
 
 # ---------------------------------------------------------------------------
-# BadChannelDetector.update() — noisy detection
+# BadChannelDetector.update() -- noisy detection
 # ---------------------------------------------------------------------------
 
 
 class TestNoisyDetection:
     def test_high_amplitude_channel_flagged_noisy(self):
-        """Channel with 100× amplitude should dominate PSD → noisy=True."""
+        """Channel with 100x amplitude should dominate PSD -> noisy=True."""
         cfg = DetectorConfig(psd_ratio_threshold=5.0, ema_alpha=0.5)
         det = BadChannelDetector(cfg)
         for _ in range(40):
@@ -173,7 +173,7 @@ class TestGetBadChannels:
 
     def test_fresh_detector_no_bad_channels(self):
         """Before any update(), EMA variances are 0 which means flat_line=True
-        (0.0 < var_threshold=0.01). This is by design — fresh detector
+        (0.0 < var_threshold=0.01). This is by design -- fresh detector
         conservatively reports all channels as bad until updated.
         Verify it returns a list; content depends on initialisation."""
         det = BadChannelDetector()

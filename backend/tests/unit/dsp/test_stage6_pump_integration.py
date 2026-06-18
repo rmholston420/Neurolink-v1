@@ -53,7 +53,7 @@ class _FakeCorrectionPlan:
 
 
 class _FakeToggleConfig:
-    """Minimal toggle snapshot — only fields Stage 6 reads."""
+    """Minimal toggle snapshot -- only fields Stage 6 reads."""
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class _FakeToggleConfig:
 
 
 # ---------------------------------------------------------------------------
-# Fake Stage 6 runner — mirrors the pump's Stage 6 guard logic
+# Fake Stage 6 runner -- mirrors the pump's Stage 6 guard logic
 # ---------------------------------------------------------------------------
 
 FS = 256.0
@@ -141,7 +141,7 @@ class TestStage6Runs:
             _FakePPGPayload(),
         )
 
-        args, kwargs = corrector.apply.call_args
+        args, _kwargs = corrector.apply.call_args
         assert args[0] is post_stage5
 
     def test_corrector_return_value_is_forwarded(self):

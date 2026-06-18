@@ -429,7 +429,10 @@ class ArtifactDetector:
         with self._stats_lock:
             total = self._total_frames
             counts = dict(self._type_counts)
-        rate = lambda c: round(c / total, 4) if total else 0.0
+
+        def rate(c: int) -> float:
+            return round(c / total, 4) if total else 0.0
+
         return {
             "total_frames": total,
             "artifact_types": {

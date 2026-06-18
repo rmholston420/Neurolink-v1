@@ -16,9 +16,9 @@ import math
 from neurolink.dsp.artifact_config import (
     ARTIFACT_ACCEL_RMS_G,
     ARTIFACT_KURTOSIS_THRESHOLD,
-    # Stage 3 — amplitude / motion / kurtosis
+    # Stage 3 -- amplitude / motion / kurtosis
     ARTIFACT_PK2PK_UV,
-    # Stage 4 — ASR
+    # Stage 4 -- ASR
     ASR_BURST_SD,
     ASR_CALIB_SEC,
     BASELINE_DISCARD_SEC,
@@ -49,7 +49,7 @@ def test_pk2pk_uv_positive_finite():
 
 
 def test_pk2pk_uv_physiological_range():
-    """EEGLAB convention: 50–200 µV is reasonable for wearable EEG."""
+    """EEGLAB convention: 50-200 uV is reasonable for wearable EEG."""
     assert 20.0 <= ARTIFACT_PK2PK_UV <= 500.0
 
 
@@ -58,7 +58,7 @@ def test_accel_rms_g_positive_finite():
 
 
 def test_accel_rms_g_range():
-    """0.05–1.0 g covers subtle to vigorous head movement."""
+    """0.05-1.0 g covers subtle to vigorous head movement."""
     assert 0.01 <= ARTIFACT_ACCEL_RMS_G <= 2.0
 
 
@@ -67,12 +67,12 @@ def test_kurtosis_threshold_positive_finite():
 
 
 def test_kurtosis_threshold_range():
-    """Fisher kurtosis threshold: 3–10 is the typical EMG-burst detection range."""
+    """Fisher kurtosis threshold: 3-10 is the typical EMG-burst detection range."""
     assert 1.0 <= ARTIFACT_KURTOSIS_THRESHOLD <= 20.0
 
 
 # ---------------------------------------------------------------------------
-# Stage 4 — ASR
+# Stage 4 -- ASR
 # ---------------------------------------------------------------------------
 
 
@@ -81,7 +81,7 @@ def test_asr_burst_sd_positive_finite():
 
 
 def test_asr_burst_sd_range():
-    """EEGLAB recommends 10–25 SD.  Anything outside 5–50 is almost certainly wrong."""
+    """EEGLAB recommends 10-25 SD.  Anything outside 5-50 is almost certainly wrong."""
     assert 5.0 <= ASR_BURST_SD <= 50.0
 
 
@@ -90,7 +90,7 @@ def test_asr_calib_sec_positive_finite():
 
 
 def test_asr_calib_sec_range():
-    """10–300 s is a sensible range for calibration windows."""
+    """10-300 s is a sensible range for calibration windows."""
     assert 10.0 <= ASR_CALIB_SEC <= 300.0
 
 
@@ -132,7 +132,7 @@ def test_ea1_theta_threshold_range():
 
 
 def test_ea1_contact_quality_min_range():
-    """Contact quality is normalised 0–1."""
+    """Contact quality is normalised 0-1."""
     assert 0.0 < EA1_CONTACT_QUALITY_MIN <= 1.0
 
 

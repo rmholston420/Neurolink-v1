@@ -31,10 +31,10 @@ from neurolink.service import NeuroLinkService
 
 
 def _payload(**kw) -> IngestPayload:
-    defaults = dict(
-        source="mock",
-        bands=BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.1, gamma=0.05),
-    )
+    defaults = {
+        "source": "mock",
+        "bands": BandPowers(alpha=0.3, theta=0.2, beta=0.15, delta=0.1, gamma=0.05),
+    }
     defaults.update(kw)
     return IngestPayload(**defaults)
 
@@ -52,7 +52,7 @@ _REPO_PATH = "neurolink.db.repository.SessionLogRepository"
 
 
 # ===========================================================================
-# hub._schedule_redis_push — loop.is_running() == True path
+# hub._schedule_redis_push -- loop.is_running() == True path
 # ===========================================================================
 
 
@@ -74,7 +74,7 @@ async def test_schedule_redis_push_runtime_error_suppressed():
 
 
 # ===========================================================================
-# hub._push_state_to_redis — coroutine path
+# hub._push_state_to_redis -- coroutine path
 # ===========================================================================
 
 
@@ -88,7 +88,7 @@ async def test_push_state_to_redis_calls_cache():
 
 
 # ===========================================================================
-# service._create_db_session — success path
+# service._create_db_session -- success path
 # ===========================================================================
 
 
@@ -129,7 +129,7 @@ async def test_create_db_session_exception_is_swallowed():
 
 
 # ===========================================================================
-# service._close_db_session — success path with real session_id
+# service._close_db_session -- success path with real session_id
 # ===========================================================================
 
 
@@ -167,7 +167,7 @@ async def test_close_db_session_exception_is_swallowed():
 
 
 # ===========================================================================
-# service.get_sessions — factory path
+# service.get_sessions -- factory path
 # ===========================================================================
 
 
@@ -202,7 +202,7 @@ async def test_get_sessions_with_factory():
 
 
 # ===========================================================================
-# eeg_pump._build_payload — None eeg_buffer branch
+# eeg_pump._build_payload -- None eeg_buffer branch
 # ===========================================================================
 
 
@@ -233,7 +233,7 @@ async def test_build_payload_no_eeg_buffer():
 
 
 # ===========================================================================
-# eeg_pump._build_payload — fnirs_oxy/deoxy from extra dict
+# eeg_pump._build_payload -- fnirs_oxy/deoxy from extra dict
 # ===========================================================================
 
 
@@ -262,12 +262,12 @@ async def test_build_payload_fnirs_extra():
 
 
 # ===========================================================================
-# eeg_pump._build_payload — accel_buffer present but no gyro_buffer
+# eeg_pump._build_payload -- accel_buffer present but no gyro_buffer
 # ===========================================================================
 
 
 async def test_build_payload_accel_no_gyro_no_imu():
-    """accel_buffer (3,N) present but gyro_buffer=None → imu_payload is None."""
+    """accel_buffer (3,N) present but gyro_buffer=None -> imu_payload is None."""
     import numpy as np
 
     from neurolink.eeg_pump import EEGPump
@@ -285,7 +285,7 @@ async def test_build_payload_accel_no_gyro_no_imu():
         eeg_buffer=None,
         ppg_buffer=None,
         accel_buffer=accel_buf,
-        gyro_buffer=None,  # no gyro → imu branch skipped
+        gyro_buffer=None,  # no gyro -> imu branch skipped
         poor_contact=False,
         extra={},
     )
@@ -294,7 +294,7 @@ async def test_build_payload_accel_no_gyro_no_imu():
 
 
 # ===========================================================================
-# eeg_pump._pump_loop — watchdog warning branch
+# eeg_pump._pump_loop -- watchdog warning branch
 # ===========================================================================
 
 
@@ -309,7 +309,7 @@ async def test_pump_loop_watchdog_fires():
     adapter.read_sample.return_value = None
 
     pump = EEGPump(adapter=adapter, hub=hub, publish_hz=100.0)
-    pump._last_frame_ts = time.time() - 30.0  # stale → triggers watchdog
+    pump._last_frame_ts = time.time() - 30.0  # stale -> triggers watchdog
     pump._running = True
 
     original_sleep = asyncio.sleep
@@ -326,7 +326,7 @@ async def test_pump_loop_watchdog_fires():
 
 
 # ===========================================================================
-# dsp.classifiers.classify_v01 — Region B (high beta)
+# dsp.classifiers.classify_v01 -- Region B (high beta)
 # ===========================================================================
 
 
@@ -337,7 +337,7 @@ def test_v01_region_b_high_beta():
 
 
 # ===========================================================================
-# dsp.classifiers.classify_v01 — Region D Citrinitas (theta-dominant flow)
+# dsp.classifiers.classify_v01 -- Region D Citrinitas (theta-dominant flow)
 # ===========================================================================
 
 
@@ -348,7 +348,7 @@ def test_v01_region_d_citrinitas():
 
 
 # ===========================================================================
-# dsp.classifiers.classify_v01 — faa gate blocks Multiplicatio → Rubedo
+# dsp.classifiers.classify_v01 -- faa gate blocks Multiplicatio -> Rubedo
 # ===========================================================================
 
 
@@ -366,7 +366,7 @@ def test_v01_multiplicatio_faa_gate_blocks():
 
 
 # ===========================================================================
-# dsp.classifiers.classify_v2 — Citrinitas branch
+# dsp.classifiers.classify_v2 -- Citrinitas branch
 # ===========================================================================
 
 
