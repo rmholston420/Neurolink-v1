@@ -5,13 +5,16 @@ from __future__ import annotations
 import numpy as np
 
 from neurolink.dsp.breathing import (
+    _ACCEL_FS,
     _MIN_ACCEL_SAMPLES,
-    ACCEL_FS,
     _rr_from_accel,
     _rr_from_ibis,
     compute_breathing,
     estimate_rr,
 )
+
+ACCEL_FS = _ACCEL_FS
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,11 +62,11 @@ class TestEstimateRR:
 
 class TestRrFromAccel:
     def test_too_short_returns_none(self):
-        assert _rr_from_accel(np.ones(10, dtype=np.float32)) is None
+        assert _rr_from_accel(np.ones(10, dtype=np.float32), fs=ACCEL_FS) is None
 
     def test_valid_signal_returns_float_or_none(self):
         sig = _accel_z(n=_MIN_ACCEL_SAMPLES)
-        result = _rr_from_accel(sig)
+        result = _rr_from_accel(sig, fs=ACCEL_FS)
         assert result is None or isinstance(result, float)
 
 
