@@ -92,7 +92,7 @@ def _detect_electrode_type() -> ElectrodeType:
         if electrode_type not in _ELECTRODE_PK2PK_DEFAULTS:
             log.warning("unknown_electrode_type_fallback", electrode_type=electrode_type)
             return "dry"
-        return electrode_type  # type: ignore[return-value]
+        return electrode_type
     except Exception as exc:
         log.warning("electrode_type_detection_failed", error=str(exc))
         return "dry"
@@ -133,7 +133,7 @@ class GateConfig:
             self.electrode_type = _detect_electrode_type()
         if self.pk2pk_uv is None:
             self.pk2pk_uv = _default_pk2pk_for_electrode_type(
-                self.electrode_type  # type: ignore[arg-type]
+                self.electrode_type
             )
         log.debug(
             "gate_config_resolved",
@@ -175,7 +175,7 @@ class ArtifactGate:
         self._total_frames: int = 0
         self._rejected_frames: int = 0
 
-    # ── Public API ────────────────────────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────────────────────────
 
     def evaluate(
         self,
