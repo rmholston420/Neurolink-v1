@@ -56,10 +56,11 @@ MAX_RECONNECT_ATTEMPTS: int = 10  # give up after this many consecutive failures
 # headroom before BlueZ gives up on the ATT Bearer negotiation.
 BLE_CONNECT_TIMEOUT: float = 45.0
 
-# Settle delay after connect() before issuing any GATT writes.  The Muse S
-# link layer needs ~400-500 ms to finish the LE feature exchange (seen in
-# btmon: LE Read Remote Used Features completes at t+~150 ms, ATT MTU exchange
-# at t+~270 ms).  Writing before this window closes causes 0x3e / 0x08 drops.
+# Settle delay after GATT service discovery completes, before issuing GATT
+# writes.  The Muse S link layer needs ~400-500 ms to finish the LE feature
+# exchange (seen in btmon: LE Read Remote Used Features completes at t+~150 ms,
+# ATT MTU exchange at t+~270 ms).  Writing before this window closes causes
+# 0x3e / 0x08 drops.
 POST_CONNECT_SETTLE_SEC: float = 0.5
 
 # How many times to retry a control-char write before giving up.
@@ -157,6 +158,17 @@ class MuseSBleAdapter(HardwareAdapter):
         await self._client.connect()
         self._connected = True
         log.info("muse_ble_connected", address=self._address, rssi=rssi)
+
+        # -- Force GATT service discovery before any write_gatt_char() call -----
+        # BleakClient.connect() completes the BLE connection but does NOT
+        # guarantee that GATT service discovery has finished on all BlueZ
+        # backends. Any write_gatt_char() call that races with the still-running
+        # discovery raises "Service Discovery has not been performed yet".
+        # Calling get_services() here blocks until BlueZ has fully enumerated
+        # all services and characteristics, ensuring the cache is warm before
+        # the first control-channel write below.
+        await self._client.get_services()
+        log.debug("muse_ble_services_discovered", address=self._address)
 
         # -- Settle: wait for LE feature exchange + ATT MTU negotiation ---------
         # The Muse S drops connections (0x3e / 0x08) if GATT writes arrive
@@ -420,7 +432,14 @@ class MuseSBleAdapter(HardwareAdapter):
         try:
             while self._connected:
                 await asyncio.sleep(KEEPALIVE_SEC)
-                if self._connected and self._client:
+                # Re-check both flags after the sleep: _connected may have gone
+                # False due to a concurrent disconnect, and is_connected is the
+                # bleak-level truth.  Avoid writing on a dead handle.
+                if (
+                    self._connected
+                    and self._client is not None
+                    and self._client.is_connected
+                ):
                     try:
                         await self._write_control(CMD_KEEPALIVE)
                         log.debug("muse_ble_keepalive_sent", address=self._address)
