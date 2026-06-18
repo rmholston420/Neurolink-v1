@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNeurolinkSSE } from './hooks/useNeurolinkSSE'
+import { useBaselineBell } from './hooks/useBaselineBell'
 import { useMuseBLE } from './hooks/useMuseBLE'
 import { useArtifactStats } from './hooks/useArtifactStats'
 
@@ -187,7 +187,15 @@ function bleContactToQuality(contact: { tp9: boolean; af7: boolean; af8: boolean
 }
 
 export default function App() {
-  const state      = useNeurolinkSSE(`${API_URL}/api/v1/neurolink/stream`)
+  // ── useBaselineBell replaces useNeurolinkSSE so the calibration-complete
+  //    bell fires automatically when the backend emits baseline_complete.
+  //    All downstream consumers still receive `state` as before.
+  const {
+    state,
+    baselineComplete,   // eslint-disable-line @typescript-eslint/no-unused-vars
+    lastRangAt,         // eslint-disable-line @typescript-eslint/no-unused-vars
+  } = useBaselineBell(`${API_URL}/api/v1/neurolink/stream`)
+
   const ble        = useMuseBLE(API_URL)
   const connected  = state?.connected ?? false
   const [tab, setTab] = useState<Tab>('live')
@@ -226,6 +234,9 @@ export default function App() {
   // Shared derived data
   const eegSamples   = (state as any)?.eeg_samples ?? syntheticEEGSamples(state?.bands ?? null)
   const channelBands = syntheticChannelBands(state?.bands ?? null, 'alpha')
+
+  // Personal baseline alpha — feeds the overlay line in all BandTrend instances
+  const baselineAlpha = baseline.baseline.alpha ?? null
 
   return (
     <div style={S.app}>
@@ -280,7 +291,7 @@ export default function App() {
 
             <div style={S.card}>
               <div style={S.cardTitle}>Band Trends · 60 s</div>
-              <BandTrend bands={state?.bands ?? null} baselineAlpha={null} />
+              <BandTrend bands={state?.bands ?? null} baselineAlpha={baselineAlpha} />
             </div>
 
             <div style={S.card}>
@@ -447,7 +458,7 @@ export default function App() {
           </div>
           <div style={S.card}>
             <div style={S.cardTitle}>Band Power Trends · 60 s</div>
-            <BandTrend bands={state?.bands ?? null} baselineAlpha={null} />
+            <BandTrend bands={state?.bands ?? null} baselineAlpha={baselineAlpha} />
           </div>
           <div style={S.card}>
             <div style={S.cardTitle}>Current Band Powers</div>
@@ -469,7 +480,7 @@ export default function App() {
           </div>
           <div style={S.card}>
             <div style={S.cardTitle}>Band Trends · 60 s</div>
-            <BandTrend bands={state?.bands ?? null} baselineAlpha={null} />
+            <BandTrend bands={state?.bands ?? null} baselineAlpha={baselineAlpha} />
           </div>
         </div>
       )}
@@ -491,7 +502,7 @@ export default function App() {
           </div>
           <div style={S.card}>
             <div style={S.cardTitle}>Band Trends · 60 s</div>
-            <BandTrend bands={state?.bands ?? null} baselineAlpha={null} />
+            <BandTrend bands={state?.bands ?? null} baselineAlpha={baselineAlpha} />
           </div>
         </div>
       )}
