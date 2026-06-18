@@ -55,27 +55,21 @@ class TestGetBaselineProgress:
         assert resp.elapsed_s == pytest.approx(15.0)
         assert resp.remaining_s == pytest.approx(TOTAL_DURATION_SEC - 15.0, abs=0.01)
 
-    def test_complete_when_task_done(self):
+    @pytest.mark.asyncio
+    async def test_complete_when_task_done(self):
+        """get_baseline_progress() returns phase='complete' once the task is done."""
         svc = _svc()
         mock_session = MagicMock()
         mock_session.elapsed = TOTAL_DURATION_SEC
         mock_session.phase = "baseline"
         svc._calibration_session = mock_session
 
-        # Simulate a finished task
-        loop = asyncio.new_event_loop()
-        coro = asyncio.coroutine(lambda: None)()
-
-        async def _done_task():
+        # Create a real finished asyncio Task using plain async def.
+        async def _noop():
             pass
 
-        async def _run():
-            t = asyncio.create_task(_done_task())
-            await t
-            return t
-
-        task = loop.run_until_complete(_run())
-        loop.close()
+        task = asyncio.create_task(_noop())
+        await task  # ensure it is done before asserting
 
         svc._calibration_task = task
         resp = svc.get_baseline_progress()
@@ -164,9 +158,6 @@ class TestDbErrorResilience:
     async def test_connect_survives_db_create_error(self):
         """If the DB factory raises, connect() must still succeed."""
         svc = _svc()
-
-        async def _bad_ctx():
-            raise RuntimeError("db unavailable")
 
         class _BadFactory:
             def __call__(self):
