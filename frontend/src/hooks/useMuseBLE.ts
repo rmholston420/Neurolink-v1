@@ -14,8 +14,8 @@
  *   write(HALT)        wait 50 ms
  *   write(PRESET_P50)  wait 50 ms
  *   write(START)       wait 50 ms
- *   write(DATA)        wait 250 ms   ← DATADOUBLESENDGAP
- *   write(DATA)                      ← second send required by Gen 1/2 firmware
+ *   write(DATA)        wait 250 ms   <- DATADOUBLESENDGAP
+ *   write(DATA)                      <- second send required by Gen 1/2 firmware
  *
  * reconnect note:
  *   requestDevice() needs a user gesture. On gattserverdisconnected we call
@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-// ── GATT UUIDs (verbatim from spec Section 14) ─────────────────────────────
+// -- GATT UUIDs (verbatim from spec Section 14) -----------------------------------------
 const MUSE_SERVICE   = 0xfe8d
 const CHAR_CONTROL   = '273e0001-4c4d-454d-96be-f03bac821358'
 const CHAR_EEG_TP9   = '273e0003-4c4d-454d-96be-f03bac821358'
@@ -33,7 +33,7 @@ const CHAR_EEG_AF8   = '273e0005-4c4d-454d-96be-f03bac821358'
 const CHAR_EEG_TP10  = '273e0006-4c4d-454d-96be-f03bac821358'
 const CHAR_TELEMETRY = '273e000b-4c4d-454d-96be-f03bac821358'
 
-// ── Control commands (verbatim from spec Section 14) ──────────────────────
+// -- Control commands (verbatim from spec Section 14) ----------------------------------
 const CMD_HALT      = new Uint8Array([0x02, 0x68, 0x0a])           // h
 const CMD_PRESET    = new Uint8Array([0x05, 0x70, 0x35, 0x30, 0x0a]) // p50
 const CMD_START     = new Uint8Array([0x02, 0x73, 0x0a])           // s
@@ -43,7 +43,7 @@ const KEEPALIVE_MS            = 30_000
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
-// ── Packet decode ─────────────────────────────────────────────────────────────
+// -- Packet decode -----------------------------------------------------------------------
 function decodeSamples(buf: DataView): number[] {
   const out: number[] = []
   for (let i = 0; i < 5; i++) {
@@ -71,7 +71,7 @@ function decodeTelemetry(buf: DataView): { battery: number; contact: boolean[] }
   }
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types -------------------------------------------------------------------------------
 export type BLEStatus =
   | 'unsupported'
   | 'insecure_origin'
@@ -104,7 +104,7 @@ function detectBLEStatus(): BLEStatus {
   return 'idle'
 }
 
-// ── Frame accumulator ─────────────────────────────────────────────────────────
+// -- Frame accumulator -------------------------------------------------------------------
 const FRAME_SAMPLES = 256
 
 interface ChannelBuffer {
@@ -121,10 +121,10 @@ function estimateBandPowers(samples: number[]) {
   return { delta: r*0.35, theta: r*0.25, alpha: r*0.20, beta: r*0.15, gamma: r*0.05 }
 }
 
-// ── GATT session: subscribe + arm firmware + start keepalive ──────────────────
+// -- GATT session: subscribe + arm firmware + start keepalive ---------------------------
 //
 // Arming sequence (blebridge.py — IMMUTABLE per spec Section 14):
-//   HALT → 50ms → PRESET → 50ms → START → 50ms → DATA → 250ms → DATA
+//   HALT -> 50ms -> PRESET -> 50ms -> START -> 50ms -> DATA -> 250ms -> DATA
 //
 // Returns a cleanup fn that clears the frame interval + keepalive timer.
 async function setupGATTSession(
@@ -174,20 +174,20 @@ async function setupGATTSession(
   })
   await telemChar.startNotifications()
 
-  // ─ Arming sequence ────────────────────────────────────────────────────
+  // - Arming sequence ------------------------------------------------------------------
   await ctrlChar.writeValue(CMD_HALT);   await sleep(50)
   await ctrlChar.writeValue(CMD_PRESET); await sleep(50)
   await ctrlChar.writeValue(CMD_START);  await sleep(50)
   await ctrlChar.writeValue(CMD_DATA);   await sleep(DATA_DOUBLE_SEND_GAP_MS)
   await ctrlChar.writeValue(CMD_DATA)    // second send required by firmware
 
-  // ─ 30s keepalive (Muse drops at ~50s idle) ───────────────────────────
+  // - 30s keepalive (Muse drops at ~50s idle) -----------------------------------------
   const keepalive = setInterval(async () => {
     if (!aliveRef.current || !server.connected) return
     try { await ctrlChar.writeValue(CMD_DATA) } catch { /* ignore */ }
   }, KEEPALIVE_MS)
 
-  // ─ 1-second frame publisher ─────────────────────────────────────────
+  // - 1-second frame publisher ---------------------------------------------------------
   const frameInterval = setInterval(() => {
     if (!aliveRef.current) return
     const b = bufRef.current
@@ -197,7 +197,7 @@ async function setupGATTSession(
   return () => { clearInterval(keepalive); clearInterval(frameInterval) }
 }
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
+// -- Hook --------------------------------------------------------------------------------
 export function useMuseBLE(apiUrl: string): UseMuseBLEReturn {
   const initialStatus = detectBLEStatus()
   const isUsable      = initialStatus === 'idle'
@@ -266,6 +266,9 @@ export function useMuseBLE(apiUrl: string): UseMuseBLEReturn {
 
   const doConnect = useCallback(async () => {
     if (!isUsable) return
+    // Reset liveness and backoff so a fresh connect after doDisconnect works correctly.
+    aliveRef.current = true
+    reconnDelay.current = 2_000
     setStatus('requesting')
     setErrorMsg(null)
 
