@@ -31,7 +31,6 @@ from neurolink.hub import EEGHub
 def _make_sample(alpha_power: float = 0.4):
     """Return a mock EEGSample whose eeg_buffer yields a known alpha signal."""
     sample = MagicMock()
-    # 4 channels × 256 samples of a 10 Hz sine (alpha band)
     t = np.linspace(0, 1, 256)
     channel = np.sin(2 * np.pi * 10 * t) * alpha_power
     sample.eeg_buffer = [channel.tolist() for _ in range(4)]
@@ -86,11 +85,9 @@ class TestCalibrationIdempotency:
         adapter = _make_adapter()
         cal = CalibrationSession(adapter, hub)
 
-        # Manually set running flag to simulate an in-progress session.
         cal._running = True
         result = await cal.run()
         assert result is None
-        # Clean up
         cal._running = False
 
 
@@ -101,18 +98,9 @@ class TestCalibrationIdempotency:
 class TestCalibrationFastForward:
     @pytest.mark.asyncio
     async def test_phase_transitions_warmup_then_baseline_then_complete(self):
-        """
-        Simulate elapsed time racing past WARMUP_SEC and TOTAL_DURATION_SEC
-        by patching time.monotonic with a callable that returns an
-        ever-increasing sequence.  Using a callable avoids the Python 3.7+
-        restriction that forbids StopIteration from propagating out of a
-        coroutine (which would happen with side_effect=iter([...])).
-        """
         hub = EEGHub()
         adapter = _make_adapter()
 
-        # Each call to monotonic advances through this list; once exhausted
-        # it keeps returning the last value so the loop can exit cleanly.
         _times = [0.0, 31.0, TOTAL_DURATION_SEC + 1.0]
         _idx = 0
 
@@ -131,10 +119,6 @@ class TestCalibrationFastForward:
 
     @pytest.mark.asyncio
     async def test_run_returns_none_when_insufficient_samples(self):
-        """
-        If the adapter returns None for all reads, no alpha samples are
-        collected, so the function should return None (insufficient data branch).
-        """
         hub = EEGHub()
         adapter = _make_adapter(return_none=True)
 
@@ -157,22 +141,29 @@ class TestCalibrationFastForward:
     @pytest.mark.asyncio
     async def test_cancellation_sets_phase_complete(self):
         """
-        If the task is cancelled mid-run, the finally block must set phase
-        to 'complete' and is_running to False.
+        Cancelling the run() task mid-flight must cause the finally block
+        to set phase='complete' and is_running=False.
 
-        AsyncMock side_effect must be a *callable* that returns a coroutine,
-        not a pre-created coroutine object (which would already be exhausted).
+        We block read_sample on an asyncio.Event so that cancellation
+        propagates as CancelledError through the await, rather than
+        spawning leaking sleep coroutines.
         """
         hub = EEGHub()
         adapter = MagicMock()
-        # side_effect receives a fresh coroutine on every call
-        adapter.read_sample = AsyncMock(
-            side_effect=lambda *_a, **_kw: asyncio.sleep(9999)
-        )
+
+        # A never-set Event means read_sample blocks forever,
+        # but is instantly interrupted when the outer task is cancelled.
+        _block = asyncio.Event()
+
+        async def _blocking_read(*_a, **_kw):
+            await _block.wait()  # blocks until cancelled
+            return None  # unreachable
+
+        adapter.read_sample = _blocking_read
 
         cal = CalibrationSession(adapter, hub)
         task = asyncio.create_task(cal.run())
-        await asyncio.sleep(0.05)  # let the task start
+        await asyncio.sleep(0.05)  # let the task enter the await
         task.cancel()
         try:
             await task
