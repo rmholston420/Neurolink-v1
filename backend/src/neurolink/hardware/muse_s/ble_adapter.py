@@ -90,12 +90,36 @@ class MuseSBleAdapter(HardwareAdapter):
         If bleak raises a disconnect event or read_sample returns None while
         is_connected is True, the supervisor waits RECONNECT_WAIT_SEC then
         calls connect() again.  It gives up after MAX_RECONNECT_ATTEMPTS.
+
+    _session_connected flag:
+        Tracks whether this adapter instance has ever fully completed a
+        connect() call (i.e. self._connected was set True).  Used by
+        _on_ble_disconnect to distinguish two distinct drop scenarios:
+
+          A. Drop *during* connect() handshake (before _connected=True):
+             _session_connected is False.  The callback logs at DEBUG level
+             and returns immediately — connect() is still running and will
+             handle the failure itself (retry or raise).  Emitting a warning
+             here produces spurious "unexpected_disconnect" log lines for
+             normal transient ACL failures at weak RSSI during negotiation.
+
+          B. Drop *after* a successful session (_session_connected is True):
+             Normal mid-session disconnect.  The callback logs at WARNING,
+             clears _connected, cancels the keepalive, and lets the
+             reconnect supervisor take over.
+
+        _session_connected is set True at the end of connect() and cleared
+        to False only inside disconnect() (explicit teardown), so it survives
+        the reconnect supervisor's repeated connect() calls correctly.
     """
 
     def __init__(self, address: str) -> None:
         self._address = address
         self._client: BleakClient | None = None
         self._connected: bool = False
+        # True only after connect() fully completes at least once this session.
+        # Cleared by disconnect().  See class docstring for semantics.
+        self._session_connected: bool = False
         self._eeg_rings: list[deque] = [deque(maxlen=_N_EEG) for _ in range(5)]
         self._ppg_ring: deque = deque(maxlen=1920)
         self._accel_ring: list[deque] = [deque(maxlen=208) for _ in range(3)]
@@ -142,6 +166,9 @@ class MuseSBleAdapter(HardwareAdapter):
         )
         await self._client.connect()
         self._connected = True
+        # Mark that a full session has been established.  _on_ble_disconnect
+        # uses this to distinguish mid-session drops from handshake-phase drops.
+        self._session_connected = True
         log.info("muse_ble_connected", address=self._address, rssi=rssi)
 
         # -- Force GATT service discovery before any write_gatt_char() call -----
@@ -223,6 +250,7 @@ class MuseSBleAdapter(HardwareAdapter):
     async def disconnect(self) -> None:
         """Stop streaming and disconnect BLE."""
         self._give_up = True
+        self._session_connected = False  # reset so next connect() starts clean
 
         if self._supervisor_task and not self._supervisor_task.done():
             self._supervisor_task.cancel()
@@ -360,13 +388,34 @@ class MuseSBleAdapter(HardwareAdapter):
     # ---------------------------------------------------------------------------
 
     def _on_ble_disconnect(self, _client) -> None:
-        """Bleak disconnected callback."""
+        """Bleak disconnected callback.
+
+        BlueZ fires this callback whenever the ACL link drops, including during
+        the connect() handshake before self._connected is ever set True.  We
+        use _session_connected to tell the two scenarios apart:
+
+          _session_connected=False  →  drop during handshake.
+              connect() is still running and will deal with the failure.
+              Log at DEBUG only; no warning, no supervisor trigger.
+
+          _session_connected=True   →  genuine mid-session drop.
+              Log at WARNING, clear _connected, cancel keepalive, let the
+              reconnect supervisor re-establish the link.
+        """
         if self._give_up:
             return
         if self._disconnecting:
             return
-        self._disconnecting = True
 
+        if not self._session_connected:
+            # Drop occurred before connect() finished — not an unexpected drop.
+            log.debug(
+                "muse_ble_disconnect_during_handshake",
+                address=self._address,
+            )
+            return
+
+        self._disconnecting = True
         log.warning("muse_ble_unexpected_disconnect", address=self._address)
         self._connected = False
         if self._keepalive_task and not self._keepalive_task.done():
