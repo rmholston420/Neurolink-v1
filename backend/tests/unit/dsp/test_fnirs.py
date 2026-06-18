@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from neurolink.dsp.fnirs import FNIRSProcessor
+import neurolink.dsp.fnirs as fnirs
 
 
 def _raw(
@@ -19,52 +19,61 @@ def _raw(
 
 
 # ---------------------------------------------------------------------------
-# FNIRSProcessor construction
+# Module reset between tests
 # ---------------------------------------------------------------------------
 
 
-class TestFNIRSProcessorInit:
-    def test_default_init(self):
-        proc = FNIRSProcessor()
-        assert proc is not None
-
-    def test_custom_channel_count(self):
-        proc = FNIRSProcessor(n_channels=8)
-        assert proc.n_channels == 8
+def setup_function():
+    fnirs.reset()
 
 
 # ---------------------------------------------------------------------------
-# FNIRSProcessor.process()
+# apply() -- preprocessing pipeline
 # ---------------------------------------------------------------------------
 
 
-class TestFNIRSProcessorProcess:
-    def test_returns_dict(self):
-        proc = FNIRSProcessor()
-        result = proc.process(_raw())
-        assert isinstance(result, dict)
+class TestApply:
+    def setup_method(self):
+        fnirs.reset()
 
-    def test_oxy_deoxy_keys_present(self):
-        proc = FNIRSProcessor()
-        result = proc.process(_raw())
-        assert "oxy" in result or "fnirs_oxy" in result
+    def test_returns_ndarray(self):
+        result = fnirs.apply(_raw())
+        assert isinstance(result, np.ndarray)
 
-    def test_none_input_returns_empty_dict(self):
-        proc = FNIRSProcessor()
-        result = proc.process(None)
-        assert result == {}
+    def test_output_shape_matches_input(self):
+        raw = _raw(n_channels=4, n_samples=256)
+        result = fnirs.apply(raw)
+        assert result.shape == raw.shape
 
-    def test_too_short_returns_empty_dict(self):
-        proc = FNIRSProcessor()
-        result = proc.process(np.zeros((4, 1), dtype=np.float32))
-        assert result == {} or isinstance(result, dict)
+    def test_none_input_returns_none(self):
+        assert fnirs.apply(None) is None
+
+    def test_output_is_float32(self):
+        result = fnirs.apply(_raw())
+        assert result.dtype == np.float32
 
     def test_output_values_are_finite(self):
-        proc = FNIRSProcessor()
-        result = proc.process(_raw(n_samples=512))
-        for v in result.values():
-            if isinstance(v, float):
-                assert np.isfinite(v)
+        result = fnirs.apply(_raw(n_samples=512))
+        assert np.all(np.isfinite(result))
+
+    def test_disabled_returns_raw(self):
+        fnirs.set_config(enable=False)
+        raw = _raw()
+        result = fnirs.apply(raw)
+        assert result is raw
+        fnirs.set_config(enable=True)
+
+    def test_1d_input_returns_unchanged(self):
+        """1D arrays are not valid fNIRS frames -- returned as-is."""
+        arr = np.ones(64, dtype=np.float32)
+        result = fnirs.apply(arr)
+        assert result is arr
+
+    def test_empty_channel_dim_returns_unchanged(self):
+        """Zero-channel array should be returned unchanged."""
+        arr = np.zeros((0, 64), dtype=np.float32)
+        result = fnirs.apply(arr)
+        assert result is arr
 
 
 # ---------------------------------------------------------------------------
@@ -72,16 +81,72 @@ class TestFNIRSProcessorProcess:
 # ---------------------------------------------------------------------------
 
 
-class TestBeerLambert:
-    def test_beer_lambert_output_shape(self):
-        proc = FNIRSProcessor()
-        raw = _raw(n_samples=512)
-        result = proc.process(raw)
-        # Just verify no exception and result is a dict
-        assert isinstance(result, dict)
+class TestDecode:
+    def setup_method(self):
+        fnirs.reset()
+
+    def test_returns_tuple_of_two_arrays(self):
+        raw = _raw(n_channels=4, n_samples=512)
+        result = fnirs.decode(raw)
+        assert isinstance(result, tuple)
+        hbo, hbr = result
+        assert isinstance(hbo, np.ndarray)
+        assert isinstance(hbr, np.ndarray)
+
+    def test_hbo_hbr_shape(self):
+        """n_pairs = n_channels // 2."""
+        raw = _raw(n_channels=4, n_samples=256)
+        hbo, hbr = fnirs.decode(raw)
+        assert hbo.shape == (2, 256)
+        assert hbr.shape == (2, 256)
+
+    def test_none_input_returns_none(self):
+        assert fnirs.decode(None) is None
 
     def test_negative_raw_handled(self):
-        proc = FNIRSProcessor()
         raw = -np.abs(_raw(n_samples=256))
-        result = proc.process(raw)
-        assert isinstance(result, dict)
+        result = fnirs.decode(raw)
+        assert isinstance(result, tuple)
+
+    def test_too_few_channels_returns_empty_arrays(self):
+        """Fewer than min_channels (default 2) returns empty (0, N) arrays."""
+        raw = _raw(n_channels=1, n_samples=64)
+        result = fnirs.decode(raw)
+        assert isinstance(result, tuple)
+        hbo, hbr = result
+        assert hbo.shape[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# get_config / set_config
+# ---------------------------------------------------------------------------
+
+
+class TestConfig:
+    def test_get_config_returns_fnirs_config(self):
+        cfg = fnirs.get_config()
+        assert hasattr(cfg, "enable")
+        assert hasattr(cfg, "baseline_alpha")
+        assert hasattr(cfg, "spike_threshold")
+
+    def test_set_config_updates_field(self):
+        fnirs.set_config(baseline_alpha=0.05)
+        assert fnirs.get_config().baseline_alpha == 0.05
+        fnirs.set_config(baseline_alpha=0.01)  # restore
+
+    def test_set_config_ignores_unknown_keys(self):
+        fnirs.set_config(nonexistent_key=99)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# reset()
+# ---------------------------------------------------------------------------
+
+
+class TestReset:
+    def test_reset_clears_baseline(self):
+        fnirs.apply(_raw())  # warm up baseline
+        fnirs.reset()
+        # After reset, first apply should behave as fresh init
+        result = fnirs.apply(_raw())
+        assert result is not None
