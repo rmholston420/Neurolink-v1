@@ -64,7 +64,7 @@ def get_config() -> FNIRSConfig:
 
 def set_config(**kwargs) -> FNIRSConfig:
     global _config
-    valid = {f.name for f in _config.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    valid = {f.name for f in _config.__dataclass_fields__.values()}
     with _lock:
         current = copy.copy(_config)
         for k, v in kwargs.items():
