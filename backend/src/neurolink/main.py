@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await create_tables()
     log.info("neurolink_db_initialized", db_path=settings.db_path)
 
-    # ── Stage 0 Guard ────────────────────────────────────────────────────
+    # ── Stage 0 Guard ────────────────────────────────────────────────────────────────
     from neurolink.stage0 import Stage0Guard
 
     electrode_type = getattr(settings, "electrode_type", "dry")
@@ -52,31 +52,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.stage0_guard = stage0_guard
     log.info("stage0_guard_initialised", electrode_type=electrode_type)
 
-    # ── Stage 1 — Online FIR filter chain ──────────────────────────────
+    # ── Stage 1 — Online FIR filter chain ────────────────────────────────────
     from neurolink.dsp.online_filter import get_registry as get_filter_registry
 
     region = getattr(settings, "region", "EU").upper()
     line_freq = 60.0 if region in {"US", "CA", "MX", "JP"} else 50.0
     filter_registry = get_filter_registry()
-    filter_registry.pre_warm(line_freq=line_freq, fs=256.0)
+    filter_registry.set_config(filter_registry.get_config().with_line_freq(line_freq))
     app.state.filter_registry = filter_registry
     log.info("stage1_filter_chain_prewarmed", region=region, line_freq=line_freq)
 
-    # ── Stage 2 — Bad channel detector ─────────────────────────────────
+    # ── Stage 2 — Bad channel detector ───────────────────────────────────────────
     from neurolink.dsp.bad_channels import BadChannelDetector
 
     bad_channel_detector = BadChannelDetector()
     app.state.bad_channel_detector = bad_channel_detector
     log.info("stage2_bad_channel_detector_initialised")
 
-    # ── Stage 3 — Artifact gate ─────────────────────────────────────────
+    # ── Stage 3 — Artifact gate ───────────────────────────────────────────────────
     from neurolink.dsp.artifact_gate import ArtifactGate
 
     artifact_gate = ArtifactGate()
     app.state.artifact_gate = artifact_gate
     log.info("stage3_artifact_gate_initialised")
 
-    # ── Stage 3b — Multi-type artifact detector ─────────────────────────
+    # ── Stage 3b — Multi-type artifact detector ───────────────────────────────────
     from neurolink.dsp.artifact_detector import ArtifactDetector
 
     artifact_detector = ArtifactDetector(line_freq_hz=line_freq)
