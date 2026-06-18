@@ -47,6 +47,19 @@ def _make_adapter(sample=None, return_none: bool = False):
     return adapter
 
 
+def _fast_monotonic(times: list[float]):
+    """Return a callable that steps through *times*, clamping at the last value."""
+    idx = 0
+
+    def _fn():
+        nonlocal idx
+        val = times[min(idx, len(times) - 1)]
+        idx += 1
+        return val
+
+    return _fn
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Initial state
 # ─────────────────────────────────────────────────────────────────────────────
@@ -101,16 +114,10 @@ class TestCalibrationFastForward:
         hub = EEGHub()
         adapter = _make_adapter()
 
-        _times = [0.0, 31.0, TOTAL_DURATION_SEC + 1.0]
-        _idx = 0
-
-        def _monotonic():
-            nonlocal _idx
-            val = _times[min(_idx, len(_times) - 1)]
-            _idx += 1
-            return val
-
-        with patch("neurolink.calibration.time.monotonic", side_effect=_monotonic):
+        with patch(
+            "neurolink.calibration.time.monotonic",
+            side_effect=_fast_monotonic([0.0, 31.0, TOTAL_DURATION_SEC + 1.0]),
+        ):
             cal = CalibrationSession(adapter, hub)
             await cal.run()
 
@@ -122,16 +129,12 @@ class TestCalibrationFastForward:
         hub = EEGHub()
         adapter = _make_adapter(return_none=True)
 
-        _times = [0.0, WARMUP_SEC + 1.0, TOTAL_DURATION_SEC + 1.0]
-        _idx = 0
-
-        def _fast_time():
-            nonlocal _idx
-            val = _times[min(_idx, len(_times) - 1)]
-            _idx += 1
-            return val
-
-        with patch("neurolink.calibration.time.monotonic", side_effect=_fast_time):
+        with patch(
+            "neurolink.calibration.time.monotonic",
+            side_effect=_fast_monotonic(
+                [0.0, WARMUP_SEC + 1.0, TOTAL_DURATION_SEC + 1.0]
+            ),
+        ):
             cal = CalibrationSession(adapter, hub)
             result = await cal.run()
 
@@ -144,31 +147,36 @@ class TestCalibrationFastForward:
         Cancelling the run() task mid-flight must cause the finally block
         to set phase='complete' and is_running=False.
 
-        We block read_sample on an asyncio.Event so that cancellation
-        propagates as CancelledError through the await, rather than
-        spawning leaking sleep coroutines.
+        time.monotonic is patched so the loop never exits on its own
+        (always returns 0.0), keeping run() alive until we cancel it.
+        read_sample awaits a never-set asyncio.Event so CancelledError
+        propagates cleanly through a single await point with no leaks.
         """
         hub = EEGHub()
         adapter = MagicMock()
 
-        # A never-set Event means read_sample blocks forever,
-        # but is instantly interrupted when the outer task is cancelled.
-        _block = asyncio.Event()
+        # Stays in warmup phase forever (elapsed always 0.0 < TOTAL_DURATION_SEC)
+        _block = asyncio.Event()  # never set
 
         async def _blocking_read(*_a, **_kw):
-            await _block.wait()  # blocks until cancelled
-            return None  # unreachable
+            await _block.wait()
+            return None
 
         adapter.read_sample = _blocking_read
 
         cal = CalibrationSession(adapter, hub)
-        task = asyncio.create_task(cal.run())
-        await asyncio.sleep(0.05)  # let the task enter the await
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+
+        with patch("neurolink.calibration.time.monotonic", return_value=0.0):
+            task = asyncio.create_task(cal.run())
+            # Yield control so the task enters the event loop and reaches
+            # the await _block.wait() inside _blocking_read.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
         assert cal.phase == "complete"
         assert cal.is_running is False
