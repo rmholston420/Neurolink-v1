@@ -130,7 +130,7 @@ def test_baseline_complete_passthrough_no_asr():
     from neurolink.dsp.artifact_config import BASELINE_TOTAL_SEC
     from neurolink.dsp.baseline import BaselinePhase
 
-    rec, mock_asr, mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
+    rec, mock_asr, _mock_hub = _make_baseline(phase_offset=BASELINE_TOTAL_SEC + 1.0)
     rec._phase = BaselinePhase.COMPLETE
     rec._bell_fired = True
 
