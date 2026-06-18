@@ -125,8 +125,11 @@ GateDep = Annotated[ArtifactGate, Depends(_get_gate)]
 
 
 def _cfg_to_response(cfg: GateConfig) -> GateConfigResponse:
+    # cfg.pk2pk_uv is float | None; __post_init__ always sets it to a float,
+    # but mypy can't prove that, so we provide a safe fallback.
+    pk2pk_uv: float = cfg.pk2pk_uv if cfg.pk2pk_uv is not None else ARTIFACT_PK2PK_UV
     return GateConfigResponse(
-        pk2pk_uv=cfg.pk2pk_uv,
+        pk2pk_uv=pk2pk_uv,
         accel_rms_g=cfg.accel_rms_g,
         kurtosis_threshold=cfg.kurtosis_threshold,
         enable_amplitude=cfg.enable_amplitude,
