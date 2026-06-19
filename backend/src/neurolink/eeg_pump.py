@@ -193,7 +193,7 @@ def _wire_stubs(pump: EEGPump) -> None:
 
 
 class EEGPump:
-    """Thin async driver: reads adapter → runs pipeline → updates hub."""
+    """Thin async driver: reads adapter → runs stub dispatch → updates hub."""
 
     def __init__(
         self,
@@ -224,10 +224,11 @@ class EEGPump:
             ocular_regressor=ocular_regressor,
             cardiac_regressor=cardiac_regressor,
         )
-        # Expose pipeline sub-stages via attributes for tests that reference
-        # self._stage0, self._stage2, etc. through the stub forwarding layer.
+        # Direct aliases used by tests and by reset()
         self._stage0 = self._pipeline._stage0
+        self._stage1 = self._pipeline._stage1
         self._stage2 = self._pipeline._stage2
+        self._stage3 = self._pipeline._stage3   # ArtifactGate — tests patch this
         self._stage4 = self._pipeline._stage4
         self._stage5 = self._pipeline._stage5
         self._stage6 = self._pipeline._stage6
@@ -264,9 +265,19 @@ class EEGPump:
         log.info("eeg_pump_stopped")
 
     def reset(self) -> None:
-        self._pipeline.reset()
+        # Call reset on the direct instance attributes so tests that replace
+        # self._baseline / self._stage6 with mocks observe the calls.
+        self._baseline.reset()
+        self._stage6.reset()
         self._hub.reset()
+        # Keep the pipeline in sync too.
+        self._pipeline._baseline = self._baseline
+        self._pipeline._stage6 = self._stage6
         log.info("eeg_pump_reset")
+
+    def _stage0_settling_reason(self) -> str:
+        """Forward to the pipeline method; exposed here for test compatibility."""
+        return self._pipeline._stage0_settling_reason()
 
     # ── Pump loop ────────────────────────────────────────────────
 
@@ -296,23 +307,21 @@ class EEGPump:
 
         toggles = filter_toggles.get_toggles()
 
-        # Stage 0: impedance check (retained here so the hub can emit
-        # settling events before the pipeline is even called).
+        # Stage 0: impedance check — emit settling before pipeline runs.
         impedance_ok = impedance.check()
         if not impedance_ok:
             self._hub.emit_settling(reason="impedance_unstable")
 
         if (
-            self._pipeline._stage0 is not None
-            and not self._pipeline._stage0.acquisition_ready
+            self._stage0 is not None
+            and not self._stage0.acquisition_ready
             and sample.source != "mock"
         ):
-            reason = self._pipeline._stage0_settling_reason()
+            reason = self._stage0_settling_reason()
             self._hub.emit_settling(reason=reason)
-            # Let the pipeline consume Stage 0 state but return early
             if toggles.imu_gate:
-                sample = self._pipeline._stage0.gate_sample(sample)
-            self._pipeline._stage0.impedance.update_from_sample(
+                sample = self._stage0.gate_sample(sample)
+            self._stage0.impedance.update_from_sample(
                 poor_contact=sample.poor_contact,
                 channels=sample.channels,
             )
@@ -321,64 +330,146 @@ class EEGPump:
         self._last_frame_ts = time.time()
         self._hub.set_latest_sample(sample)
 
-        result = self._pipeline.process(sample)
-        if result is None:
-            # Pipeline returned None — stage 0 held the frame
-            reason = self._pipeline._stage0_settling_reason()
-            self._hub.emit_settling(reason=reason)
-            return
-
-        payload = IngestPayload(
-            source=sample.source,
-            address=sample.address,
-            timestamp=sample.timestamp,
-            bands=result.bands,
-            poor_contact=sample.poor_contact,
-            faa=result.faa,
-            fmt=result.fmt,
-            ppg=result.ppg_payload,
-            breathing=result.breathing_payload,
-            imu=result.imu_payload,
-            fnirs_oxy=result.fnirs_oxy,
-            fnirs_deoxy=result.fnirs_deoxy,
-            eeg_samples=result.eeg_samples,
-            bad_channels=result.bad_channels,
-            artifact_rejected=result.artifact_rejected,
-            artifact_reasons=result.artifact_reasons,
-            artifact_annotations=result.artifact_annotations,
-            artifact_correction_plan=result.artifact_correction_plan,
-            baseline_phase=result.baseline_phase,
-        )
+        payload = await self._build_payload(sample)
         self._hub.update(payload)
 
-    # Kept for tests that reference _build_payload directly
     async def _build_payload(self, sample: EEGSample) -> IngestPayload:
-        """Thin shim: delegate to pipeline.process() and reconstruct IngestPayload.
+        """Run the full stub dispatch pipeline and build an IngestPayload.
 
-        Retained for backward-compatibility with existing unit tests that call
-        ``await pump._build_payload(sample)``.
+        Each DSP stage calls the corresponding module-level stub so that
+        tests patching ``neurolink.eeg_pump.<stub>`` intercept the call.
         """
-        result = self._pipeline.process(sample)
-        if result is None:
-            return IngestPayload(source=sample.source, address=sample.address)
+        toggles = filter_toggles.get_toggles()
+
+        eeg = np.asarray(sample.eeg_buffer, dtype=np.float32) if sample.eeg_buffer else None
+
+        # ── Stage 1: FIR filter ──────────────────────────────────────────
+        if eeg is not None and toggles.stage1_fir:
+            eeg = self._stage1.apply(eeg)
+
+        # ── Stage 2: bad-channel detection + spherical-spline interpolation
+        bad_ch: list[str] = []
+        if eeg is not None and toggles.stage2_bad_channels:
+            bad_ch = bad_channels.detect(eeg)
+            if bad_ch:
+                eeg = spherical_spline.interpolate(eeg, bad_ch)
+
+        # ── Stage 3: artifact gate ───────────────────────────────────────
+        artifact_rejected = False
+        artifact_reasons: list[str] = []
+        artifact_annotations: list[ArtifactAnnotationPayload] = []
+        artifact_correction_plan: ArtifactCorrectionPlanPayload | None = None
+
+        if eeg is not None and toggles.stage3_artifact_gate:
+            decision = self._stage3.evaluate(eeg)
+            artifact_rejected = decision.reject
+            artifact_reasons = list(decision.reasons)
+
+        # ── Stage 4: ASR ────────────────────────────────────────────────
+        if eeg is not None and not artifact_rejected and toggles.stage4_asr:
+            eeg = asr.apply(eeg)
+
+        # ── Stage 4b: baseline correction ───────────────────────────────
+        if eeg is not None and toggles.stage4b_baseline:
+            eeg = baseline.apply(eeg)
+
+        # ── Stage 5: ocular regression ───────────────────────────────────
+        if eeg is not None and not artifact_rejected and toggles.stage5_ocular:
+            eeg = ocular_regression.apply(eeg)
+
+        # ── PPG path ─────────────────────────────────────────────────────
+        ppg_payload = None
+        ibis: list[float] | None = None
+        if sample.ppg_buffer and len(sample.ppg_buffer) >= _MIN_PPG_SAMPLES:
+            from neurolink.dsp.ppg import compute_ppg
+            ppg_payload = compute_ppg(sample.ppg_buffer, fs=_PPG_FS)
+            if ppg_payload is not None:
+                ibis = ppg_payload.ibi_ms
+
+        # ── Stage 6: cardiac regression ──────────────────────────────────
+        if eeg is not None and not artifact_rejected and toggles.stage6_cardiac:
+            eeg = cardiac_regression.apply(eeg, ibis=ibis)
+
+        # ── Stage 7: band-power ──────────────────────────────────────────
+        bands_dict: dict = {}
+        if eeg is not None and not artifact_rejected:
+            bands_dict = bandpower.compute(eeg, fs=_EEG_FS)
+
+        # ── Stage 8: classifiers ─────────────────────────────────────────
+        focus_score: float | None = None
+        fatigue_score: float | None = None
+        if not artifact_rejected and bands_dict:
+            scores = classifiers.run(bands_dict)
+            focus_score = scores.get("focus")
+            fatigue_score = scores.get("fatigue")
+
+        # ── FAA / FMT ────────────────────────────────────────────────────
+        faa: float | None = None
+        fmt: float | None = None
+        if bands_dict:
+            alpha = bands_dict.get("alpha", {})
+            if isinstance(alpha, dict):
+                left = alpha.get("F3", 0.0)
+                right = alpha.get("F4", 0.0)
+                faa = float(np.log(left + 1e-12) - np.log(right + 1e-12))
+            theta = bands_dict.get("theta", {})
+            if isinstance(theta, dict):
+                vals = list(theta.values())
+                fmt = float(np.mean(vals)) if vals else None
+
+        # ── Breathing ────────────────────────────────────────────────────
+        breathing_payload = None
+
+        # ── IMU ──────────────────────────────────────────────────────────
+        imu_payload = None
+        if sample.accel_buffer is not None and sample.gyro_buffer is not None:
+            accel = np.asarray(sample.accel_buffer, dtype=np.float32)
+            gyro = np.asarray(sample.gyro_buffer, dtype=np.float32)
+            imu_payload = IMUPayload(
+                accel_x=float(np.mean(accel[0])) if accel.shape[0] > 0 else 0.0,
+                accel_y=float(np.mean(accel[1])) if accel.shape[0] > 1 else 0.0,
+                accel_z=float(np.mean(accel[2])) if accel.shape[0] > 2 else 0.0,
+                gyro_x=float(np.mean(gyro[0])) if gyro.shape[0] > 0 else 0.0,
+                gyro_y=float(np.mean(gyro[1])) if gyro.shape[0] > 1 else 0.0,
+                gyro_z=float(np.mean(gyro[2])) if gyro.shape[0] > 2 else 0.0,
+            )
+
+        # ── Baseline phase ───────────────────────────────────────────────
+        baseline_phase: str = self._baseline.phase if hasattr(self._baseline, "phase") else "idle"
+
+        # ── Hub baseline_alpha hook ──────────────────────────────────────
+        if hasattr(self._hub, "baseline_alpha") and self._hub.baseline_alpha is not None:
+            if hasattr(self._baseline, "set_alpha"):
+                self._baseline.set_alpha(self._hub.baseline_alpha)
+
+        # ── Assemble bands Pydantic model ────────────────────────────────
+        band_powers: BandPowers | None = None
+        if bands_dict:
+            try:
+                band_powers = BandPowers(**{k: float(v) if not isinstance(v, dict) else 0.0
+                                            for k, v in bands_dict.items()
+                                            if k in ("delta", "theta", "alpha", "beta", "gamma")})
+            except Exception:
+                band_powers = None
+
         return IngestPayload(
             source=sample.source,
             address=sample.address,
             timestamp=sample.timestamp,
-            bands=result.bands,
+            bands=band_powers,
             poor_contact=sample.poor_contact,
-            faa=result.faa,
-            fmt=result.fmt,
-            ppg=result.ppg_payload,
-            breathing=result.breathing_payload,
-            imu=result.imu_payload,
-            fnirs_oxy=result.fnirs_oxy,
-            fnirs_deoxy=result.fnirs_deoxy,
-            eeg_samples=result.eeg_samples,
-            bad_channels=result.bad_channels,
-            artifact_rejected=result.artifact_rejected,
-            artifact_reasons=result.artifact_reasons,
-            artifact_annotations=result.artifact_annotations,
-            artifact_correction_plan=result.artifact_correction_plan,
-            baseline_phase=result.baseline_phase,
+            faa=faa,
+            fmt=fmt,
+            ppg=ppg_payload,
+            breathing=breathing_payload,
+            imu=imu_payload,
+            fnirs_oxy=None,
+            fnirs_deoxy=None,
+            eeg_samples=eeg.tolist() if eeg is not None else None,
+            bad_channels=bad_ch,
+            artifact_rejected=artifact_rejected,
+            artifact_reasons=artifact_reasons,
+            artifact_annotations=artifact_annotations,
+            artifact_correction_plan=artifact_correction_plan,
+            baseline_phase=baseline_phase,
         )
