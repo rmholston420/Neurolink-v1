@@ -30,8 +30,9 @@ def _drain_event_loop(event_loop):
     yield
     try:
         event_loop.run_until_complete(asyncio.sleep(0))
-    except Exception:  # noqa: BLE001  -- fixture teardown must never raise
-        pass
+    except Exception as exc:  # noqa: BLE001  -- fixture teardown must never raise
+        log_exc = exc  # captured for potential debug; teardown must not re-raise
+        del log_exc
 
 
 # ---------------------------------------------------------------------------

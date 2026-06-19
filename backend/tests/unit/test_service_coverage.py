@@ -139,11 +139,13 @@ async def test_start_calibration_starts_task():
     resp = await svc.start_calibration()
     assert resp.status == "started"
     assert svc._calibration_task is not None
-    # cleanup
+    # cleanup — CancelledError is expected; any other exception is also swallowed
+    # because this is test teardown, not application logic.  noqa: S110 is
+    # intentional: we cannot log here without a logger fixture.
     svc._calibration_task.cancel()
     try:
         await svc._calibration_task
-    except (asyncio.CancelledError, Exception):
+    except (asyncio.CancelledError, Exception):  # noqa: S110
         pass
     await svc.disconnect()
 
@@ -163,7 +165,7 @@ async def test_start_calibration_idempotent():
     svc._calibration_task.cancel()
     try:
         await svc._calibration_task
-    except (asyncio.CancelledError, Exception):
+    except (asyncio.CancelledError, Exception):  # noqa: S110
         pass
     await svc.disconnect()
 
