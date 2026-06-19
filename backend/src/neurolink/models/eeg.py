@@ -108,6 +108,31 @@ class ArtifactCorrectionPlanPayload(BaseModel):
     apply_cardiac_regression: bool = False
 
 
+class StreamHealthPayload(BaseModel):
+    """Real-time stream quality metrics, included in every SSE frame.
+
+    Sourced from ``EEGPipeline.health`` (a ``StreamHealth`` dataclass)
+    and serialised into ``NeurolinkState`` so all SSE consumers and the
+    frontend DeviceStatusBar can display live signal quality.
+
+    Fields
+    ------
+    frames_total       Total frames processed since last connect.
+    frames_rejected    Artifact-rejected frames (Stages 3 / 3b).
+    frames_clean       Frames that reached band-power computation.
+    packet_loss_pct    Rolling 10-second BLE packet-loss estimate (%).
+    last_frame_ts      Wall-clock time of the most recent frame (0 = never).
+    avg_tick_ms        Exponential moving-average pipeline tick time (ms).
+    """
+
+    frames_total: int = 0
+    frames_rejected: int = 0
+    frames_clean: int = 0
+    packet_loss_pct: float = 0.0
+    last_frame_ts: float = 0.0
+    avg_tick_ms: float = 0.0
+
+
 # ============================================================================
 # Ingest Payload (internal: EEGPump -> Hub)
 # ============================================================================
@@ -142,6 +167,7 @@ class IngestPayload(BaseModel):
     s_space: SSpaceCoords | None = None
     integration_coverage: float = 0.0
     engagement_index: float = 0.0
+    stream_health: StreamHealthPayload | None = None
 
 
 # ============================================================================
@@ -188,6 +214,8 @@ class NeurolinkState(BaseModel):
     artifact_correction_plan: ArtifactCorrectionPlanPayload | None = None
     channel_impedances: dict[str, float] = Field(default_factory=dict)
     baseline_phase: str = "warmup"
+    # Stream quality metrics — populated by hub.update() from EEGPump.stream_health
+    stream_health: StreamHealthPayload | None = None
 
     @property
     def band_powers(self) -> BandPowers:
