@@ -1,26 +1,17 @@
-"""EEGPump — background asyncio task that reads from the adapter at 4 Hz.
+"""EEGPump — thin async driver that reads the hardware adapter at 4 Hz.
 
-Builds IngestPayload from EEGSample and calls hub.update().
+All DSP logic now lives in ``neurolink.dsp.pipeline.EEGPipeline``.
+EEGPump's only responsibilities are:
+  1. Scheduling the tick loop at ``publish_hz``.
+  2. Calling ``self._pipeline.process(sample)``.
+  3. Converting ``PipelineResult`` → ``IngestPayload`` and calling
+     ``hub.update()``.
+  4. Running the Stage 0 acquisition guard and emitting settling events.
+  5. Watchdog: warn when no frames arrive for > ``_WATCHDOG_SEC``.
 
-Module-level stub dispatch
---------------------------
-Every DSP stage in _build_payload() is dispatched through a module-level
-stub object rather than directly through self._stageN.  This allows test
-code to patch 'neurolink.eeg_pump.<stub_name>' and assert the patched
-method is called, without needing access to the EEGPump instance.
-
-In production the stubs forward to the corresponding EEGPump instance
-attribute, so behaviour is identical.  The forwarding is set up in
-__init__ via _wire_stubs().
-
-Toggle reads
-------------
-All toggle reads in _tick() and _build_payload() go through
-    filter_toggles.get_toggles()
-where ``filter_toggles`` is the module-level _FilterTogglesStub instance.
-This lets tests patch 'neurolink.eeg_pump.filter_toggles' and inject a
-MagicMock with custom field values, so per-stage bypass can be exercised
-without running the full EEGPump.
+The module-level stub dispatch layer is retained for backward
+compatibility with existing unit tests that patch stub names.
+New tests should prefer injecting an ``EEGPipeline`` instance directly.
 
 Stub → method mapping
 ---------------------
@@ -34,31 +25,6 @@ Stub → method mapping
   classifiers          .run(bands)               -> dict
   impedance            .check()                  -> bool
   filter_toggles       .get_toggles()            -> FilterToggleConfig
-
-Pipeline per tick (simplified)
--------------------------------
- 1.  Read EEGSample from adapter
- 2.  [Stage 0] impedance.check() -> emit_settling if unstable
- 3.  [Stage 1] FIR filter chain (bypassed if stage1_fir=False)
- 4.  [Stage 2] bad_channels.detect() + spherical_spline.interpolate()
- 5.  [Stage 3] Artifact amplitude gate
- 6.  [Stage 3b] Multi-type artifact classifier
- 7.  [Stage 4b] baseline.apply()  (phase-gate shim)
- 8.  [Stage 4]  asr.apply()       (toggle-gated)
- 9.  [Stage 5]  ocular_regression.apply()
-10.  [Stage 6]  cardiac_regression.apply()
-11.  bandpower.compute()
-12.  classifiers.run()
-13.  hub.update()
-
-_plan_* flag semantics
-----------------------
-The _plan_* flags start as True (all correction stages enabled by default).
-Stage 3b only *enables* them when it detects the corresponding artifact type;
-it does NOT disable them.  This means:
-  - Clean frames: all _plan_* stay True -> stubs are called (toggles permitting)
-  - Artifact frames: stage3b sets appropriate flags True (already True)
-  - Hard-reject frames (motion/pop): artifact_rejected=True -> all stubs skipped
 """
 
 from __future__ import annotations
@@ -79,6 +45,7 @@ from neurolink.dsp.baseline import BaselineRecorder
 from neurolink.dsp.cardiac_regression import CardiacRegressor
 from neurolink.dsp.ocular_regression import OcularRegressor
 from neurolink.dsp.online_filter import FilterChainRegistry, get_registry
+from neurolink.dsp.pipeline import EEGPipeline
 from neurolink.dsp.spherical_spline import interpolate_bad_channels
 from neurolink.hardware.base import EEGSample, HardwareAdapter
 from neurolink.models.eeg import (
@@ -99,16 +66,11 @@ _PPG_FS: float = 64.0
 _ACCEL_FS: float = 52.0
 _WATCHDOG_SEC: float = 10.0
 _EEG_SAMPLES_WINDOW: int = 64
-
-# Minimum PPG samples required before calling compute_ppg / neurokit2.
-# neurokit2's ppg_process() indexes peak arrays unconditionally; passing a
-# buffer shorter than this causes 'index 0 is out of bounds for axis 0'.
-# Matches _MIN_SAMPLES in dsp/ppg.py (15 s * 64 Hz = 960 samples).
 _MIN_PPG_SAMPLES: int = 960
 
 
 # ---------------------------------------------------------------------------
-# Module-level stub classes
+# Module-level stub classes (preserved for test backward-compatibility)
 # ---------------------------------------------------------------------------
 
 
@@ -118,8 +80,8 @@ class _BadChannelsStub:
 
     def detect(self, eeg: np.ndarray) -> list:
         if self._pump is not None:
-            self._pump._stage2.update(eeg)
-            return self._pump._stage2.get_bad_channels()
+            self._pump._pipeline._stage2.update(eeg)
+            return self._pump._pipeline._stage2.get_bad_channels()
         return []
 
 
@@ -137,7 +99,7 @@ class _ASRStub:
 
     def apply(self, eeg: np.ndarray, **kw) -> np.ndarray:
         if self._pump is not None:
-            return self._pump._stage4.apply(eeg)
+            return self._pump._pipeline._stage4.apply(eeg)
         return eeg
 
 
@@ -147,7 +109,7 @@ class _OcularRegressionStub:
 
     def apply(self, eeg: np.ndarray, **kw) -> np.ndarray:
         if self._pump is not None:
-            return self._pump._stage5.apply(eeg)
+            return self._pump._pipeline._stage5.apply(eeg)
         return eeg
 
 
@@ -157,7 +119,7 @@ class _BaselineStub:
 
     def apply(self, eeg: np.ndarray, **kw) -> np.ndarray:
         if self._pump is not None:
-            return self._pump._baseline.process(eeg)
+            return self._pump._pipeline._baseline.process(eeg)
         return eeg
 
 
@@ -167,7 +129,7 @@ class _CardiacRegressionStub:
 
     def apply(self, eeg: np.ndarray, ibis=None, **kw) -> np.ndarray:
         if self._pump is not None and ibis:
-            return self._pump._stage6.apply(eeg, ibis, fs=_EEG_FS)
+            return self._pump._pipeline._stage6.apply(eeg, ibis, fs=_EEG_FS)
         return eeg
 
 
@@ -194,8 +156,8 @@ class _ImpedanceStub:
         self._pump: EEGPump | None = None
 
     def check(self) -> bool:
-        if self._pump is not None and self._pump._stage0 is not None:
-            return self._pump._stage0.impedance.all_channels_ok
+        if self._pump is not None and self._pump._pipeline._stage0 is not None:
+            return self._pump._pipeline._stage0.impedance.all_channels_ok
         return True
 
 
@@ -231,7 +193,7 @@ def _wire_stubs(pump: EEGPump) -> None:
 
 
 class EEGPump:
-    """Background asyncio task that drives the EEG processing pipeline."""
+    """Thin async driver: reads adapter → runs pipeline → updates hub."""
 
     def __init__(
         self,
@@ -250,25 +212,38 @@ class EEGPump:
         self._adapter = adapter
         self._hub = hub
         self._publish_hz = publish_hz
-        self._stage0 = stage0_guard
-        self._stage1: FilterChainRegistry = stage1_registry or get_registry()
-        self._stage2: BadChannelDetector = bad_channel_detector or BadChannelDetector()
-        self._stage3: ArtifactGate = artifact_gate or ArtifactGate()
-        self._stage3b: ArtifactDetector = artifact_detector or ArtifactDetector()
-        self._stage4: ArtifactSubspaceReconstructor = asr or ArtifactSubspaceReconstructor()
-        self._stage5: OcularRegressor = ocular_regressor or OcularRegressor()
-        self._stage6: CardiacRegressor = cardiac_regressor or CardiacRegressor()
-        self._baseline: BaselineRecorder = BaselineRecorder(
-            asr=self._stage4,
-            hub=self._hub,
+        self._pipeline = EEGPipeline(
+            hub=hub,
+            publish_hz=publish_hz,
+            stage0_guard=stage0_guard,
+            stage1_registry=stage1_registry,
+            bad_channel_detector=bad_channel_detector,
+            artifact_gate=artifact_gate,
+            artifact_detector=artifact_detector,
+            asr=asr,
+            ocular_regressor=ocular_regressor,
+            cardiac_regressor=cardiac_regressor,
         )
+        # Expose pipeline sub-stages via attributes for tests that reference
+        # self._stage0, self._stage2, etc. through the stub forwarding layer.
+        self._stage0 = self._pipeline._stage0
+        self._stage2 = self._pipeline._stage2
+        self._stage4 = self._pipeline._stage4
+        self._stage5 = self._pipeline._stage5
+        self._stage6 = self._pipeline._stage6
+        self._baseline = self._pipeline._baseline
         self._task: asyncio.Task | None = None
         self._running: bool = False
         self._last_frame_ts: float = 0.0
-        # Tracks when the watchdog warning was last emitted so it fires at
-        # most once per _WATCHDOG_SEC window instead of every tick (250 ms).
         self._last_watchdog_warn_ts: float = 0.0
         _wire_stubs(self)
+
+    # ── Public interface ─────────────────────────────────────────────
+
+    @property
+    def stream_health(self):
+        """Expose the pipeline's StreamHealth for external consumers."""
+        return self._pipeline.health
 
     async def start(self) -> None:
         if self._running:
@@ -289,10 +264,11 @@ class EEGPump:
         log.info("eeg_pump_stopped")
 
     def reset(self) -> None:
-        self._baseline.reset()
-        self._stage6.reset()
+        self._pipeline.reset()
         self._hub.reset()
         log.info("eeg_pump_reset")
+
+    # ── Pump loop ────────────────────────────────────────────────
 
     async def _pump_loop(self) -> None:
         interval = 1.0 / self._publish_hz
@@ -302,8 +278,6 @@ class EEGPump:
                 await self._tick()
             except Exception as exc:
                 log.error("eeg_pump_tick_error", error=str(exc), exc_info=True)
-            # Watchdog: warn at most once per _WATCHDOG_SEC window so a
-            # post-disconnect silence produces one warning, not one per tick.
             now = time.time()
             if (
                 self._last_frame_ts > 0
@@ -315,18 +289,6 @@ class EEGPump:
             elapsed = time.monotonic() - tick_start
             await asyncio.sleep(max(0.0, interval - elapsed))
 
-    def _stage0_settling_reason(self) -> str:
-        if self._stage0 is None:
-            return "settling"
-        if not self._stage0.impedance.all_channels_ok:
-            return "impedance_unstable"
-        latest = getattr(self._stage0, "_latest_sample", None)
-        if latest is not None and latest.extra.get("motion_flagged", False):
-            return "motion_settling"
-        if not self._stage0.environment.is_ready:
-            return "env_not_ready"
-        return "settling"
-
     async def _tick(self) -> None:
         sample = await self._adapter.read_sample()
         if sample is None:
@@ -334,249 +296,89 @@ class EEGPump:
 
         toggles = filter_toggles.get_toggles()
 
-        # ── Stage 0: impedance check via stub (patchable by tests) ───────
+        # Stage 0: impedance check (retained here so the hub can emit
+        # settling events before the pipeline is even called).
         impedance_ok = impedance.check()
         if not impedance_ok:
-            reason = "impedance_unstable"
-            self._hub.emit_settling(reason=reason)
+            self._hub.emit_settling(reason="impedance_unstable")
 
-        if self._stage0 is not None:
+        if (
+            self._pipeline._stage0 is not None
+            and not self._pipeline._stage0.acquisition_ready
+            and sample.source != "mock"
+        ):
+            reason = self._pipeline._stage0_settling_reason()
+            self._hub.emit_settling(reason=reason)
+            # Let the pipeline consume Stage 0 state but return early
             if toggles.imu_gate:
-                sample = self._stage0.gate_sample(sample)
-            self._stage0.impedance.update_from_sample(
+                sample = self._pipeline._stage0.gate_sample(sample)
+            self._pipeline._stage0.impedance.update_from_sample(
                 poor_contact=sample.poor_contact,
                 channels=sample.channels,
             )
-        if (
-            self._stage0 is not None
-            and not self._stage0.acquisition_ready
-            and sample.source != "mock"
-        ):
-            reason = self._stage0_settling_reason()
-            self._hub.emit_settling(reason=reason)
             return
 
         self._last_frame_ts = time.time()
         self._hub.set_latest_sample(sample)
 
-        payload = await self._build_payload(sample)
+        result = self._pipeline.process(sample)
+        if result is None:
+            # Pipeline returned None — stage 0 held the frame
+            reason = self._pipeline._stage0_settling_reason()
+            self._hub.emit_settling(reason=reason)
+            return
+
+        payload = IngestPayload(
+            source=sample.source,
+            address=sample.address,
+            timestamp=sample.timestamp,
+            bands=result.bands,
+            poor_contact=sample.poor_contact,
+            faa=result.faa,
+            fmt=result.fmt,
+            ppg=result.ppg_payload,
+            breathing=result.breathing_payload,
+            imu=result.imu_payload,
+            fnirs_oxy=result.fnirs_oxy,
+            fnirs_deoxy=result.fnirs_deoxy,
+            eeg_samples=result.eeg_samples,
+            bad_channels=result.bad_channels,
+            artifact_rejected=result.artifact_rejected,
+            artifact_reasons=result.artifact_reasons,
+            artifact_annotations=result.artifact_annotations,
+            artifact_correction_plan=result.artifact_correction_plan,
+            baseline_phase=result.baseline_phase,
+        )
         self._hub.update(payload)
 
+    # Kept for tests that reference _build_payload directly
     async def _build_payload(self, sample: EEGSample) -> IngestPayload:
-        from neurolink.dsp.breathing import compute_breathing
-        from neurolink.dsp.imu import head_orientation
-        from neurolink.dsp.ppg import compute_ppg
+        """Thin shim: delegate to pipeline.process() and reconstruct IngestPayload.
 
-        toggles = filter_toggles.get_toggles()
-
-        disabled = [k for k, v in toggles.to_dict().items() if not v]
-        if disabled:
-            log.debug("eeg_pump_stages_disabled", disabled=disabled)
-
-        # ── Assemble raw EEG array ───────────────────────────────────────
-        eeg_arr: np.ndarray | None = None
-        if sample.eeg_buffer:
-            _min_len = min(len(b) for b in sample.eeg_buffer)
-            if _min_len >= 2:
-                eeg_arr = np.array([b[:_min_len] for b in sample.eeg_buffer], dtype=np.float32)
-
-        accel_arr: np.ndarray | None = None
-        if sample.accel_buffer and len(sample.accel_buffer) >= 3:
-            try:
-                accel_arr = np.array(sample.accel_buffer, dtype=np.float32)
-            except Exception:
-                accel_arr = None
-
-        # ── Stage 1 — FIR filter chain ─────────────────────────────────
-        if eeg_arr is not None and toggles.stage1_fir:
-            eeg_arr = self._stage1.apply(eeg_arr)
-
-        # ── Stage 2 — bad channel detection & interpolation ─────────────
-        bad_channels_list: list[str] = []
-        if eeg_arr is not None and toggles.stage2_bad_channels:
-            bad_channels_list = bad_channels.detect(eeg_arr)
-            if bad_channels_list:
-                eeg_arr = spherical_spline.interpolate(eeg_arr, bad_channels_list)
-                log.debug("stage2_interpolated", bad=bad_channels_list)
-
-        # ── Stage 3 — epoch-level artifact gate ────────────────────────
-        artifact_rejected: bool = False
-        artifact_reasons: list[str] = []
-        if eeg_arr is not None and toggles.stage3_artifact_gate:
-            decision = self._stage3.evaluate(eeg_arr, accel_arr)
-            if decision.reject:
-                artifact_rejected = True
-                artifact_reasons = decision.reasons
-
-        # ── Stage 3b — multi-type artifact classifier ──────────────────
-        detection_report = None
-        artifact_annotations: list[ArtifactAnnotationPayload] = []
-        correction_plan_payload: ArtifactCorrectionPlanPayload | None = None
-
-        _plan_apply_asr: bool = True
-        _plan_apply_ocular: bool = True
-        _plan_apply_notch: bool = False
-        _plan_hard_reject: bool = False
-        _plan_apply_cardiac: bool = True
-
-        if eeg_arr is not None and not artifact_rejected and toggles.stage3b_artifact_detector:
-            detection_report = self._stage3b.classify(eeg_arr, accel=accel_arr, fs=_EEG_FS)
-            plan = detection_report.correction_plan
-            artifact_annotations = [
-                ArtifactAnnotationPayload(
-                    artifact_type=a.artifact_type.name,
-                    confidence=a.confidence,
-                    channels=a.channels,
-                    feature_value=a.feature_value,
-                    feature_name=a.feature_name,
-                    threshold=a.threshold,
-                )
-                for a in detection_report.annotations
-            ]
-            correction_plan_payload = ArtifactCorrectionPlanPayload(
-                hard_reject=plan.hard_reject,
-                apply_ocular_regression=plan.apply_ocular_regression,
-                apply_asr=plan.apply_asr,
-                apply_notch=plan.apply_notch,
-                apply_cardiac_regression=plan.apply_cardiac_regression,
-            )
-            if not detection_report.clean:
-                _plan_hard_reject = plan.hard_reject
-                if plan.apply_asr:
-                    _plan_apply_asr = True
-                if plan.apply_ocular_regression:
-                    _plan_apply_ocular = True
-                if plan.apply_notch:
-                    _plan_apply_notch = True
-                if plan.apply_cardiac_regression:
-                    _plan_apply_cardiac = True
-                if plan.hard_reject:
-                    _plan_hard_reject = True
-
-        if _plan_hard_reject:
-            artifact_rejected = True
-            if not artifact_reasons and detection_report is not None:
-                artifact_reasons = [f"3b:{a.artifact_type}" for a in detection_report.annotations]
-
-        # ── Stage 4b — baseline (phase-gate shim) ──────────────────────
-        if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
-            eeg_arr = baseline.apply(eeg_arr)
-
-        # ── Stage 4 — ASR burst reconstruction ─────────────────────────
-        if eeg_arr is not None and not artifact_rejected and toggles.stage4_asr and _plan_apply_asr:
-            eeg_arr = asr.apply(eeg_arr)
-
-        # ── Stage 5 — ocular regression ────────────────────────────────
-        if (
-            eeg_arr is not None
-            and not artifact_rejected
-            and toggles.stage5_ocular
-            and _plan_apply_ocular
-        ):
-            eeg_arr = ocular_regression.apply(eeg_arr)
-
-        # ── Stage 5b — notch re-apply ───────────────────────────────────
-        if (
-            eeg_arr is not None
-            and not artifact_rejected
-            and toggles.stage3b_artifact_detector
-            and _plan_apply_notch
-            and toggles.stage1_fir
-        ):
-            eeg_arr = self._stage1.apply(eeg_arr)
-
-        # ── PPG (needed by Stage 6 and breathing) ──────────────────────
-        # Guard: only call compute_ppg once the ring buffer has accumulated
-        # at least _MIN_PPG_SAMPLES (960 = 15 s at 64 Hz).  neurokit2's
-        # ppg_process() indexes peak arrays unconditionally on short buffers
-        # and raises 'index 0 is out of bounds for axis 0 with size 0'
-        # before our own length guard in compute_ppg can intercept it.
-        ppg_payload = None
-        if sample.ppg_buffer and len(sample.ppg_buffer) >= _MIN_PPG_SAMPLES:
-            ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
-            ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
-
-        # ── Stage 6 — cardiac regression ───────────────────────────────
-        if (
-            eeg_arr is not None
-            and not artifact_rejected
-            and toggles.stage6_cardiac
-            and _plan_apply_cardiac
-        ):
-            ibis = ppg_payload.ibi_ms if ppg_payload else []
-            eeg_arr = cardiac_regression.apply(eeg_arr, ibis=ibis)
-
-        # ── Band powers ─────────────────────────────────────────────────
-        bands_dict: dict[str, float] = {}
-        if eeg_arr is not None and not artifact_rejected:
-            bands_dict = bandpower.compute(eeg_arr, fs=_EEG_FS)
-
-        bands = BandPowers(
-            alpha=bands_dict.get("alpha", 0.0),
-            theta=bands_dict.get("theta", 0.0),
-            beta=bands_dict.get("beta", 0.0),
-            delta=bands_dict.get("delta", 0.0),
-            gamma=bands_dict.get("gamma", 0.0),
-        )
-
-        # ── Classifiers ─────────────────────────────────────────────────
-        if eeg_arr is not None and not artifact_rejected:
-            classifiers.run(bands)
-
-        # ── Raw EEG window ──────────────────────────────────────────────
-        eeg_samples: list[list[float]] = []
-        if eeg_arr is not None and eeg_arr.ndim == 2:
-            n_samples = eeg_arr.shape[1]
-            start = max(0, n_samples - _EEG_SAMPLES_WINDOW)
-            eeg_samples = eeg_arr[:, start:].tolist()
-
-        # ── Derived EEG (FAA, FMt) ──────────────────────────────────────
-        faa: float | None = None
-        fmt: float | None = None
-        if eeg_arr is not None and eeg_arr.shape[1] >= 2 and not artifact_rejected:
-            from neurolink.dsp.derived_eeg import derived_eeg as _derived
-
-            derived = _derived(eeg_arr, fs=_EEG_FS)
-            faa = derived.get("faa")
-            fmt = derived.get("fmt")
-
-        # ── Breathing ───────────────────────────────────────────────────
-        accel_z: np.ndarray | None = None
-        if sample.accel_buffer and len(sample.accel_buffer) >= 3:
-            accel_z = np.array(sample.accel_buffer[2], dtype=np.float32)
-        ibis_for_breathing: list[float] = ppg_payload.ibi_ms if ppg_payload else []
-        breathing_payload = compute_breathing(ibis_for_breathing, accel_z=accel_z)
-
-        # ── IMU head orientation ─────────────────────────────────────────
-        imu_payload: IMUPayload | None = None
-        if sample.accel_buffer and sample.gyro_buffer:
-            accel_arr_imu = np.array(sample.accel_buffer, dtype=np.float32)
-            gyro_arr = np.array(sample.gyro_buffer, dtype=np.float32)
-            if accel_arr_imu.shape[1] > 0:
-                imu_payload = head_orientation(accel_arr_imu, gyro_arr)
-
-        # ── fNIRS ────────────────────────────────────────────────────────
-        fnirs_oxy: float | None = sample.extra.get("fnirs_oxy")
-        fnirs_deoxy: float | None = sample.extra.get("fnirs_deoxy")
-
+        Retained for backward-compatibility with existing unit tests that call
+        ``await pump._build_payload(sample)``.
+        """
+        result = self._pipeline.process(sample)
+        if result is None:
+            return IngestPayload(source=sample.source, address=sample.address)
         return IngestPayload(
             source=sample.source,
             address=sample.address,
             timestamp=sample.timestamp,
-            bands=bands,
+            bands=result.bands,
             poor_contact=sample.poor_contact,
-            faa=faa,
-            fmt=fmt,
-            ppg=ppg_payload,
-            breathing=breathing_payload,
-            imu=imu_payload,
-            fnirs_oxy=fnirs_oxy,
-            fnirs_deoxy=fnirs_deoxy,
-            eeg_samples=eeg_samples,
-            bad_channels=bad_channels_list,
-            artifact_rejected=artifact_rejected,
-            artifact_reasons=artifact_reasons,
-            artifact_annotations=artifact_annotations,
-            artifact_correction_plan=correction_plan_payload,
-            baseline_phase=self._baseline.phase,
+            faa=result.faa,
+            fmt=result.fmt,
+            ppg=result.ppg_payload,
+            breathing=result.breathing_payload,
+            imu=result.imu_payload,
+            fnirs_oxy=result.fnirs_oxy,
+            fnirs_deoxy=result.fnirs_deoxy,
+            eeg_samples=result.eeg_samples,
+            bad_channels=result.bad_channels,
+            artifact_rejected=result.artifact_rejected,
+            artifact_reasons=result.artifact_reasons,
+            artifact_annotations=result.artifact_annotations,
+            artifact_correction_plan=result.artifact_correction_plan,
+            baseline_phase=result.baseline_phase,
         )
