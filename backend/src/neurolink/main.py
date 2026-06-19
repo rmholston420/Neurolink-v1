@@ -100,19 +100,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     yield
 
-    # Shutdown
+    # Shutdown — errors here are non-fatal; log at debug so post-mortem
+    # diagnostics are available without polluting the normal shutdown output.
     log.info("neurolink_shutting_down")
     try:
         from neurolink.routers.ble import bridge_state
 
         if bridge_state.bridge is not None:
             await bridge_state.bridge.stop()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("neurolink_shutdown_bridge_error", error=str(exc))
     try:
         await service.disconnect()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("neurolink_shutdown_disconnect_error", error=str(exc))
     await dispose_engine()
     log.info("neurolink_stopped")
 

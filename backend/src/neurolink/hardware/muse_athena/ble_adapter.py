@@ -73,8 +73,8 @@ class AthenaBlueAdapter(HardwareAdapter):
             if inlet:
                 try:
                     inlet.close_stream()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("athena_inlet_close_error", error=str(exc))
         self._eeg_inlet = None
         self._fnirs_inlet = None
         self._connected = False
@@ -115,8 +115,8 @@ class AthenaBlueAdapter(HardwareAdapter):
                 )
                 if fnirs_sample:
                     self._latest_fnirs = self._fnirs_decoder.decode(fnirs_sample)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("athena_fnirs_read_error", error=str(exc))
 
         eeg_buf = [list(ring) for ring in self._eeg_rings]
         channels = [buf[-1] if buf else 0.0 for buf in eeg_buf]

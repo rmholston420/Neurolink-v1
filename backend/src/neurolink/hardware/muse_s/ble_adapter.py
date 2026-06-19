@@ -95,9 +95,12 @@ def _backoff_wait(attempt: int) -> float:
 
     This avoids deterministic retry storms (all adapters retry simultaneously)
     and keeps early retries fast while preventing runaway polling.
+
+    random.uniform is intentional here: this is timing jitter, not a
+    cryptographic operation.  S311 is suppressed accordingly.
     """
     ceiling = min(BACKOFF_CAP_SEC, BACKOFF_BASE_SEC * (2**attempt))
-    return random.uniform(0.0, ceiling)
+    return random.uniform(0.0, ceiling)  # noqa: S311
 
 
 class MuseSBleAdapter(HardwareAdapter):

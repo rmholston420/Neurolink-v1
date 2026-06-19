@@ -108,9 +108,12 @@ ignore = [
 # PascalCase/camelCase method names are conventional in unittest.TestCase
 # subclasses.  S101 suppresses the 'assert used' warning in test files only;
 # it remains active in src/ so accidental assert-as-validation is caught.
-"tests/**" = ["N802", "N803", "S101"]
+# S110 suppresses try/except/pass in test fixtures and teardown blocks where
+# swallowing exceptions is intentional (logging inside teardown would obscure
+# the real test failure being reported).
+"tests/**" = ["N802", "N803", "S101", "S110"]
 # Scripts and one-off tooling don't need strict naming conventions
-"scripts/**" = ["N802", "N803", "S101", "S", "INP001"]
+"scripts/**" = ["N802", "N803", "S101", "S110", "S", "INP001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["neurolink"]
