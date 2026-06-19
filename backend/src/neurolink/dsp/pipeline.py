@@ -1,4 +1,4 @@
-"""EEGPipeline — pure DSP orchestrator extracted from EEGPump.
+"""EEGPipeline -- pure DSP orchestrator extracted from EEGPump.
 
 This module owns all EEG signal-processing stages (1-6) and bandpower
 computation.  EEGPump is now a thin async driver that calls
@@ -62,6 +62,8 @@ from neurolink.models.eeg import (
 )
 
 if TYPE_CHECKING:
+    from neurolink.dsp.breathing import BreathingPayload
+    from neurolink.dsp.ppg import PPGPayload
     from neurolink.stage0 import Stage0Guard
 
 log = structlog.get_logger(__name__)
@@ -200,8 +202,8 @@ class PipelineResult:
     artifact_annotations: list[ArtifactAnnotationPayload]
     artifact_correction_plan: ArtifactCorrectionPlanPayload | None
     baseline_phase: str
-    ppg_payload: object | None  # PPGPayload | None
-    breathing_payload: object | None  # BreathingPayload | None
+    ppg_payload: PPGPayload | None
+    breathing_payload: BreathingPayload | None
     imu_payload: IMUPayload | None
     faa: float | None
     fmt: float | None
@@ -483,7 +485,7 @@ class EEGPipeline:
             eeg_arr = self._stage1.apply(eeg_arr)
 
         # -- PPG -------------------------------------------------------------
-        ppg_payload = None
+        ppg_payload: PPGPayload | None = None
         if sample.ppg_buffer and len(sample.ppg_buffer) >= _MIN_PPG_SAMPLES:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
@@ -533,7 +535,9 @@ class EEGPipeline:
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
             accel_z = np.array(sample.accel_buffer[2], dtype=np.float32)
         ibis_for_breathing: list[float] = ppg_payload.ibi_ms if ppg_payload else []
-        breathing_payload = compute_breathing(ibis_for_breathing, accel_z=accel_z)
+        breathing_payload: BreathingPayload | None = compute_breathing(
+            ibis_for_breathing, accel_z=accel_z
+        )
 
         # -- IMU head orientation --------------------------------------------
         imu_payload: IMUPayload | None = None
