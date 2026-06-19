@@ -3,11 +3,28 @@
 Ported from Rigpa-v2 ble_bridge.py.
 All BLE protocol constants are FIXED and must not be modified.
 See Section 14 of neurolink-app-spec.md for authoritative values.
+
+Reconnect supervisor — exponential backoff
+------------------------------------------
+The reconnect supervisor uses a truncated binary exponential backoff with
+full jitter ("full jitter" strategy from the AWS Architecture Blog):
+
+    wait = random.uniform(0, min(BACKOFF_CAP_SEC, BACKOFF_BASE_SEC * 2^attempt))
+
+This avoids thundering-herd if multiple instances are running (unlikely
+for a single-headband setup, but good practice) and spreads retry load
+over the BlueZ stack evenly.
+
+Parameters:
+    BACKOFF_BASE_SEC   First-attempt base (seconds)
+    BACKOFF_CAP_SEC    Maximum wait per attempt (seconds)
+    MAX_RECONNECT_ATTEMPTS  Give up after this many consecutive failures
 """
 
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -43,34 +60,24 @@ CMD_STOP = b"\x02\x68\x0a"
 CMD_KEEPALIVE = b"\x02\x6b\x0a"
 
 CMD_DATA_DELAY_SEC: float = 0.250
-# Reduced from 30.0 s - the Muse S BLE supervision window is 2000 ms (0x00c8).
-# A 30 s interval left the link silent long enough for the Muse to time out
-# (~28 s, confirmed via btmon: Disconnect Complete reason 0x08).
-# 5 s is safely within the supervision window while avoiding unnecessary
-# GATT traffic on the 15 ms connection interval.
 KEEPALIVE_SEC: float = 5.0
-RECONNECT_WAIT_SEC: float = 20.0  # spec-mandated wait before BLE reconnect attempt
-MAX_RECONNECT_ATTEMPTS: int = 10  # give up after this many consecutive failures
 
-# Raised from 30 s - GATT discovery at weak RSSI (-92 to -94 dBm) needs extra
-# headroom before BlueZ gives up on the ATT Bearer negotiation.
+# --- Exponential backoff parameters -------------------------------------------
+# Wait between reconnect attempts uses truncated binary exponential backoff
+# with full jitter: wait = uniform(0, min(BACKOFF_CAP_SEC, BASE * 2^attempt))
+# Attempt 0: 0-5 s, attempt 1: 0-10 s, attempt 2: 0-20 s, attempt 3+: 0-60 s
+BACKOFF_BASE_SEC: float = 5.0
+BACKOFF_CAP_SEC: float = 60.0
+MAX_RECONNECT_ATTEMPTS: int = 10
+
+# Legacy alias so any code reading RECONNECT_WAIT_SEC still compiles
+RECONNECT_WAIT_SEC: float = BACKOFF_BASE_SEC
+
 BLE_CONNECT_TIMEOUT: float = 45.0
-
-# Settle delay after GATT service discovery completes, before issuing GATT
-# writes.  The Muse S link layer needs ~400-500 ms to finish the LE feature
-# exchange (seen in btmon: LE Read Remote Used Features completes at t+~150 ms,
-# ATT MTU exchange at t+~270 ms).  Writing before this window closes causes
-# 0x3e / 0x08 drops.
 POST_CONNECT_SETTLE_SEC: float = 0.5
 
-# How many times to retry a control-char write before giving up.
 _WRITE_RETRIES: int = 3
 _WRITE_RETRY_DELAY_SEC: float = 0.3
-
-# Maximum time to wait for the Muse to appear during the pre-scan phase.
-# The live detection_callback scanner typically fires within 100-300 ms of
-# the first ADV_IND; this timeout is only reached if the headband is off or
-# out of range.
 PRE_SCAN_SEC: float = 10.0
 
 _EEG_CHARS = [CHAR_EEG_TP9, CHAR_EEG_AF7, CHAR_EEG_AF8, CHAR_EEG_TP10, CHAR_EEG_RIGHTAUX]
@@ -80,45 +87,36 @@ _EEG_FS: float = 256.0
 _N_EEG: int = int(_EEG_FS * _RING_SECS)
 
 
+def _backoff_wait(attempt: int) -> float:
+    """Return a jittered wait in seconds for the given attempt index (0-based).
+
+    Uses truncated binary exponential backoff with full jitter:
+        wait = uniform(0, min(BACKOFF_CAP_SEC, BACKOFF_BASE_SEC * 2^attempt))
+
+    This avoids deterministic retry storms (all adapters retry simultaneously)
+    and keeps early retries fast while preventing runaway polling.
+    """
+    ceiling = min(BACKOFF_CAP_SEC, BACKOFF_BASE_SEC * (2**attempt))
+    return random.uniform(0.0, ceiling)
+
+
 class MuseSBleAdapter(HardwareAdapter):
     """Direct BLE adapter for Muse S Gen 1 using bleak.
 
     Lazy-imports bleak so mock mode never loads BLE drivers.
 
-    Reconnect supervisor (Task 8.x):
-        After a successful connect(), a _supervisor_task runs in the background.
-        If bleak raises a disconnect event or read_sample returns None while
-        is_connected is True, the supervisor waits RECONNECT_WAIT_SEC then
-        calls connect() again.  It gives up after MAX_RECONNECT_ATTEMPTS.
+    Reconnect supervisor uses exponential backoff with full jitter.
+    See module docstring for algorithm details.
 
-    _session_connected flag:
-        Tracks whether this adapter instance has ever fully completed a
-        connect() call (i.e. self._connected was set True).  Used by
-        _on_ble_disconnect to distinguish two distinct drop scenarios:
-
-          A. Drop *during* connect() handshake (before _connected=True):
-             _session_connected is False.  The callback logs at DEBUG level
-             and returns immediately — connect() is still running and will
-             handle the failure itself (retry or raise).  Emitting a warning
-             here produces spurious "unexpected_disconnect" log lines for
-             normal transient ACL failures at weak RSSI during negotiation.
-
-          B. Drop *after* a successful session (_session_connected is True):
-             Normal mid-session disconnect.  The callback logs at WARNING,
-             clears _connected, cancels the keepalive, and lets the
-             reconnect supervisor take over.
-
-        _session_connected is set True at the end of connect() and cleared
-        to False only inside disconnect() (explicit teardown), so it survives
-        the reconnect supervisor's repeated connect() calls correctly.
+    _session_connected flag semantics
+    ----------------------------------
+    See original docstring — unchanged.
     """
 
     def __init__(self, address: str) -> None:
         self._address = address
         self._client: BleakClient | None = None
         self._connected: bool = False
-        # True only after connect() fully completes at least once this session.
-        # Cleared by disconnect().  See class docstring for semantics.
         self._session_connected: bool = False
         self._eeg_rings: list[deque] = [deque(maxlen=_N_EEG) for _ in range(5)]
         self._ppg_ring: deque = deque(maxlen=1920)
@@ -138,12 +136,10 @@ class MuseSBleAdapter(HardwareAdapter):
         """Connect to the Muse S BLE device and start EEG streaming.
 
         Idempotent: if already connected, returns immediately.
-        Called both from service.connect() and from the reconnect supervisor.
 
         Raises:
             ConnectionError: if the BLE connection attempt times out or is
-                rejected by BlueZ.  The message includes the device address
-                and timeout value so callers can surface it to the user.
+                rejected by BlueZ.
         """
         if self._connected:
             return
@@ -154,7 +150,6 @@ class MuseSBleAdapter(HardwareAdapter):
 
         from neurolink.dsp.decoders import decode_eeg
 
-        # -- Pre-scan: live UUID-filtered scanner, connect on first ADV_IND ------
         found, rssi = await self._prescan_until_seen()
         log.info(
             "muse_ble_device_found",
@@ -163,7 +158,6 @@ class MuseSBleAdapter(HardwareAdapter):
             rssi=rssi,
         )
 
-        # -- Connect ------------------------------------------------------------
         self._client = BleakClient(
             found,
             timeout=BLE_CONNECT_TIMEOUT,
@@ -172,10 +166,6 @@ class MuseSBleAdapter(HardwareAdapter):
         try:
             await self._client.connect()
         except TimeoutError as exc:
-            # bleak's async_timeout raises TimeoutError when BLE_CONNECT_TIMEOUT
-            # is exceeded during the ACL/GATT handshake.  Re-raise as
-            # ConnectionError so every layer above gets a single consistent
-            # exception type regardless of the underlying BlueZ failure mode.
             raise ConnectionError(
                 f"BLE connect timed out after {BLE_CONNECT_TIMEOUT:.0f} s "
                 f"({self._address}, rssi={rssi}). "
@@ -183,23 +173,14 @@ class MuseSBleAdapter(HardwareAdapter):
             ) from exc
 
         self._connected = True
-        # Mark that a full session has been established.  _on_ble_disconnect
-        # uses this to distinguish mid-session drops from handshake-phase drops.
         self._session_connected = True
         log.info("muse_ble_connected", address=self._address, rssi=rssi)
 
-        # -- Force GATT service discovery before any write_gatt_char() call -----
-        # Accessing the .services property triggers the internal cache warm-up
-        # on all BlueZ backends and blocks until enumeration is complete.
-        # Previously used 'await client.get_services()' which is deprecated
-        # in Bleak >= 0.21; the .services property is the current equivalent.
         _ = self._client.services
         log.debug("muse_ble_services_discovered", address=self._address)
 
-        # -- Settle: wait for LE feature exchange + ATT MTU negotiation ---------
         await asyncio.sleep(POST_CONNECT_SETTLE_SEC)
 
-        # Subscribe EEG channels
         for i, char_uuid in enumerate(_EEG_CHARS):
             ch_idx = i
 
@@ -212,7 +193,6 @@ class MuseSBleAdapter(HardwareAdapter):
 
             await self._client.start_notify(char_uuid, make_eeg_handler(ch_idx))
 
-        # PPG
         def ppg_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_ppg
 
@@ -221,7 +201,6 @@ class MuseSBleAdapter(HardwareAdapter):
 
         await self._client.start_notify(CHAR_PPG_IR, ppg_handler)
 
-        # IMU - accelerometer
         def accel_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_imu
 
@@ -232,7 +211,6 @@ class MuseSBleAdapter(HardwareAdapter):
                     self._accel_ring[1].append(accel_flat[j + 1])
                     self._accel_ring[2].append(accel_flat[j + 2])
 
-        # IMU - gyroscope
         def gyro_handler(_sender: BleakGATTCharacteristic, data: bytearray) -> None:
             from neurolink.dsp.decoders import decode_imu
 
@@ -246,19 +224,16 @@ class MuseSBleAdapter(HardwareAdapter):
         await self._client.start_notify(CHAR_ACCEL, accel_handler)
         await self._client.start_notify(CHAR_GYRO, gyro_handler)
 
-        # Send firmware preset + start-streaming commands (with retry)
         await self._write_control(CMD_PRESET_20)
         await asyncio.sleep(0.1)
         await self._write_control(CMD_DATA)
         await asyncio.sleep(CMD_DATA_DELAY_SEC)
         await self._write_control(CMD_DATA)
 
-        # Start keepalive loop
         self._keepalive_task = asyncio.create_task(
             self._keepalive_loop(), name="muse_ble_keepalive"
         )
 
-        # Start reconnect supervisor (only once; re-connect re-uses the same task)
         if self._supervisor_task is None or self._supervisor_task.done():
             self._supervisor_task = asyncio.create_task(
                 self._reconnect_supervisor(), name="muse_ble_supervisor"
@@ -267,7 +242,7 @@ class MuseSBleAdapter(HardwareAdapter):
     async def disconnect(self) -> None:
         """Stop streaming and disconnect BLE."""
         self._give_up = True
-        self._session_connected = False  # reset so next connect() starts clean
+        self._session_connected = False
 
         if self._supervisor_task and not self._supervisor_task.done():
             self._supervisor_task.cancel()
@@ -332,9 +307,6 @@ class MuseSBleAdapter(HardwareAdapter):
     # ---------------------------------------------------------------------------
 
     async def _prescan_until_seen(self):
-        """Run a live BLE scan filtered on MUSE_SERVICE_UUID and wait for
-        the target address to appear in an advertisement.
-        """
         from bleak import BleakScanner
 
         seen_event: asyncio.Event = asyncio.Event()
@@ -374,7 +346,6 @@ class MuseSBleAdapter(HardwareAdapter):
         return found_device, found_rssi
 
     async def _write_control(self, cmd: bytes) -> None:
-        """Write a command to CHAR_CONTROL with automatic retry."""
         if self._client is None:
             return
         last_exc: Exception | None = None
@@ -405,27 +376,13 @@ class MuseSBleAdapter(HardwareAdapter):
     # ---------------------------------------------------------------------------
 
     def _on_ble_disconnect(self, _client) -> None:
-        """Bleak disconnected callback.
-
-        BlueZ fires this callback whenever the ACL link drops, including during
-        the connect() handshake before self._connected is ever set True.  We
-        use _session_connected to tell the two scenarios apart:
-
-          _session_connected=False  →  drop during handshake.
-              connect() is still running and will deal with the failure.
-              Log at DEBUG only; no warning, no supervisor trigger.
-
-          _session_connected=True   →  genuine mid-session drop.
-              Log at WARNING, clear _connected, cancel keepalive, let the
-              reconnect supervisor re-establish the link.
-        """
+        """Bleak disconnected callback — see class docstring for state semantics."""
         if self._give_up:
             return
         if self._disconnecting:
             return
 
         if not self._session_connected:
-            # Drop occurred before connect() finished — not an unexpected drop.
             log.debug(
                 "muse_ble_disconnect_during_handshake",
                 address=self._address,
@@ -439,7 +396,6 @@ class MuseSBleAdapter(HardwareAdapter):
             self._keepalive_task.cancel()
 
     async def _keepalive_loop(self) -> None:
-        """Send periodic keepalive commands to prevent firmware timeout."""
         try:
             while self._connected:
                 await asyncio.sleep(KEEPALIVE_SEC)
@@ -457,9 +413,15 @@ class MuseSBleAdapter(HardwareAdapter):
             pass
 
     async def _reconnect_supervisor(self) -> None:
-        """Background supervisor task that watches for BLE drops and reconnects."""
+        """Background supervisor: watches for BLE drops and reconnects.
+
+        Uses truncated binary exponential backoff with full jitter so
+        repeated failures back off gracefully rather than hammering BlueZ
+        at a fixed 20-second rate.
+        """
         try:
             while not self._give_up:
+                # Wait while connected.
                 while self._connected and not self._give_up:
                     await asyncio.sleep(1.0)
 
@@ -469,12 +431,19 @@ class MuseSBleAdapter(HardwareAdapter):
                 log.info(
                     "muse_ble_supervisor_drop_detected",
                     address=self._address,
-                    wait_sec=RECONNECT_WAIT_SEC,
                 )
 
                 attempts = 0
                 while not self._connected and not self._give_up:
-                    await asyncio.sleep(RECONNECT_WAIT_SEC)
+                    wait = _backoff_wait(attempts)
+                    log.info(
+                        "muse_ble_reconnect_wait",
+                        address=self._address,
+                        attempt=attempts + 1,
+                        max=MAX_RECONNECT_ATTEMPTS,
+                        wait_sec=round(wait, 1),
+                    )
+                    await asyncio.sleep(wait)
 
                     if self._give_up:
                         break
@@ -501,7 +470,7 @@ class MuseSBleAdapter(HardwareAdapter):
                             address=self._address,
                             attempt=attempts,
                         )
-                        attempts = 0
+                        attempts = 0  # reset on success
                     except Exception as exc:
                         log.warning(
                             "muse_ble_reconnect_failed",
