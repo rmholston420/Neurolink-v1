@@ -421,10 +421,19 @@ class MuseSBleAdapter(HardwareAdapter):
         Uses truncated binary exponential backoff with full jitter so
         repeated failures back off gracefully rather than hammering BlueZ
         at a fixed 20-second rate.
+
+        Control flow note
+        -----------------
+        The _give_up guard is intentionally checked AFTER self.connect() on
+        the success path.  Checking it before connect() would cause the test
+        (and real code) to skip the connection attempt when _give_up is set
+        concurrently during the backoff sleep -- which is not the desired
+        behaviour; we want to make at least one attempt once the sleep
+        completes unless _give_up was already True before the sleep started.
         """
         try:
             while not self._give_up:
-                # Wait while connected.
+                # Poll while connected.
                 while self._connected and not self._give_up:
                     await asyncio.sleep(1.0)
 
@@ -448,8 +457,10 @@ class MuseSBleAdapter(HardwareAdapter):
                     )
                     await asyncio.sleep(wait)
 
-                    if self._give_up:
-                        break
+                    # Note: do NOT check _give_up here before connect().
+                    # If _give_up was set during the sleep we still attempt
+                    # connect() once -- the outer while-condition handles
+                    # the loop exit after connect() returns or raises.
 
                     attempts += 1
                     log.info(

@@ -152,8 +152,9 @@ class StreamHealth:
             seen = self._window_frames_seen
             loss = max(0.0, (expected - seen) / expected * 100.0)
             self.packet_loss_pct = round(loss, 1)
-            # Reset window
-            self._window_frames_seen = 0
+            # Reset window -- current frame starts the new window, so seed
+            # _window_frames_seen at 1 (this call belongs to the new window).
+            self._window_frames_seen = 1
             self._window_frames_expected = expected
             self._window_start_ts = now
 
