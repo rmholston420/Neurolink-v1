@@ -3,7 +3,7 @@
 # Podman builds this with: podman build -t neurolink-backend ./backend
 # or via podman-compose which calls buildah under the hood.
 
-FROM python:3.12-slim-bookworm
+FROM docker.io/library/python:3.12-slim-bookworm
 
 WORKDIR /app
 
