@@ -9,7 +9,7 @@ Key optimisations vs the original monolithic _build_payload():
   Single-PSD computation
   ----------------------
   The original ``compute_band_powers_from_buffer`` called ``scipy.signal.welch``
-  once *per band per channel* — up to 25 FFT calls per tick at 4 Hz.  The new
+  once *per band per channel* -- up to 25 FFT calls per tick at 4 Hz.  The new
   ``_compute_bands_single_psd`` computes a single Welch PSD per channel and
   then integrates the power for every band from that single spectrum.  This
   reduces the FFT count from 25 to 5 (one per channel), a ~5x reduction.
@@ -20,17 +20,17 @@ Key optimisations vs the original monolithic _build_payload():
 StreamHealth tracking
 ---------------------
 Every call to ``process()`` updates a ``StreamHealth`` dataclass with:
-  - frames_total       — total frames processed
-  - frames_rejected    — artifact-rejected frames
-  - frames_clean       — frames forwarded to band-power extraction
-  - packet_loss_pct    — rolling 10-second packet-loss estimate
-  - last_frame_ts      — monotonic timestamp of last successful frame
+  - frames_total       -- total frames processed
+  - frames_rejected    -- artifact-rejected frames
+  - frames_clean       -- frames forwarded to band-power extraction
+  - packet_loss_pct    -- rolling 10-second packet-loss estimate
+  - last_frame_ts      -- monotonic timestamp of last successful frame
 
 Public interface
 ----------------
   pipeline = EEGPipeline(stage0, stage1_registry, ...)
-  result   = pipeline.process(sample)     # → PipelineResult
-  health   = pipeline.health              # → StreamHealth (live snapshot)
+  result   = pipeline.process(sample)     # -> PipelineResult
+  health   = pipeline.health              # -> StreamHealth (live snapshot)
 """
 
 from __future__ import annotations
@@ -70,10 +70,10 @@ _EEG_FS: float = 256.0
 _PPG_FS: float = 64.0
 _ACCEL_FS: float = 52.0
 _EEG_SAMPLES_WINDOW: int = 64
-_MIN_PPG_SAMPLES: int = 960  # 15 s * 64 Hz — matches eeg_pump.py
+_MIN_PPG_SAMPLES: int = 960  # 15 s * 64 Hz -- matches eeg_pump.py
 _NPERSEG: int = 256
 
-# Standard EEG band definitions [lo, hi] Hz — shared with bandpower.py
+# Standard EEG band definitions [lo, hi] Hz -- shared with bandpower.py
 _BANDS: dict[str, tuple[float, float]] = {
     "delta": (0.5, 4.0),
     "theta": (4.0, 8.0),
@@ -104,7 +104,7 @@ class StreamHealth:
     frames_rejected    Frames discarded by Stage 3 / Stage 3b.
     frames_clean       Frames that reached band-power computation.
     packet_loss_pct    BLE packet-loss estimate over the last
-                       ``_HEALTH_WINDOW_SEC`` seconds (0–100).
+                       ``_HEALTH_WINDOW_SEC`` seconds (0-100).
     last_frame_ts      wall-clock time of the most recent frame (0 = never).
     avg_tick_ms        Exponential moving average of per-tick processing
                        time (ms).  Useful for detecting DSP budget overruns.
@@ -117,7 +117,7 @@ class StreamHealth:
     last_frame_ts: float = 0.0
     avg_tick_ms: float = 0.0
 
-    # Internal accounting — not serialised
+    # Internal accounting -- not serialised
     _window_frames_seen: int = field(default=0, repr=False)
     _window_frames_expected: int = field(default=0, repr=False)
     _window_start_ts: float = field(default_factory=time.time, repr=False)
@@ -222,7 +222,7 @@ def _compute_bands_single_psd(
 
     Unlike the original ``compute_band_powers_from_buffer`` which called
     ``sp_signal.welch`` once per band per channel (up to 25 calls at 5
-    channels × 5 bands), this function calls welch exactly once per
+    channels x 5 bands), this function calls welch exactly once per
     channel and integrates all band powers from the single PSD.
 
     The cost reduction is from O(n_channels * n_bands) to O(n_channels)
@@ -230,7 +230,7 @@ def _compute_bands_single_psd(
 
     Returns
     -------
-    dict mapping band name → normalised power fraction [0, 1].
+    dict mapping band name -> normalised power fraction [0, 1].
     All zeros when the array is too short or all-zero.
     """
     result: dict[str, float] = dict.fromkeys(_BANDS, 0.0)
@@ -273,7 +273,7 @@ class EEGPipeline:
     """Pure DSP orchestrator: runs Stages 1-6 and band-power extraction.
 
     All DSP state lives here.  EEGPump holds one EEGPipeline instance and
-    calls ``process(sample)`` each tick — no DSP logic in EEGPump itself.
+    calls ``process(sample)`` each tick -- no DSP logic in EEGPump itself.
     """
 
     def __init__(
@@ -301,7 +301,7 @@ class EEGPipeline:
         self._baseline: BaselineRecorder = BaselineRecorder(asr=self._stage4, hub=hub)
         self._health: StreamHealth = StreamHealth(_publish_hz=publish_hz)
 
-    # ── Public interface ────────────────────────────────────────────────────
+    # -- Public interface ----------------------------------------------------
 
     @property
     def health(self) -> StreamHealth:
@@ -351,7 +351,7 @@ class EEGPipeline:
         if disabled:
             log.debug("pipeline_stages_disabled", disabled=disabled)
 
-        # ── Stage 0 gate ────────────────────────────────────────────────
+        # -- Stage 0 gate ----------------------------------------------------
         if self._stage0 is not None:
             if toggles.imu_gate:
                 sample = self._stage0.gate_sample(sample)
@@ -362,7 +362,7 @@ class EEGPipeline:
             if not self._stage0.acquisition_ready and sample.source != "mock":
                 return None  # caller emits settling event
 
-        # ── Assemble arrays ─────────────────────────────────────────────
+        # -- Assemble arrays -------------------------------------------------
         eeg_arr: np.ndarray | None = None
         if sample.eeg_buffer:
             _min_len = min(len(b) for b in sample.eeg_buffer)
@@ -378,11 +378,11 @@ class EEGPipeline:
             except Exception:
                 accel_arr = None
 
-        # ── Stage 1 — FIR filter chain ───────────────────────────────────
+        # -- Stage 1 -- FIR filter chain -------------------------------------
         if eeg_arr is not None and toggles.stage1_fir:
             eeg_arr = self._stage1.apply(eeg_arr)
 
-        # ── Stage 2 — bad channel detection & interpolation ──────────────
+        # -- Stage 2 -- bad channel detection & interpolation ----------------
         bad_channels_list: list[str] = []
         if eeg_arr is not None and toggles.stage2_bad_channels:
             self._stage2.update(eeg_arr)
@@ -391,7 +391,7 @@ class EEGPipeline:
                 eeg_arr = interpolate_bad_channels(eeg_arr, bad_channels_list)
                 log.debug("stage2_interpolated", bad=bad_channels_list)
 
-        # ── Stage 3 — epoch-level artifact gate ──────────────────────────
+        # -- Stage 3 -- epoch-level artifact gate ----------------------------
         artifact_rejected: bool = False
         artifact_reasons: list[str] = []
         if eeg_arr is not None and toggles.stage3_artifact_gate:
@@ -400,7 +400,7 @@ class EEGPipeline:
                 artifact_rejected = True
                 artifact_reasons = decision.reasons
 
-        # ── Stage 3b — multi-type artifact classifier ────────────────────
+        # -- Stage 3b -- multi-type artifact classifier ----------------------
         detection_report = None
         artifact_annotations: list[ArtifactAnnotationPayload] = []
         correction_plan_payload: ArtifactCorrectionPlanPayload | None = None
@@ -450,11 +450,11 @@ class EEGPipeline:
             if not artifact_reasons and detection_report is not None:
                 artifact_reasons = [f"3b:{a.artifact_type}" for a in detection_report.annotations]
 
-        # ── Stage 4b — baseline (phase-gate shim) ───────────────────────
+        # -- Stage 4b -- baseline (phase-gate shim) -------------------------
         if eeg_arr is not None and not artifact_rejected and toggles.stage4b_baseline:
             eeg_arr = self._baseline.process(eeg_arr)
 
-        # ── Stage 4 — ASR burst reconstruction ──────────────────────────
+        # -- Stage 4 -- ASR burst reconstruction ----------------------------
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -463,7 +463,7 @@ class EEGPipeline:
         ):
             eeg_arr = self._stage4.apply(eeg_arr)
 
-        # ── Stage 5 — ocular regression ──────────────────────────────────
+        # -- Stage 5 -- ocular regression ------------------------------------
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -472,7 +472,7 @@ class EEGPipeline:
         ):
             eeg_arr = self._stage5.apply(eeg_arr)
 
-        # ── Stage 5b — notch re-apply ────────────────────────────────────
+        # -- Stage 5b -- notch re-apply -------------------------------------
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -482,13 +482,13 @@ class EEGPipeline:
         ):
             eeg_arr = self._stage1.apply(eeg_arr)
 
-        # ── PPG ──────────────────────────────────────────────────────────
+        # -- PPG -------------------------------------------------------------
         ppg_payload = None
         if sample.ppg_buffer and len(sample.ppg_buffer) >= _MIN_PPG_SAMPLES:
             ppg_arr = np.array(sample.ppg_buffer, dtype=np.float32)
             ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
 
-        # ── Stage 6 — cardiac regression ────────────────────────────────
+        # -- Stage 6 -- cardiac regression ----------------------------------
         if (
             eeg_arr is not None
             and not artifact_rejected
@@ -498,7 +498,7 @@ class EEGPipeline:
             ibis = ppg_payload.ibi_ms if ppg_payload else []
             eeg_arr = self._stage6.apply(eeg_arr, ibis, fs=_EEG_FS)
 
-        # ── Band powers (single-PSD path) ────────────────────────────────
+        # -- Band powers (single-PSD path) ----------------------------------
         bands_dict: dict[str, float] = {}
         if eeg_arr is not None and not artifact_rejected:
             bands_dict = _compute_bands_single_psd(eeg_arr, fs=_EEG_FS)
@@ -511,14 +511,14 @@ class EEGPipeline:
             gamma=bands_dict.get("gamma", 0.0),
         )
 
-        # ── Raw EEG window ───────────────────────────────────────────────
+        # -- Raw EEG window --------------------------------------------------
         eeg_samples: list[list[float]] = []
         if eeg_arr is not None and eeg_arr.ndim == 2:
             n_samples = eeg_arr.shape[1]
             start = max(0, n_samples - _EEG_SAMPLES_WINDOW)
             eeg_samples = eeg_arr[:, start:].tolist()
 
-        # ── Derived EEG (FAA, FMt) ───────────────────────────────────────
+        # -- Derived EEG (FAA, FMt) -----------------------------------------
         faa: float | None = None
         fmt: float | None = None
         if eeg_arr is not None and eeg_arr.shape[1] >= 2 and not artifact_rejected:
@@ -528,14 +528,14 @@ class EEGPipeline:
             faa = derived.get("faa")
             fmt = derived.get("fmt")
 
-        # ── Breathing ────────────────────────────────────────────────────
+        # -- Breathing -------------------------------------------------------
         accel_z: np.ndarray | None = None
         if sample.accel_buffer and len(sample.accel_buffer) >= 3:
             accel_z = np.array(sample.accel_buffer[2], dtype=np.float32)
         ibis_for_breathing: list[float] = ppg_payload.ibi_ms if ppg_payload else []
         breathing_payload = compute_breathing(ibis_for_breathing, accel_z=accel_z)
 
-        # ── IMU head orientation ─────────────────────────────────────────
+        # -- IMU head orientation --------------------------------------------
         imu_payload: IMUPayload | None = None
         if sample.accel_buffer and sample.gyro_buffer:
             accel_arr_imu = np.array(sample.accel_buffer, dtype=np.float32)
@@ -543,11 +543,11 @@ class EEGPipeline:
             if accel_arr_imu.shape[1] > 0:
                 imu_payload = head_orientation(accel_arr_imu, gyro_arr)
 
-        # ── fNIRS ────────────────────────────────────────────────────────
+        # -- fNIRS -----------------------------------------------------------
         fnirs_oxy: float | None = sample.extra.get("fnirs_oxy")
         fnirs_deoxy: float | None = sample.extra.get("fnirs_deoxy")
 
-        # ── StreamHealth update ──────────────────────────────────────────
+        # -- StreamHealth update ---------------------------------------------
         tick_ms = (time.monotonic() - tick_start) * 1000.0
         self._health.record_frame(rejected=artifact_rejected, tick_ms=tick_ms)
 
