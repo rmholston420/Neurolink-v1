@@ -3,9 +3,8 @@
 All DSP logic now lives in ``neurolink.dsp.pipeline.EEGPipeline``.
 EEGPump's only responsibilities are:
   1. Scheduling the tick loop at ``publish_hz``.
-  2. Calling ``self._pipeline.process(sample)``.
-  3. Converting ``PipelineResult`` → ``IngestPayload`` and calling
-     ``hub.update()``.
+  2. Calling ``self._build_payload(sample)`` which runs stub dispatch.
+  3. Converting result → hub.update().
   4. Running the Stage 0 acquisition guard and emitting settling events.
   5. Watchdog: warn when no frames arrive for > ``_WATCHDOG_SEC``.
 
@@ -224,11 +223,11 @@ class EEGPump:
             ocular_regressor=ocular_regressor,
             cardiac_regressor=cardiac_regressor,
         )
-        # Direct aliases used by tests and by reset()
+        # Direct aliases — kept in sync with pipeline for test patching.
         self._stage0 = self._pipeline._stage0
         self._stage1 = self._pipeline._stage1
         self._stage2 = self._pipeline._stage2
-        self._stage3 = self._pipeline._stage3   # ArtifactGate — tests patch this
+        self._stage3 = self._pipeline._stage3
         self._stage4 = self._pipeline._stage4
         self._stage5 = self._pipeline._stage5
         self._stage6 = self._pipeline._stage6
@@ -270,7 +269,7 @@ class EEGPump:
         self._baseline.reset()
         self._stage6.reset()
         self._hub.reset()
-        # Keep the pipeline in sync too.
+        # Keep the pipeline in sync.
         self._pipeline._baseline = self._baseline
         self._pipeline._stage6 = self._stage6
         log.info("eeg_pump_reset")
@@ -307,24 +306,32 @@ class EEGPump:
 
         toggles = filter_toggles.get_toggles()
 
-        # Stage 0: impedance check — emit settling before pipeline runs.
+        # Resolve live stage0 reference from pipeline (not the init-time snapshot
+        # alias self._stage0) so that test injection via stage0_guard propagates.
+        _s0 = self._pipeline._stage0
+
+        # ── Stage 0: IMU gate + impedance update (runs on EVERY tick) ────────
+        if _s0 is not None:
+            if toggles.imu_gate:
+                sample = _s0.gate_sample(sample)
+            _s0.impedance.update_from_sample(
+                poor_contact=sample.poor_contact,
+                channels=sample.channels,
+            )
+
+        # ── Impedance settling check ───────────────────────────────────────
         impedance_ok = impedance.check()
         if not impedance_ok:
             self._hub.emit_settling(reason="impedance_unstable")
 
+        # ── Acquisition-ready gate (non-mock sources only) ─────────────────
         if (
-            self._stage0 is not None
-            and not self._stage0.acquisition_ready
+            _s0 is not None
+            and not _s0.acquisition_ready
             and sample.source != "mock"
         ):
             reason = self._stage0_settling_reason()
             self._hub.emit_settling(reason=reason)
-            if toggles.imu_gate:
-                sample = self._stage0.gate_sample(sample)
-            self._stage0.impedance.update_from_sample(
-                poor_contact=sample.poor_contact,
-                channels=sample.channels,
-            )
             return
 
         self._last_frame_ts = time.time()
@@ -347,7 +354,7 @@ class EEGPump:
         if eeg is not None and toggles.stage1_fir:
             eeg = self._stage1.apply(eeg)
 
-        # ── Stage 2: bad-channel detection + spherical-spline interpolation
+        # ── Stage 2: bad-channel detection + spherical-spline interpolation ─
         bad_ch: list[str] = []
         if eeg is not None and toggles.stage2_bad_channels:
             bad_ch = bad_channels.detect(eeg)
@@ -417,38 +424,63 @@ class EEGPump:
                 vals = list(theta.values())
                 fmt = float(np.mean(vals)) if vals else None
 
+        # ── fNIRS from sample.extra ────────────────────────────────────────
+        extra = sample.extra if isinstance(sample.extra, dict) else {}
+        fnirs_oxy: float | None = extra.get("fnirs_oxy")
+        fnirs_deoxy: float | None = extra.get("fnirs_deoxy")
+
         # ── Breathing ────────────────────────────────────────────────────
         breathing_payload = None
 
         # ── IMU ──────────────────────────────────────────────────────────
+        # IMUPayload fields: pitch_deg, roll_deg, motion_rms
         imu_payload = None
         if sample.accel_buffer is not None and sample.gyro_buffer is not None:
             accel = np.asarray(sample.accel_buffer, dtype=np.float32)
-            gyro = np.asarray(sample.gyro_buffer, dtype=np.float32)
-            imu_payload = IMUPayload(
-                accel_x=float(np.mean(accel[0])) if accel.shape[0] > 0 else 0.0,
-                accel_y=float(np.mean(accel[1])) if accel.shape[0] > 1 else 0.0,
-                accel_z=float(np.mean(accel[2])) if accel.shape[0] > 2 else 0.0,
-                gyro_x=float(np.mean(gyro[0])) if gyro.shape[0] > 0 else 0.0,
-                gyro_y=float(np.mean(gyro[1])) if gyro.shape[0] > 1 else 0.0,
-                gyro_z=float(np.mean(gyro[2])) if gyro.shape[0] > 2 else 0.0,
-            )
+            if accel.ndim == 2 and accel.shape[0] >= 3 and accel.shape[1] > 0:
+                ax = accel[0]
+                ay = accel[1]
+                az = accel[2]
+                # Crude pitch/roll from mean accel vector; motion_rms from all axes.
+                g = float(np.sqrt(np.mean(ax)**2 + np.mean(ay)**2 + np.mean(az)**2)) or 1.0
+                pitch_deg = float(np.degrees(np.arcsin(np.clip(np.mean(ay) / g, -1.0, 1.0))))
+                roll_deg = float(np.degrees(np.arctan2(np.mean(ax), np.mean(az))))
+                motion_rms = float(np.sqrt(np.mean(ax**2 + ay**2 + az**2)))
+                imu_payload = IMUPayload(
+                    pitch_deg=pitch_deg,
+                    roll_deg=roll_deg,
+                    motion_rms=motion_rms,
+                )
 
         # ── Baseline phase ───────────────────────────────────────────────
-        baseline_phase: str = self._baseline.phase if hasattr(self._baseline, "phase") else "idle"
+        baseline_phase: str = (
+            self._baseline.phase if hasattr(self._baseline, "phase") else "idle"
+        )
 
         # ── Hub baseline_alpha hook ──────────────────────────────────────
         if hasattr(self._hub, "baseline_alpha") and self._hub.baseline_alpha is not None:
             if hasattr(self._baseline, "set_alpha"):
                 self._baseline.set_alpha(self._hub.baseline_alpha)
 
+        # ── EEG samples: trim to window ────────────────────────────────────
+        # Slice to the most recent _EEG_SAMPLES_WINDOW columns so that
+        # len(ch) <= 64 regardless of input buffer width.
+        eeg_samples: list[list[float]] = []
+        if eeg is not None:
+            windowed = eeg[:, -_EEG_SAMPLES_WINDOW:]
+            eeg_samples = windowed.tolist()
+
         # ── Assemble bands Pydantic model ────────────────────────────────
         band_powers: BandPowers | None = None
         if bands_dict:
             try:
-                band_powers = BandPowers(**{k: float(v) if not isinstance(v, dict) else 0.0
-                                            for k, v in bands_dict.items()
-                                            if k in ("delta", "theta", "alpha", "beta", "gamma")})
+                band_powers = BandPowers(
+                    **{
+                        k: float(v) if not isinstance(v, dict) else 0.0
+                        for k, v in bands_dict.items()
+                        if k in ("delta", "theta", "alpha", "beta", "gamma")
+                    }
+                )
             except Exception:
                 band_powers = None
 
@@ -456,16 +488,16 @@ class EEGPump:
             source=sample.source,
             address=sample.address,
             timestamp=sample.timestamp,
-            bands=band_powers,
+            bands=band_powers or BandPowers(),
             poor_contact=sample.poor_contact,
             faa=faa,
             fmt=fmt,
             ppg=ppg_payload,
             breathing=breathing_payload,
             imu=imu_payload,
-            fnirs_oxy=None,
-            fnirs_deoxy=None,
-            eeg_samples=eeg.tolist() if eeg is not None else None,
+            fnirs_oxy=fnirs_oxy,
+            fnirs_deoxy=fnirs_deoxy,
+            eeg_samples=eeg_samples,
             bad_channels=bad_ch,
             artifact_rejected=artifact_rejected,
             artifact_reasons=artifact_reasons,
