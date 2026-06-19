@@ -43,6 +43,7 @@ from neurolink.models.eeg import (
     EA1Result,
     IngestPayload,
     NeurolinkState,
+    StreamHealthPayload,
 )
 
 if TYPE_CHECKING:
@@ -52,13 +53,9 @@ log = structlog.get_logger(__name__)
 
 _DEFAULT_BASELINE_ALPHA: float = 0.30
 
-# Sentinel pushed to SSE queues when the 150 s baseline completes.
 _BASELINE_COMPLETE_EVENT: dict = {"event": "baseline_complete"}
-
-# Settling sentinel template
 _SETTLING_EVENT_TYPE: str = "settling"
 
-# Both asyncio and stdlib queues may be registered (tests use stdlib Queue).
 _QUEUE_FULL_EXCEPTIONS = (asyncio.QueueFull, stdlib_queue.Full)
 
 
@@ -77,7 +74,7 @@ class EEGHub:
         self._settling_events_emitted: int = 0
         self._frames_processed: int = 0
 
-    # ── Core update ────────────────────────────────────────────────────────────
+    # ── Core update ──────────────────────────────────────────────────
 
     def update(self, payload: IngestPayload) -> NeurolinkState:
         """Ingest a new payload, run classifiers, update state, fan-out to SSE."""
@@ -152,6 +149,7 @@ class EEGHub:
                 artifact_correction_plan=payload.artifact_correction_plan,
                 channel_impedances=payload.channel_impedances,
                 baseline_phase=payload.baseline_phase,
+                stream_health=payload.stream_health,
             )
             self._state = new_state
             self._ea1 = ea1_result
@@ -162,10 +160,9 @@ class EEGHub:
 
         return new_state
 
-    # ── SSE sentinel events ────────────────────────────────────────────────────
+    # ── SSE sentinel events ─────────────────────────────────────────────
 
     def notify_baseline_complete(self) -> None:
-        """Push a baseline_complete sentinel to all SSE queues."""
         log.info("hub_baseline_complete_notified")
         with self._sse_lock:
             queues = list(self._sse_queues)
@@ -176,7 +173,6 @@ class EEGHub:
                 log.warning("sse_queue_full_dropping_baseline_event")
 
     def emit_settling(self, reason: str = "settling") -> None:
-        """Push a settling sentinel to all SSE queues."""
         event = {"event": _SETTLING_EVENT_TYPE, "reason": reason}
         with self._sse_lock:
             queues = list(self._sse_queues)
@@ -192,10 +188,9 @@ class EEGHub:
             self._settling_events_emitted += 1
         log.debug("hub_settling_emitted", reason=reason)
 
-    # ── Diagnostics ────────────────────────────────────────────────────────────
+    # ── Diagnostics ──────────────────────────────────────────────────
 
     def get_stats(self) -> dict:
-        """Return lightweight diagnostic counters."""
         with self._lock:
             frame_count = self._state.frame_count
             baseline_phase = self._state.baseline_phase
@@ -211,10 +206,9 @@ class EEGHub:
             "baseline_phase": baseline_phase,
         }
 
-    # ── Redis write-through ────────────────────────────────────────────────────
+    # ── Redis write-through ─────────────────────────────────────────────
 
     def _schedule_redis_push(self, state: NeurolinkState) -> None:
-        """Schedule a non-blocking Redis write-through for the new state."""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -225,34 +219,28 @@ class EEGHub:
         except RuntimeError:
             pass
 
-    # ── State accessors ────────────────────────────────────────────────────────
+    # ── State accessors ───────────────────────────────────────────────
 
     def get_state(self) -> NeurolinkState:
-        """Return the current NeurolinkState snapshot."""
         with self._lock:
             return self._state
 
     def get_ea1(self) -> EA1Result:
-        """Return the latest EA1Result."""
         with self._lock:
             return self._ea1
 
     def snapshot(self) -> dict:
-        """Return current state as a dict (for Redis caching)."""
         return self.get_state().model_dump()
 
     def get_latest(self) -> EEGSample | None:
-        """Return the latest raw EEGSample (may be None before first frame)."""
         with self._lock:
             return self._latest_sample
 
     def set_latest_sample(self, sample: EEGSample) -> None:
-        """Store the latest raw EEGSample."""
         with self._lock:
             self._latest_sample = sample
 
     def reset(self) -> None:
-        """Reset hub to initial state (used in tests and on disconnect)."""
         with self._lock:
             self._state = NeurolinkState()
             self._ea1 = EA1Result()
@@ -262,32 +250,27 @@ class EEGHub:
             self._frames_processed = 0
             self._settling_events_emitted = 0
 
-    # ── SSE queue management ───────────────────────────────────────────────────
+    # ── SSE queue management ───────────────────────────────────────────
 
     def register_sse_queue(self, q: asyncio.Queue) -> None:
-        """Register a per-client SSE asyncio queue for fan-out."""
         with self._sse_lock:
             self._sse_queues.append(q)
 
     def unregister_sse_queue(self, q: asyncio.Queue) -> None:
-        """Unregister a client SSE queue."""
         with self._sse_lock:
             try:
                 self._sse_queues.remove(q)
             except ValueError:
                 pass
 
-    # Backward-compatible aliases used by legacy tests
+    # Backward-compatible aliases
     def register_sse_client(self, q: asyncio.Queue) -> None:
-        """Alias for register_sse_queue (backward compatibility)."""
         self.register_sse_queue(q)
 
     def unregister_sse_client(self, q: asyncio.Queue) -> None:
-        """Alias for unregister_sse_queue (backward compatibility)."""
         self.unregister_sse_queue(q)
 
     def _fanout(self, state: NeurolinkState) -> None:
-        """Push state to all registered SSE queues (non-blocking put_nowait)."""
         with self._sse_lock:
             queues = list(self._sse_queues)
         for q in queues:
@@ -298,52 +281,43 @@ class EEGHub:
 
 
 async def _push_state_to_redis(state_dict: dict) -> None:
-    """Coroutine: push state dict to Redis (Task 7.2 write-through)."""
     from neurolink.cache.redis_client import push_state
 
     await push_state(state_dict)
 
 
-# ── Module-level singleton ──────────────────────────────────────────────────
+# ── Module-level singleton ────────────────────────────────────────────
 
 _hub: EEGHub = EEGHub()
 
 
 def get_hub() -> EEGHub:
-    """Return the global EEGHub singleton."""
     return _hub
 
 
 def update(payload: IngestPayload) -> NeurolinkState:
-    """Module-level update delegate."""
     return _hub.update(payload)
 
 
 def get_state() -> NeurolinkState:
-    """Module-level get_state delegate."""
     return _hub.get_state()
 
 
 def get_ea1() -> EA1Result:
-    """Module-level get_ea1 delegate."""
     return _hub.get_ea1()
 
 
 def snapshot() -> dict:
-    """Module-level snapshot delegate."""
     return _hub.snapshot()
 
 
 def reset() -> None:
-    """Module-level reset delegate."""
     _hub.reset()
 
 
 def emit_settling(reason: str = "settling") -> None:
-    """Module-level emit_settling delegate."""
     _hub.emit_settling(reason=reason)
 
 
 def get_stats() -> dict:
-    """Module-level get_stats delegate."""
     return _hub.get_stats()
