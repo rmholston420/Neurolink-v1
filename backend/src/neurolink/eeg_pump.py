@@ -389,7 +389,8 @@ class EEGPump:
         ibis: list[float] | None = None
         if sample.ppg_buffer and len(sample.ppg_buffer) >= _MIN_PPG_SAMPLES:
             from neurolink.dsp.ppg import compute_ppg
-            ppg_payload = compute_ppg(sample.ppg_buffer, fs=_PPG_FS)
+            ppg_arr = np.asarray(sample.ppg_buffer, dtype=np.float32)
+            ppg_payload = compute_ppg(ppg_arr, fs=_PPG_FS)
             if ppg_payload is not None:
                 ibis = ppg_payload.ibi_ms
 
