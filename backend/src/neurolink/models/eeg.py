@@ -149,6 +149,8 @@ class IngestPayload(BaseModel):
     contact_quality: float | None = None
     faa: float | None = None
     fmt: float | None = None
+    focus_score: float = 0.0
+    fatigue_score: float = 0.0
     ppg: PPGPayload | None = None
     breathing: BreathingPayload | None = None
     imu: IMUPayload | None = None

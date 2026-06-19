@@ -403,12 +403,12 @@ class EEGPump:
             bands_dict = bandpower.compute(eeg, fs=_EEG_FS)
 
         # ── Stage 8: classifiers ─────────────────────────────────────────
-        focus_score: float | None = None
-        fatigue_score: float | None = None
+        focus_score: float = 0.0
+        fatigue_score: float = 0.0
         if not artifact_rejected and bands_dict:
             scores = classifiers.run(bands_dict)
-            focus_score = scores.get("focus")
-            fatigue_score = scores.get("fatigue")
+            focus_score = scores.get("focus") or 0.0
+            fatigue_score = scores.get("fatigue") or 0.0
 
         # ── FAA / FMT ────────────────────────────────────────────────────
         faa: float | None = None
@@ -441,7 +441,6 @@ class EEGPump:
                 ax = accel[0]
                 ay = accel[1]
                 az = accel[2]
-                # Crude pitch/roll from mean accel vector; motion_rms from all axes.
                 g = float(np.sqrt(np.mean(ax)**2 + np.mean(ay)**2 + np.mean(az)**2)) or 1.0
                 pitch_deg = float(np.degrees(np.arcsin(np.clip(np.mean(ay) / g, -1.0, 1.0))))
                 roll_deg = float(np.degrees(np.arctan2(np.mean(ax), np.mean(az))))
@@ -463,8 +462,6 @@ class EEGPump:
                 self._baseline.set_alpha(self._hub.baseline_alpha)
 
         # ── EEG samples: trim to window ────────────────────────────────────
-        # Slice to the most recent _EEG_SAMPLES_WINDOW columns so that
-        # len(ch) <= 64 regardless of input buffer width.
         eeg_samples: list[list[float]] = []
         if eeg is not None:
             windowed = eeg[:, -_EEG_SAMPLES_WINDOW:]
@@ -492,6 +489,8 @@ class EEGPump:
             poor_contact=sample.poor_contact,
             faa=faa,
             fmt=fmt,
+            focus_score=focus_score,
+            fatigue_score=fatigue_score,
             ppg=ppg_payload,
             breathing=breathing_payload,
             imu=imu_payload,
