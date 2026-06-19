@@ -14,25 +14,37 @@ from neurolink.models.eeg import BandPowers, IngestPayload
 
 # ---------------------------------------------------------------------------
 # Event-loop drain -- prevents RuntimeWarning from unawaited Queue coroutines
+#
+# pytest-asyncio >=0.24 removed the `event_loop` fixture.  The drain is now
+# a best-effort teardown: we ask for the running loop via asyncio.get_event_loop()
+# and give it one tick.  If there is no running loop (sync teardown context)
+# we skip silently.  pytest-asyncio 0.24+ handles task cleanup automatically
+# so this is a safety-net only.
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _drain_event_loop(event_loop):
+def _drain_event_loop():
     """Yield, then give the loop one tick to cancel pending callbacks.
 
-    When a test instantiates BLEMuseAdapter (which creates an asyncio.Queue
-    in __init__) and exits without an event loop draining it, Python's GC
-    sees a coroutine object that was never awaited and emits a RuntimeWarning
-    via _pytest/unraisableexception.py.  Running asyncio.sleep(0) here gives
-    the loop one iteration to cancel those coroutines cleanly before teardown.
+    When a test instantiates an adapter (which creates an asyncio.Queue in
+    __init__) and exits without draining the loop, Python's GC sees a
+    coroutine that was never awaited and emits RuntimeWarning via
+    _pytest/unraisableexception.py.  One asyncio.sleep(0) tick clears those
+    coroutines cleanly before teardown.
     """
     yield
     try:
-        event_loop.run_until_complete(asyncio.sleep(0))
-    except Exception as exc:  # noqa: BLE001  -- fixture teardown must never raise
-        log_exc = exc  # captured for potential debug; teardown must not re-raise
-        del log_exc
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Inside an async test -- schedule a no-op tick via the running loop.
+            # We cannot call run_until_complete here; the loop is already running.
+            loop.call_soon(lambda: None)
+        else:
+            loop.run_until_complete(asyncio.sleep(0))
+    except RuntimeError:
+        # No current event loop in this thread -- nothing to drain.
+        pass
 
 
 # ---------------------------------------------------------------------------
