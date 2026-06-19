@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 import pytest
 import pytest_asyncio
@@ -9,6 +11,28 @@ from httpx import ASGITransport, AsyncClient
 
 from neurolink.hub import EEGHub
 from neurolink.models.eeg import BandPowers, IngestPayload
+
+# ---------------------------------------------------------------------------
+# Event-loop drain -- prevents RuntimeWarning from unawaited Queue coroutines
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _drain_event_loop(event_loop):
+    """Yield, then give the loop one tick to cancel pending callbacks.
+
+    When a test instantiates BLEMuseAdapter (which creates an asyncio.Queue
+    in __init__) and exits without an event loop draining it, Python's GC
+    sees a coroutine object that was never awaited and emits a RuntimeWarning
+    via _pytest/unraisableexception.py.  Running asyncio.sleep(0) here gives
+    the loop one iteration to cancel those coroutines cleanly before teardown.
+    """
+    yield
+    try:
+        event_loop.run_until_complete(asyncio.sleep(0))
+    except Exception:  # noqa: BLE001  -- fixture teardown must never raise
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Domain fixtures
