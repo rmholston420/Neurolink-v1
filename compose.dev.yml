@@ -1,3 +1,19 @@
+# Neurolink — development compose file
+# Run with:  podman-compose -f compose.dev.yml up --build
+# Or:        docker compose  -f compose.dev.yml up --build
+#
+# BLE notes (Podman rootless):
+#   The backend needs access to the host BlueZ D-Bus socket.
+#   On a systemd host the socket lives at /run/dbus/system_bus_socket.
+#   Rootless Podman maps the container UID to the host UID (keep-id),
+#   so the mounted socket is accessible without `privileged: true`.
+#   If your distro uses a different socket path, override
+#   DBUS_SYSTEM_BUS_ADDRESS in your local .env file.
+#
+#   Required host capabilities for raw HCI (Bluetooth):
+#     sudo setcap 'cap_net_admin,cap_net_raw+eip' $(which python3)
+#   Or run the compose service with `cap_add` below (already present).
+
 services:
   redis:
     image: redis:7-alpine
@@ -29,8 +45,17 @@ services:
       - neurolink_data:/app/data
       # Expose host D-Bus socket so bleak can reach BlueZ
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
-    # Required for raw Bluetooth HCI access
-    privileged: true
+    # Rootless Podman: map container UID to the current host user.
+    # This ensures the mounted D-Bus socket is readable without
+    # requiring `privileged: true`.
+    userns_mode: keep-id
+    # Raw Bluetooth HCI access (replaces `privileged: true`).
+    # Docker / Podman with rootless still needs CAP_NET_RAW;
+    # comment out `cap_add` and re-add `privileged: true` if you
+    # prefer the old behaviour.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     depends_on:
       - redis
     restart: unless-stopped

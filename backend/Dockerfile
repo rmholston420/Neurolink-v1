@@ -1,8 +1,13 @@
+# syntax=docker/dockerfile:1
+# Compatible with both Docker BuildKit and Podman/Buildah.
+# Podman builds this with: podman build -t neurolink-backend ./backend
+# or via podman-compose which calls buildah under the hood.
+
 FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# System deps for BLE (BlueZ + D-Bus) and build
+# System deps for BLE (BlueZ + D-Bus) and build.
 # bleak drives BlueZ via D-Bus; without dbus / libdbus-1-dev the
 # BleakScanner backend raises a D-Bus connection-refused error at
 # runtime even though `import bleak` succeeds.
@@ -13,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdbus-1-dev \
     libdbus-glib-1-dev \
     gcc \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create data directory for SQLite

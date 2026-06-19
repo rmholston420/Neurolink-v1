@@ -1,4 +1,9 @@
-version: "3.9"
+# Neurolink — production compose file
+# Run with:  podman-compose -f compose.prod.yml up --build -d
+# Or:        docker compose  -f compose.prod.yml up --build -d
+#
+# The `version:` key is intentionally omitted — it is deprecated in
+# Docker Compose v2 and not recognised by podman-compose >= 1.0.
 
 services:
   redis:
@@ -26,6 +31,8 @@ services:
       - NEUROLINK_LOG_JSON=true
     volumes:
       - neurolink_data:/app/data
+    # Rootless Podman: keep host UID so volume files are owned correctly.
+    userns_mode: keep-id
     depends_on:
       redis:
         condition: service_healthy

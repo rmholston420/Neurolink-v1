@@ -19,10 +19,46 @@ uvicorn neurolink.main:app --reload --port 8000
 
 Then open: http://localhost:8000/health
 
-## Docker Compose
+## Podman Compose (recommended)
+
+Neurolink uses **Podman** as its container runtime. Podman is rootless,
+daemon-free, and OCI-compliant — images built with Podman run identically
+on any OCI-compatible runtime including Docker.
+
+### One-time setup
 
 ```bash
-docker-compose -f compose.dev.yml up --build
+# Install Podman + podman-compose (Debian/Ubuntu)
+sudo apt-get install -y podman
+pip install podman-compose
+
+# macOS (Homebrew)
+brew install podman podman-compose
+podman machine init && podman machine start
+```
+
+See `scripts/podman-setup.sh` for an automated setup script.
+
+### Start the stack
+
+```bash
+# Dev (backend + redis; frontend optional via --profile frontend)
+podman-compose -f compose.dev.yml up --build
+
+# Dev with frontend
+podman-compose -f compose.dev.yml --profile frontend up --build
+
+# Production
+podman-compose -f compose.prod.yml up --build -d
+```
+
+### Docker compatibility
+
+The `compose.dev.yml` / `compose.prod.yml` files and all `Dockerfile`s are
+standard OCI / Compose v2 files — `docker compose` works as a drop-in:
+
+```bash
+docker compose -f compose.dev.yml up --build
 ```
 
 ## Running Tests
@@ -40,7 +76,7 @@ See `.env.template` for all configuration options.
 ## API Endpoints
 
 | Method | Path | Description |
-|--------|------|-------------|
+|--------|------|--------------|
 | GET | `/health` | Health check |
 | POST | `/api/v1/neurolink/connect` | Connect EEG adapter |
 | POST | `/api/v1/neurolink/disconnect` | Disconnect |

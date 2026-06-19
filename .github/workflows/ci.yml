@@ -113,3 +113,36 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+
+  container-build:
+    name: Container Build (Podman)
+    runs-on: ubuntu-latest
+    env:
+      # Tell buildah (Podman's build backend) to write OCI-spec images.
+      BUILDAH_FORMAT: oci
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends podman
+
+      - name: Build backend image
+        run: |
+          podman build -t neurolink-backend:ci ./backend
+
+      - name: Build frontend image
+        run: |
+          podman build -t neurolink-frontend:ci ./frontend
+
+      - name: Smoke-test backend image
+        run: |
+          podman run --rm \
+            -e NEUROLINK_ADAPTER_TYPE=mock \
+            -e NEUROLINK_DB_PATH=:memory: \
+            -e NEUROLINK_REDIS_ENABLED=false \
+            neurolink-backend:ci \
+            python -c "import neurolink; print('import ok')"
